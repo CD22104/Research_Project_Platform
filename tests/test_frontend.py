@@ -166,13 +166,34 @@ class Pages(unittest.TestCase):
         self.assertRegex(self.demo, r'<details class="sub" id="plan"><summary>整体方案（plan\.md，')
 
     def test_index_projects_section(self):
-        d, errors = dump(self.base)
+        d, errors = dump(self.base + "#projects")
         self.assertEqual(errors, [])
         self.assertIn("项目 <span class=\"meta\">3 个", d)
         self.assertIn("演示项目", d)
         self.assertIn("运行中 r002 · xtrah200 卡 2,3", d)
         self.assertIn("1 个记录文件读取有问题", d)
         self.assertIn('href="project.html?p=demo"', d)
+
+    def test_tabs(self):
+        gpu, errors = dump(self.base)
+        self.assertEqual(errors, [])
+        self.assertIn('<div id="tab-projects" hidden="">', gpu)       # GPU tab is the default
+        self.assertNotIn('<div id="tab-gpu" hidden', gpu)
+        self.assertIn('<a class="brand" href="./#gpu">GPU 看板</a>', gpu)
+        self.assertIn('<a class="navtab on" href="./#gpu">GPU <span class="cnt">0 空闲</span></a>', gpu)
+        self.assertNotIn("演示项目", gpu.split('<div id="tab-projects"')[0])  # no project list in the GPU tab
+        proj, errors = dump(self.base + "#projects")
+        self.assertEqual(errors, [])
+        self.assertIn('<div id="tab-gpu" hidden="">', proj)
+        self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', proj)
+        self.assertIn("<title>项目 · GPU 看板</title>", proj)
+
+    def test_project_page_top_bar(self):
+        d = self.demo
+        self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', d)
+        self.assertIn('<span class="crumb"><a href="./#projects">项目</a> /</span>', d)
+        self.assertIn("<title>演示项目 · GPU 看板</title>", d)
+        self.assertNotIn("← GPU 看板", d)
 
     def test_missing_project(self):
         d, errors = dump(self.base + "project.html?p=nope")

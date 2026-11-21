@@ -22,7 +22,17 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
-main{max-width:1180px;margin:0 auto;padding:24px 16px 48px}
+main{max-width:1180px;margin:0 auto;padding:18px 16px 48px}
+.topnav{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line)}
+.navin{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;align-items:stretch;gap:2px;height:46px}
+.brand{display:flex;align-items:center;margin-right:16px;font-weight:700;font-size:16px;color:var(--text);text-decoration:none;white-space:nowrap}
+.navtab{display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--muted);text-decoration:none;font-weight:600;
+  border-bottom:2px solid transparent;white-space:nowrap}
+.navtab:hover{color:var(--text)}
+.navtab.on{color:var(--text);border-bottom-color:var(--accent)}
+.navtab .cnt{font-size:12px;font-weight:500;color:var(--muted);background:var(--track);border-radius:99px;padding:0 7px}
+[id],tr.run{scroll-margin-top:58px}  /* jumps land below the sticky top bar */
+[hidden]{display:none !important}
 header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:16px}
 h1{font-size:20px;margin:0}
 .sub{color:var(--muted);font-size:13px}
@@ -103,18 +113,22 @@ a.tag.warn{color:var(--full);background:var(--full-bg)}
 </style>
 </head>
 <body>
+<nav class="topnav" id="nav"></nav>
 <main>
-  <header>
-    <h1>GPU 看板</h1>
-    <span class="sub" id="sub">加载中…</span>
-    <button id="refresh">立即刷新</button>
-  </header>
-  <section class="lead" id="free"></section>
-  <section id="partial"></section>
-  <section id="projects"></section>
-  <h3>各服务器明细</h3>
-  <div id="servers"></div>
-  <details class="box"><summary>谁在用（按占用显存排序）</summary><div class="scroll" id="users"></div></details>
+  <div id="tab-gpu">
+    <header>
+      <span class="sub" id="sub">加载中…</span>
+      <button id="refresh">立即刷新</button>
+    </header>
+    <section class="lead" id="free"></section>
+    <section id="partial"></section>
+    <h3>各服务器明细</h3>
+    <div id="servers"></div>
+    <details class="box"><summary>谁在用（按占用显存排序）</summary><div class="scroll" id="users"></div></details>
+  </div>
+  <div id="tab-projects" hidden>
+    <section id="projects"></section>
+  </div>
 </main>
 <script src="common.js"></script>
 <script>
@@ -123,11 +137,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const gb = mb => mb == null ? '–' : (mb / 1024).toFixed(1);
 const dur = s => s == null ? '' : s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天';
 const ago = s => s < 90 ? Math.round(s) + ' 秒前' : Math.round(s / 60) + ' 分钟前';
-const FREE_MB = 500;        // 无进程且显存占用低于此值视为空闲
 const SHARE_MB = 10 * 1024; // 在用的卡剩余显存不少于此值，列入“挤一挤能用”
 
 function gpuState(g) {
-  if (!g.procs.length && (g.mem_used ?? 0) < FREE_MB) return 'free';
+  if (Board.isFree(g)) return 'free';  // no process and almost no memory used
   return g.mem_total && g.mem_used / g.mem_total > 0.9 ? 'full' : 'busy';
 }
 const LABEL = {free: '空闲', busy: '使用中', full: '已占满'};
@@ -227,7 +240,8 @@ function render(d) {
 
   const down = d.servers.length - okServers;
   $('sub').textContent = `${okServers} / ${d.servers.length} 台服务器在线${down ? '（' + down + ' 台读不到）' : ''} · 每 ${d.interval} 秒更新 · ${new Date().toLocaleTimeString()}`;
-  document.title = `(${nFree} 空) GPU 看板`;
+  counts.free = nFree;
+  showTab();
 }
 
 // Project list: one row per project; running runs say where they are
@@ -260,6 +274,20 @@ document.addEventListener('click', e => {
 });
 let copying = false;
 document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
+// ---- tabs: #gpu (default) and #projects; the hash keeps the tab across reloads
+const counts = {free: null, projects: null};
+const currentTab = () => location.hash === '#projects' ? 'projects' : 'gpu';
+function showTab() {
+  const t = currentTab();
+  $('tab-gpu').hidden = t !== 'gpu';
+  $('tab-projects').hidden = t !== 'projects';
+  $('nav').innerHTML = Board.nav(t, counts);
+  document.title = t === 'projects' ? `项目 · ${Board.APP_NAME}`
+    : (counts.free != null ? `(${counts.free} 空) ` : '') + Board.APP_NAME;
+}
+window.addEventListener('hashchange', () => { showTab(); scrollTo(0, 0); });
+showTab();
+
 let activeRuns = [];  // running runs of all projects, for tagging GPU cards
 async function load() {
   if (copying) { copying = false; return; }
@@ -268,6 +296,7 @@ async function load() {
       fetch('/api/status').then(r => r.json()),
       fetch('/api/projects').then(r => r.ok ? r.json() : null).catch(() => null)]);
     activeRuns = pj ? pj.projects.flatMap(p => (p.active_runs || []).map(r => ({...r, project: p.name, title: p.title}))) : [];
+    counts.projects = pj ? pj.projects.length : null;
     render(st);
     renderProjects(pj);
   }

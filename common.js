@@ -1,6 +1,9 @@
 // Shared helpers for index.html and project.html. No dependencies.
 // Everything lives under `Board` so page scripts can keep their own short names.
 const Board = (() => {
+  // Platform name shown in the top bar and page titles; the only place to rename it.
+  const APP_NAME = 'GPU 看板';
+
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
   // ---- time
@@ -246,6 +249,22 @@ const Board = (() => {
 
   const projectUrl = name => 'project.html?p=' + encodeURIComponent(name);
 
-  return {esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
+  // ---- GPUs: a card is free when no process is on it and almost no memory is used
+  const FREE_MB = 500;
+  const isFree = g => !(g.procs || []).length && (g.mem_used ?? 0) < FREE_MB;
+  // free cards on servers whose latest poll succeeded (/api/status)
+  const freeCount = status => (status && status.servers || [])
+    .filter(s => s.status === 'ok').reduce((n, s) => n + (s.gpus || []).filter(isFree).length, 0);
+
+  // ---- top bar shared by every page. active: 'gpu' | 'projects'; counts may be null while loading
+  function nav(active, counts = {}) {
+    const tab = (key, label, cnt) => `<a class="navtab${active === key ? ' on' : ''}" href="./#${key}">${label}` +
+      (cnt != null ? ` <span class="cnt">${cnt}</span>` : '') + '</a>';
+    return `<div class="navin"><a class="brand" href="./#gpu">${esc(APP_NAME)}</a>` +
+      tab('gpu', 'GPU', counts.free != null ? counts.free + ' 空闲' : null) +
+      tab('projects', '项目', counts.projects) + '</div>';
+  }
+
+  return {APP_NAME, FREE_MB, isFree, freeCount, nav, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
     flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl};
 })();

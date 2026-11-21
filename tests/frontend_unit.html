@@ -96,6 +96,13 @@ check('chart has a path', svg.includes('<path class="ln"') && svg.includes('loss
 check('chart ignores bad points', B.chart([{step: 0, loss: 'x'}], 'loss') === '');
 check('chart escapes key', !B.chart([{step: 0, '<k>': 1}], '<k>').includes('<k>'));
 
+// top bar and free cards
+check('nav marks the active tab', B.nav('projects', {free: 3, projects: 2}).includes('<a class="navtab on" href="./#projects">项目 <span class="cnt">2</span></a>')
+  && B.nav('gpu', {free: 3}).includes('<a class="navtab on" href="./#gpu">GPU <span class="cnt">3 空闲</span></a>') && B.nav('gpu').includes(B.esc(B.APP_NAME)));
+check('isFree / freeCount', B.isFree({procs: [], mem_used: 100}) && !B.isFree({procs: [{pid: 1}], mem_used: 0}) && !B.isFree({procs: [], mem_used: 600})
+  && B.freeCount({servers: [{status: 'ok', gpus: [{procs: [], mem_used: 0}, {procs: [], mem_used: 9000}]}, {status: 'error', gpus: [{procs: [], mem_used: 0}]}]}) === 1
+  && B.freeCount(null) === 0);
+
 // GPU card <-> run matching
 const runs = [{server: 'h200', gpus: [2, 3], pid: 999, id: 'a'}, {server: 'h200', gpus: ['5'], pid: '77', id: 'b'}, {server: 'a100', gpus: [2], id: 'c'}];
 const ids = (srv, g) => B.runsOnGpu(runs, srv, g).map(r => r.id).join();

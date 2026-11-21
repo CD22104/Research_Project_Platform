@@ -22,11 +22,20 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
   font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
-main{max-width:1080px;margin:0 auto;padding:20px 16px 48px}
+main{max-width:1080px;margin:0 auto;padding:18px 16px 48px}
+.topnav{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line)}
+.navin{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;align-items:stretch;gap:2px;height:46px}
+.brand{display:flex;align-items:center;margin-right:16px;font-weight:700;font-size:16px;color:var(--text);text-decoration:none;white-space:nowrap}
+.navtab{display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--muted);text-decoration:none;font-weight:600;
+  border-bottom:2px solid transparent;white-space:nowrap}
+.navtab:hover{color:var(--text);text-decoration:none}
+.navtab.on{color:var(--text);border-bottom-color:var(--accent)}
+.navtab .cnt{font-size:12px;font-weight:500;color:var(--muted);background:var(--track);border-radius:99px;padding:0 7px}
+[id],tr.run{scroll-margin-top:58px}  /* jumps land below the sticky top bar */
+.crumb{font-size:15px;color:var(--muted)}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-header .back{font-size:13px}
 h1{font-size:20px;margin:0}
 .sub{color:var(--muted);font-size:13px}
 button{font:inherit;padding:4px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
@@ -149,9 +158,10 @@ table.errs td{padding:6px 14px;border-bottom:1px solid var(--line);vertical-alig
 </style>
 </head>
 <body>
+<nav class="topnav" id="nav"></nav>
 <main>
   <header>
-    <a class="back" href="./">← GPU 看板</a>
+    <span class="crumb"><a href="./#projects">项目</a> /</span>
     <h1 id="title">项目</h1>
     <span class="sub" id="sub">加载中…</span>
     <button id="refresh">刷新</button>
@@ -396,7 +406,7 @@ function errors(d) {
 
 function render(d) {
   const p = d.project || {};
-  document.title = (p.title || d.name) + ' · 项目';
+  document.title = `${p.title || d.name} · ${B.APP_NAME}`;
   $('title').textContent = p.title || d.name;
   $('notice').innerHTML = notices(d);
   $('summary').innerHTML = summary(d);
@@ -409,7 +419,14 @@ function render(d) {
   $('sub').textContent = `数据读取于 ${B.ago(d.scanned_at, d.now)} · 每分钟自动刷新`;
 }
 
+async function loadNav() {
+  const get = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [st, pj] = await Promise.all([get('/api/status'), get('/api/projects')]);
+  $('nav').innerHTML = B.nav('projects', {free: st ? B.freeCount(st) : null, projects: pj ? pj.projects.length : null});
+}
+
 async function load() {
+  loadNav();
   if (!NAME) { $('sub').textContent = '地址里缺少项目名（project.html?p=名字）'; return; }
   const open = [...document.querySelectorAll('details[open][id]')].map(x => x.id);  // keep what the user expanded
   let r;
@@ -479,6 +496,7 @@ document.addEventListener('change', e => {
   const sel = e.target.closest('select[data-view]');
   if (sel && sel.value.startsWith('g:')) { ui.view[sel.dataset.view].group = sel.value.slice(2); redrawEvidence(); }
 });
+$('nav').innerHTML = B.nav('projects');
 $('refresh').onclick = load;
 load();
 setInterval(load, 60000);
