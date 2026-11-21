@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>common.js unit tests</title>
+<!-- Run by tests/test_frontend.py in headless Chromium; results land in #result as JSON. -->
+<div id="sandbox"></div>
+<pre id="result">not run</pre>
+<script src="../common.js"></script>
+<script>
+const results = [];
+function check(name, cond, detail) { results.push({name, ok: !!cond, detail: cond ? '' : String(detail ?? '')}); }
+const B = Board;
+
+// Markdown must never produce live markup from source text
+const evil = [
+  '<script>window.__pwned = 1<\/script>',
+  '<img src=x onerror="window.__pwned=1">',
+  '[click](javascript:window.__pwned=1)',
+  '[x](JaVaScRiPt:alert(1))',
+  '[x](data:text/html,<script>alert(1)<\/script>)',
+  '**<b onmouseover=alert(1)>bold</b>**',
+  '`<script>alert(1)<\/script>`',
+  '```\n<script>window.__pwned=1<\/script>\n```',
+  '| a | <i onclick=x> |\n|---|---|\n| <svg onload=alert(1)> | 2 |',
+  '- <iframe src=javascript:alert(1)>',
+  '> <script>window.__pwned=1<\/script>',
+  '[ok](https://example.org/a?b=1&c="2")',
+].join('\n\n');
+const sb = document.getElementById('sandbox');
+sb.innerHTML = B.md(evil);
+check('no script elements from markdown', sb.querySelectorAll('script,iframe,img,svg,i,b[onmouseover]').length === 0, sb.innerHTML);
+check('no event-handler attributes', [...sb.querySelectorAll('*')].every(e => [...e.attributes].every(a => !/^on/i.test(a.name))), sb.innerHTML);
+const hrefs = [...sb.querySelectorAll('a')].map(a => a.getAttribute('href'));
+check('only http(s) links', hrefs.length === 1 && hrefs[0] === 'https://example.org/a?b=1&c="2"', JSON.stringify(hrefs));
+check('links open safely', sb.querySelector('a').rel === 'noopener noreferrer');
+check('script text shown as text', sb.textContent.includes('<script>window.__pwned = 1<\/script>'), sb.textContent);
+check('nothing executed', window.__pwned === undefined);
+
+// Markdown structure
+const doc = B.md('# T\n\n段落第一行\n第二行 **粗** `code`\n\n- a\n- b\n\n1. x\n2. y\n\n| h1 | h2 |\n|---|---|\n| 1 | 2 |\n\n```py\nif a < b:\n    pass\n```\n\n  # indented hash is text\n\n> quote');
+sb.innerHTML = doc;
+check('heading shifted to h3', sb.querySelector('h3')?.textContent === 'T', doc);
+check('bold and code', sb.querySelector('p strong')?.textContent === '粗' && sb.querySelector('p code')?.textContent === 'code', doc);
+check('lists', sb.querySelectorAll('ul li').length === 2 && sb.querySelectorAll('ol li').length === 2, doc);
+check('table', sb.querySelectorAll('table tr').length === 2 && sb.querySelector('th').textContent === 'h1', doc);
+check('code block keeps text', sb.querySelector('pre code')?.textContent === 'if a < b:\n    pass', doc);
+check('indented hash is a paragraph', [...sb.querySelectorAll('p')].some(p => p.textContent.includes('# indented')), doc);
+check('blockquote', sb.querySelector('blockquote p')?.textContent === 'quote', doc);
+check('unclosed fence does not hang', B.md('```\nno end').includes('no end'));
+check('empty input', B.md('') === '' && B.md(null) === '');
+
+// esc / num / time
+check('esc', B.esc('<a href="x">\'&') === '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
+check('num', B.num(0.81) === '0.81' && B.num(1234) === '1234' && B.num(1e-5) === '1.00e-5' && B.num(null) === '' && B.num('<x>') === '&lt;x&gt;', [B.num(0.81), B.num(1e-5)]);
+check('ago', B.ago(100, 160) === '60 秒前' && B.ago(null) === '—');
+check('when invalid passes through', B.when('not a date') === 'not a date');
+check('pill escapes unknown status', B.pill('<x>') === '<span class="pill t-other">&lt;x&gt;</span>');
+
+// metrics
+check('flatten', JSON.stringify(B.flatten({'测试集': {acc: 0.8, sub: {f1: 0.7}}, loss: 1})) === JSON.stringify({'测试集.acc': 0.8, '测试集.sub.f1': 0.7, loss: 1}));
+const groups = B.metricGroups([{'测试集': {acc: 0.81, f1: 0.77}, train_loss: 0.31}, {'测试集': {acc: 0.8}, '少数类召回': 0.55, '对照': {acc: 0.5}}, null, 'bad']);
+check('metric groups', JSON.stringify(groups) === JSON.stringify([
+  {name: '测试集', cols: ['测试集.acc', '测试集.f1']}, {name: '对照', cols: ['对照.acc']}, {name: '', cols: ['train_loss', '少数类召回']}]), JSON.stringify(groups));
+
+// chart
+const svg = B.chart([{step: 0, loss: 2}, {step: 10, loss: 1}, {step: 20, loss: '<x>'}], 'loss');
+check('chart has a path', svg.includes('<path class="ln"') && svg.includes('loss'), svg);
+check('chart ignores bad points', B.chart([{step: 0, loss: 'x'}], 'loss') === '');
+check('chart escapes key', !B.chart([{step: 0, '<k>': 1}], '<k>').includes('<k>'));
+
+// GPU card <-> run matching
+const runs = [{server: 'h200', gpus: [2, 3], pid: 999, id: 'a'}, {server: 'h200', gpus: ['5'], pid: '77', id: 'b'}, {server: 'a100', gpus: [2], id: 'c'}];
+const ids = (srv, g) => B.runsOnGpu(runs, srv, g).map(r => r.id).join();
+check('match by listed gpu', ids('h200', {index: 2, procs: []}) === 'a');
+check('match by pid on another gpu', ids('h200', {index: 0, procs: [{pid: 77}]}) === 'b');
+check('string gpu ids', ids('h200', {index: 5, procs: []}) === 'b');
+check('server must match', ids('xx', {index: 2, procs: []}) === '');
+check('no match', ids('h200', {index: 7, procs: [{pid: 1}]}) === '');
+
+document.getElementById('result').textContent = JSON.stringify(results);
+</script>
