@@ -1,0 +1,1 @@
+{"name": "demo", "title": "演示项目", "question": "学习率预热能否稳定小模型训练？", "conclusion": "预热 500 步后验证集准确率稳定提升约 2 个点。", "status": "进行中", "current_version": "v2", "updated": "2026-11-20T08:00:00Z", "extra_field": "看板应忽略这个字段"}

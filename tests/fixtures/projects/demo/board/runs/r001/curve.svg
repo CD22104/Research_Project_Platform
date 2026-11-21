@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><script>alert("xss in svg")</script><polyline points="0,40 50,20 100,10" fill="none" stroke="black"/></svg>
