@@ -1,5 +1,6 @@
 {
   "port": 28765,
+  "socket": "~/gpu-board/run/board.sock",
   "interval_seconds": 30,
   "jump_host": null,
   "servers": [

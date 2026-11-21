@@ -6,7 +6,10 @@
 """
 import json
 import os
+import socket
+import socketserver
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +22,8 @@ PORT = int(CFG.get("port", 8765))
 INTERVAL = int(CFG.get("interval_seconds", 30))
 JUMP = CFG.get("jump_host") or None
 SERVERS = CFG["servers"]
+# If set, listen only on this unix socket (no TCP port), so only its owner can connect
+SOCKET = CFG.get("socket") or None
 
 # 在远端执行的只读脚本：GPU 列表 / GPU 上的进程 / 这些进程的用户
 REMOTE = r"""
@@ -149,8 +154,45 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class UnixHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_UNIX
+
+    def server_bind(self):
+        # HTTPServer.server_bind expects (host, port); bind the path directly
+        old = os.umask(0o177)  # socket file is created 0600
+        try:
+            socketserver.TCPServer.server_bind(self)
+        finally:
+            os.umask(old)
+        self.server_name, self.server_port = "localhost", 0
+
+
+def make_server():
+    """Return (server, description of where it listens)."""
+    if not SOCKET:
+        return ThreadingHTTPServer(("127.0.0.1", PORT), Handler), "http://localhost:%d" % PORT
+    path = os.path.expanduser(SOCKET)
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)  # makedirs mode is umask-filtered and skipped if d already exists
+    if os.path.exists(path):
+        probe = socket.socket(socket.AF_UNIX)
+        try:
+            probe.connect(path)
+        except OSError:
+            os.unlink(path)  # stale socket left by a previous run
+        else:
+            sys.exit("已有看板实例在 %s 上运行，退出" % path)
+        finally:
+            probe.close()
+    return UnixHTTPServer(path, Handler), "unix:" + path
+
+
 if __name__ == "__main__":
+    # Bind before starting pollers: a duplicate instance exits early, and the
+    # temporary umask in server_bind cannot leak into ssh child processes
+    httpd, where = make_server()
     for s in SERVERS:
         threading.Thread(target=poll, args=(s,), daemon=True).start()
-    print("GPU 看板已启动: http://localhost:%d" % PORT, flush=True)
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    print("GPU 看板已启动: %s" % where, flush=True)
+    httpd.serve_forever()
