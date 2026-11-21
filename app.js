@@ -4,13 +4,13 @@
 const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 
 // ============================================================ data
-const S = {status: null, projects: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
+const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
 const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false};  // view state kept across refreshes
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
 const TABS = [['overview', '概览'], ['setup', '实验设置'], ['roadmap', '路线'], ['runs', '运行'], ['examples', '样例'], ['docs', '文档']];
-const PAGES = ['overview', 'gpu', 'todo', 'new'];
+const PAGES = ['overview', 'gpu', 'todo', 'guide', 'new'];
 
 function route() {
   const raw = location.hash.replace(/^#/, '');
@@ -134,6 +134,7 @@ function renderSide(r) {
     item('#/overview', '总览', null, r.page === 'overview') +
     item('#/gpu', 'GPU', free != null ? free + ' 空闲' : null, r.page === 'gpu') +
     item('#/todo', '待办', todo || null, r.page === 'todo') +
+    item('#/guide', '使用说明', null, r.page === 'guide') +
     '<div class="shead">项目</div>' +
     (list.length ? list.map(p => `<a class="sitem${r.page === 'project' && r.name === p.name ? ' on' : ''}" href="${plink(p.name)}" ` +
       `title="${esc(p.title)}${p.status ? ' · ' + esc(p.status) : ''}"><span class="dot d-${B.tone(p.status)}"></span><span class="lbl">${esc(p.title)}</span></a>`).join('')
@@ -151,16 +152,18 @@ function render() {
   if (r.page === 'gpu') html = pageGpu();
   else if (r.page === 'todo') html = pageTodo();
   else if (r.page === 'new') html = pageNew();
+  else if (r.page === 'guide') html = pageGuide();
   else if (r.page === 'project') html = pageProject(r);
   else html = pageOverview();
   $('main').innerHTML = html;
   for (const id of open) { const el = document.getElementById(id); if (el) el.open = true; }
   fitExample();
+  // a linked setup entry is highlighted on every render and scrolled to once; other pages start at the top
+  const anchor = r.page === 'project' && r.tab === 'setup' && r.item != null && document.querySelector(`[data-anchor="${CSS.escape(r.item)}"]`);
+  if (anchor) anchor.classList.add('flash');
   if (location.hash !== lastHash && !(r.page === 'project' && !S.detail[r.name] && !S.missing[r.name])) {  // wait for the data before scrolling
     lastHash = location.hash;
-    // an item on the overview (a setup entry) is scrolled to; elsewhere the page starts at the top
-    const anchor = r.page === 'project' && r.tab === 'setup' && r.item != null && document.querySelector(`[data-anchor="${CSS.escape(r.item)}"]`);
-    if (anchor) { anchor.scrollIntoView({block: 'center'}); anchor.classList.add('flash'); } else window.scrollTo(0, 0);
+    if (anchor) anchor.scrollIntoView({block: 'center'}); else window.scrollTo(0, 0);
   }
   document.title = titleFor(r);
 }
@@ -169,6 +172,7 @@ function titleFor(r) {
   if (r.page === 'gpu') return (S.status ? `(${B.freeCount(S.status)} 空) ` : '') + app;
   if (r.page === 'todo') return `待办 · ${app}`;
   if (r.page === 'new') return `新建项目 · ${app}`;
+  if (r.page === 'guide') return `使用说明 · ${app}`;
   if (r.page === 'project') { const d = S.detail[r.name]; return `${(d && d.project && d.project.title) || r.name} · ${app}`; }
   return `总览 · ${app}`;
 }
@@ -199,7 +203,7 @@ function pageOverview() {
       ${p.n_checks ? `<div class="w">${p.n_checks} 条记录检查待修</div>` : ''}
       ${p.stale ? `<div class="w">数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败</div>` : ''}
       ${p.n_errors ? `<div class="w">${p.n_errors} 个记录文件读取有问题</div>` : ''}
-      <div class="small">最近动态 ${B.ago(p.mtime, now)}</div></a>`;
+      <div class="small">最近动态 ${B.ago(p.mtime, now)} · 常驻入口${hasEntry(p.name) ? '在运行' : '未运行'}</div></a>`;
   }).join('');
   return `<h1 class="pt">总览</h1>
     <div class="summary">
@@ -243,6 +247,28 @@ function pageNew() {
     <p>控制台只读，不在页面上建项目。请在任意一台服务器上的 Claude 会话里说：</p>
     <pre><code>新建项目 &lt;名字&gt;</code></pre>
     <p>会话会在共享盘 <code>/shared/ssd/dchen/&lt;名字&gt;/</code> 建好目录和 <code>board/</code>，一分钟内左侧栏就会出现这个项目。记录格式见 <code>/shared/ssd/dchen/_shared/BOARD_FORMAT.md</code>。</p></div></div>`;
+}
+
+// ============================================================ resident entries and the guide
+const hasEntry = name => !!(S.projects && (S.projects.entries || []).includes(name));
+function entryBadge(name) {
+  if (!S.projects) return '';
+  return hasEntry(name) ? `<span class="pill t-ok" title="a100 上的 tmux 会话 rc-${esc(name)} 在运行；在 Claude App 或 claude.ai/code 里点「${esc(name)}」开会话">常驻入口在运行</span>`
+    : `<a class="pill t-other" href="#/guide" title="在 a100 会话里输入：! ~/bin/rc-start ${esc(name)}">常驻入口未运行</a>`;
+}
+function pageGuide() {
+  if (S.guide == null) {
+    fetch('/guide.md').then(r => r.ok ? r.text() : '（读不到 docs/guide.md）').then(t => { S.guide = t; if (route().page === 'guide') render(); });
+    S.guide = '';
+  }
+  const list = S.projects ? S.projects.projects : [];
+  const rows = list.map(p => `<tr><td><a href="${plink(p.name)}">${esc(p.title)}</a><div class="small">${esc(p.name)}</div></td>
+    <td>${entryBadge(p.name)}</td><td>${hasEntry(p.name) ? `<span class="small">在 App 或 claude.ai/code 里点「${esc(p.name)}」</span>`
+      : `<code>! ~/bin/rc-start ${esc(p.name)}</code>`}</td></tr>`).join('');
+  return `<h1 class="pt">使用说明</h1>
+    <div class="card"><h2>各项目的常驻入口 <span class="meta">每 5 秒刷新</span></h2>
+      ${rows ? `<div class="scroll"><table class="mt" style="margin:6px 8px 8px"><tr><th>项目</th><th>入口</th><th>怎么用</th></tr>${rows}</table></div>` : '<div class="empty">还没有项目。</div>'}</div>
+    <div class="card"><div class="pad md guide">${S.guide ? B.md(S.guide.replace(/^# .*\n/, '')) : '加载中…'}</div></div>`;
 }
 
 // ============================================================ GPU page
@@ -356,6 +382,7 @@ function pageProject(r) {
   const counts = {setup: null, roadmap: d.attempts.length, runs: d.runs.length, examples: (d.example.probe_head || []).length || null, docs: docItems(d).length};
   const head = `<div class="phead"><h1>${esc(p.title || d.name)}</h1>${B.pill(p.status)}
       ${p.current_version ? `<span class="small">当前版本 <b>${esc(p.current_version)}</b></span>` : ''}
+      ${entryBadge(d.name)}
       <span class="small right">数据读取于 ${B.ago(d.scanned_at, d.now)} · 每分钟刷新</span></div>
     <nav class="ptabs">${TABS.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')}</nav>`;
@@ -870,11 +897,13 @@ window.addEventListener('hashchange', render);
 // ============================================================ polling
 async function poll() {
   const [st, pj] = await Promise.allSettled([getJSON('/api/status'), getJSON('/api/projects')]);
+  const firstProjects = !S.projects && pj.status === 'fulfilled';
   S.offline = st.status === 'rejected' && pj.status === 'rejected';
   if (st.status === 'fulfilled') S.status = st.value;
   if (pj.status === 'fulfilled') S.projects = pj.value;
   const r = route();
-  if (r.page === 'project') { renderSide(r); ensureDetail(r.name); document.title = titleFor(r); return; }  // don't disturb a project page
+  // don't disturb a project page, except once when the project list first arrives (entry badge, counts)
+  if (r.page === 'project' && !firstProjects) { renderSide(r); ensureDetail(r.name); document.title = titleFor(r); return; }
   if (r.page === 'gpu' && copying) { copying = false; renderSide(r); return; }
   render();
 }

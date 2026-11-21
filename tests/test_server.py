@@ -165,6 +165,12 @@ class Http(unittest.TestCase):
                 self.assertEqual(self.get(p)[0], 404)
         self.assertEqual(self.get("/files/demo/runs/r001/big.png")[0], 413)
 
+    def test_guide_and_entries(self):
+        status, h, body = self.get("/guide.md")
+        self.assertEqual((status, h["Content-Type"]), (200, "text/plain; charset=utf-8"))
+        self.assertIn("rc-start", body.decode())
+        self.assertIsInstance(self.get_json("/api/projects")["entries"], list)
+
     def test_gpu_api_unchanged(self):
         d = self.get_json("/api/status")
         self.assertEqual(d["servers"], [])

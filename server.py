@@ -161,6 +161,24 @@ def run_liveness(run):
     return liveness(run, srv, ME)
 
 
+_rc = {"at": 0.0, "names": []}
+
+
+def rc_entries():
+    """Projects whose resident entry (tmux session rc-<project>, started by ~/bin/rc-start) runs here.
+    Cached for 15 s; any tmux trouble just means "none known"."""
+    now = time.time()
+    if now - _rc["at"] > 15:
+        try:
+            out = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                                 capture_output=True, text=True, timeout=5).stdout
+            _rc["names"] = sorted(s[3:] for s in out.split() if s.startswith("rc-"))
+        except (OSError, subprocess.SubprocessError):
+            _rc["names"] = []
+        _rc["at"] = now
+    return _rc["names"]
+
+
 def api_projects():
     snap, status = project_cache.snapshot()
     rows = []
@@ -168,7 +186,8 @@ def api_projects():
         row = projects.summary(snap[name])
         row["active_runs"] = [dict(r, liveness=run_liveness(r)) for r in row["active_runs"]]
         rows.append(row)
-    return {"now": time.time(), "scan": status, "projects": rows, "todos": project_cache.global_todos()}
+    return {"now": time.time(), "scan": status, "projects": rows, "todos": project_cache.global_todos(),
+            "entries": rc_entries()}
 
 
 def api_project(name):
@@ -185,7 +204,8 @@ def api_project(name):
 # The board's own pages, read from the repo on each request
 HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
 STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
-          "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS), "/app.js": ("app.js", JS)}
+          "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS), "/app.js": ("app.js", JS),
+          "/guide.md": ("docs/guide.md", "text/plain; charset=utf-8")}
 
 # Served board files must never run code, even when opened directly (SVG can carry scripts)
 FILE_HEADERS = {"X-Content-Type-Options": "nosniff",

@@ -85,7 +85,7 @@ ROUTES = {
     "p_road_todo": "#/p/demo/roadmap?todo=1", "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
-    "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "",
+    "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
 
@@ -211,6 +211,19 @@ class Pages(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
+
+    def test_guide_and_entry_status(self):
+        g = self.m("guide")
+        for s in ["项目的常驻入口", "a100 重启之后", "密钥和 token", "BOARD_FORMAT.md"]:
+            self.assertIn(s, g)
+        self.assertIn("! ~/bin/rc-start &lt;项目名&gt;", g)
+        self.assertIn("! tmux send-keys -t '=rc-&lt;项目名&gt;:' y Enter", g)
+        self.assertEqual(g.count("常驻入口未运行"), 3)                    # no rc-demo etc. in the test tmux
+        self.assertIn("<code>! ~/bin/rc-start demo</code>", g)
+        self.assertNotIn("<h3>使用说明</h3>", g)                          # the file's own title is dropped
+        self.assertIn('<span class="lbl">使用说明</span>', self.pages["guide"][0])
+        self.assertIn('href="#/guide" title="在 a100 会话里输入：! ~/bin/rc-start demo">常驻入口未运行</a>', self.m("p_overview"))
+        self.assertEqual(title(self.pages["guide"][0]), "使用说明 · CD的研究控制台")
 
     def test_global_pages(self):
         ov = self.m("overview")
