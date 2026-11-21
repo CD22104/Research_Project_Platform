@@ -255,6 +255,26 @@ const Board = (() => {
       (Array.isArray(r.gpus) && r.gpus.map(Number).includes(g.index))));
   }
 
+  // ---- horizontal bars: items [{label, value, html?, href?, dim?, on?}]. better: 'higher' | 'lower' | null.
+  // Sorted best first when the direction is known (largest first otherwise); the best non-dim bar is marked
+  // only when the direction is known. dim = not comparable (e.g. a spot check), drawn hatched.
+  function bars(items, better = null) {
+    const ok = (items || []).filter(x => typeof x.value === 'number' && isFinite(x.value));
+    if (!ok.length) return '';
+    const vals = ok.map(x => x.value), lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;
+    const sorted = [...ok].sort((a, b) => better === 'lower' ? a.value - b.value : b.value - a.value);
+    const fair = sorted.filter(x => !x.dim);
+    const best = better && fair.length ? fair[0] : null;
+    return '<div class="bars">' + sorted.map(x => {
+      const left = ((Math.min(x.value, 0) - lo) / span * 100).toFixed(1), width = (Math.abs(x.value) / span * 100).toFixed(1);
+      const cls = 'brow' + (x === best ? ' best' : '') + (x.dim ? ' dim' : '') + (x.on ? ' on' : '');
+      const tag = x.href ? 'a' : 'div';
+      return `<${tag} class="${cls}"${x.href ? ` href="${esc(x.href)}"` : ''} title="${esc(x.label)}${x.dim ? '（不参与比较）' : ''}">` +
+        `<span class="bl">${esc(x.label)}</span><span class="bt"><i style="margin-left:${left}%;width:${width}%"></i></span>` +
+        `<span class="bv">${x.html ?? num(x.value)}</span></${tag}>`;
+    }).join('') + '</div>';
+  }
+
   // ---- objects as a two-column key/value table (never a one-line dict). Nested keys are dotted.
   function kvTable(obj) {
     if (!isObj(obj)) return obj == null ? '' : `<span>${esc(typeof obj === 'object' ? JSON.stringify(obj) : obj)}</span>`;
@@ -318,6 +338,36 @@ const Board = (() => {
     return out;
   }
 
+  // ---- setup.json as lookups: datasets / metrics / methods by id, and the method of each run
+  function setupIndex(setup) {
+    const list = k => Array.isArray(setup && setup[k]) ? setup[k].filter(x => isObj(x) && typeof x.id === 'string') : [];
+    const byId = xs => new Map(xs.map(x => [x.id, x]));
+    const methods = list('methods'), runMethod = new Map();
+    for (const m of methods) for (const r of Array.isArray(m.runs) ? m.runs : []) if (!runMethod.has(String(r))) runMethod.set(String(r), m);
+    return {goal: setup && typeof setup.goal === 'string' ? setup.goal : '', datasets: byId(list('datasets')), models: list('models'),
+      metrics: byId(list('metrics')), methods, runMethod, present: !!setup};
+  }
+
+  // ---- the roadmap tree: versions (by date) > tracks hung on them > attempts (by date).
+  // A track hangs under its from_version; without a valid one, under the version that merged it.
+  function roadmapTree(d) {
+    const key = x => String(x.meta.date || x.meta.started || x.file);
+    const id = x => typeof x.meta.id === 'string' ? x.meta.id : null;
+    const versions = [...(d.versions || [])].sort((a, b) => key(a).localeCompare(key(b)));
+    const tracks = [...(d.tracks || [])].sort((a, b) => key(a).localeCompare(key(b)));
+    const vids = new Set(versions.map(id).filter(Boolean)), tids = new Set(tracks.map(id).filter(Boolean));
+    const mergedInto = new Map();
+    for (const v of versions) for (const t of Array.isArray(v.meta.merged_tracks) ? v.meta.merged_tracks : []) if (id(v) && !mergedInto.has(t)) mergedInto.set(t, id(v));
+    const home = t => vids.has(t.meta.from_version) ? t.meta.from_version : mergedInto.get(id(t)) || null;
+    const attemptsOf = t => id(t) ? (d.attempts || []).filter(a => a.meta.track === id(t)).sort((a, b) => key(a).localeCompare(key(b))) : [];
+    const node = t => ({track: t, merged: mergedInto.get(id(t)) || null, attempts: attemptsOf(t)});
+    return {
+      versions: versions.map(v => ({version: v, tracks: tracks.filter(t => id(v) && home(t) === id(v)).map(node)})),
+      loose: tracks.filter(t => !home(t)).map(node),
+      orphans: (d.attempts || []).filter(a => !tids.has(a.meta.track)).sort((a, b) => key(a).localeCompare(key(b))),
+    };
+  }
+
   const projectUrl = (name, tab = 'overview', item = null) => '#/p/' + encodeURIComponent(name) + '/' + tab + (item != null ? '/' + encodeURIComponent(item) : '');
 
   // ---- GPUs: a card is free when no process is on it and almost no memory is used
@@ -328,5 +378,5 @@ const Board = (() => {
     .filter(s => s.status === 'ok').reduce((n, s) => n + (s.gpus || []).filter(isFree).length, 0);
 
   return {APP_NAME, FREE_MB, isFree, freeCount, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
-    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents};
+    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree};
 })();

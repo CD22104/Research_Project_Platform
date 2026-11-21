@@ -140,6 +140,19 @@ sb.innerHTML = B.md('| 测试集 | 准确率 | 备注 |\n|---|---|---|\n| 同分
 check('md table numeric columns', [...sb.querySelectorAll('tbody tr:first-child td')].map(td => td.className).join() === ',num,' && sb.querySelector('thead th.num').textContent === '准确率');
 check('projectUrl', B.projectUrl('a b') === '#/p/a%20b/overview' && B.projectUrl('x', 'runs', 'r/1') === '#/p/x/runs/r%2F1');
 
+// setup.json lookups and the roadmap tree
+const si = B.setupIndex({goal: 'g', datasets: [{id: 'a', name: 'A'}, {name: 'no id'}], metrics: [{id: 'acc'}], methods: [{id: 'm', name: 'M', runs: ['r1', 'r2']}, {id: 'n', runs: ['r1']}]});
+check('setupIndex', si.present && si.goal === 'g' && si.datasets.size === 1 && si.metrics.has('acc') && si.runMethod.get('r2').id === 'm' && si.runMethod.get('r1').id === 'm');
+check('setupIndex without setup', !B.setupIndex(null).present && B.setupIndex(null).datasets.size === 0 && B.setupIndex({datasets: 'x'}).datasets.size === 0);
+const rt = B.roadmapTree({
+  versions: [{meta: {id: 'v2', date: '2026-02-01', merged_tracks: []}, file: 'v2'}, {meta: {id: 'v1', date: '2026-01-01', merged_tracks: ['m']}, file: 'v1'}],
+  tracks: [{meta: {id: 'b', from_version: 'v2', started: '2026-02-02'}, file: 'b'}, {meta: {id: 'm', from_version: null, started: '2025-12-01'}, file: 'm'},
+           {meta: {id: 'x', from_version: 'v9'}, file: 'x'}, {meta: {id: 'a', from_version: 'v1', started: '2026-01-05'}, file: 'a'}],
+  attempts: [{meta: {id: 'a2', track: 'a', date: '2026-01-09'}, file: 'a2'}, {meta: {id: 'a1', track: 'a', date: '2026-01-06'}, file: 'a1'}, {meta: {id: 'o', track: 'zz'}, file: 'o'}]});
+check('roadmapTree', rt.versions.map(v => v.version.meta.id + ':' + v.tracks.map(n => n.track.meta.id + (n.merged ? '>' + n.merged : '')).join(',')).join(' ') === 'v1:m>v1,a v2:b'
+  && rt.versions[0].tracks[1].attempts.map(a => a.meta.id).join() === 'a1,a2' && rt.loose.map(n => n.track.meta.id).join() === 'x' && rt.orphans.map(a => a.meta.id).join() === 'o',
+  JSON.stringify(rt.versions.map(v => [v.version.meta.id, v.tracks.map(n => n.track.meta.id)])));
+
 // GPU card <-> run matching
 const runs = [{server: 'h200', gpus: [2, 3], pid: 999, id: 'a'}, {server: 'h200', gpus: ['5'], pid: '77', id: 'b'}, {server: 'a100', gpus: [2], id: 'c'}];
 const ids = (srv, g) => B.runsOnGpu(runs, srv, g).map(r => r.id).join();
