@@ -168,7 +168,7 @@ def api_projects():
         row = projects.summary(snap[name])
         row["active_runs"] = [dict(r, liveness=run_liveness(r)) for r in row["active_runs"]]
         rows.append(row)
-    return {"now": time.time(), "scan": status, "projects": rows}
+    return {"now": time.time(), "scan": status, "projects": rows, "todos": project_cache.global_todos()}
 
 
 def api_project(name):

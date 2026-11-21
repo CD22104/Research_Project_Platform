@@ -1,0 +1,2 @@
+{"id": "g1", "text": "给所有项目加远程仓库", "kind": "whenever", "created": "2026-11-21T00:00:00Z", "done": null}
+{"id": "g2", "text": "已完成的事", "kind": "blocking", "done": "2026-11-21T00:00:00Z"}

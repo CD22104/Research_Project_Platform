@@ -1,0 +1,8 @@
+{"goal": "弄清预热能否让小模型训练更稳定，并量化它对准确率的影响。",
+ "datasets": [{"id": "测试集", "name": "同分布测试集", "role": "test", "size": 602, "about": "和训练集同一个生成器、不同随机种子。", "source": "data/test.jsonl"}],
+ "models": [{"id": "tiny", "name": "Tiny-6L", "version": "tiny@abc123", "about": "6 层的小模型。"}],
+ "metrics": [{"id": "acc", "name": "准确率", "better": "higher", "about": "判定与标准答案一致的比例。"},
+             {"id": "f1", "name": "F1", "better": "higher", "about": "少数类的 F1。"},
+             {"id": "correct", "name": "判对条数", "better": null}, {"id": "n", "name": "总条数", "better": null}],
+ "methods": [{"id": "warmup", "name": "线性预热 500 步", "track": "t-lr", "runs": ["r001", "r999"], "about": "前 500 步学习率线性增加。"},
+             {"id": "focal", "name": "Focal loss", "track": "t-loss", "runs": ["r002"]}]}

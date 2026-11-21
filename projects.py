@@ -265,6 +265,40 @@ class _Board:
             return {}
         return data or {}
 
+    def root_doc(self, name):
+        """A fixed-name file next to board/ (e.g. NOTES.md), read as a record; None if missing or a symlink out."""
+        root = os.path.dirname(self.board)
+        p = os.path.join(root, name)
+        try:
+            st = os.stat(p)
+        except MISSING:
+            return None
+        if not stat.S_ISREG(st.st_mode) or os.path.realpath(p) != os.path.join(os.path.realpath(root), name):
+            return None
+        return dict(self.record("../" + name, st), file=name)
+
+
+def read_todos(path, limit=2000):
+    """todos.jsonl -> {"items": [...], "bad": n}. Rows are appended; the last row of an id wins,
+    so a session marks an item done by appending it again with "done" set."""
+    items, bad = {}, 0
+    for i, line in enumerate(_complete_lines(path)):
+        if i >= limit:
+            break
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("id"), (str, int)) or not row.get("text"):
+            bad += 1
+            continue
+        items.pop(str(row["id"]), None)  # re-insert so the order follows the latest row
+        items[str(row["id"])] = {k: row.get(k) for k in ("id", "text", "kind", "where", "created", "done", "by", "link")}
+    return {"items": list(items.values()), "bad": bad}
+
 
 def scan_project(board, memo=None, new_memo=None):
     """Parse one project's board/ dir. Raises only OSError (I/O trouble)."""
@@ -344,9 +378,130 @@ def scan_project(board, memo=None, new_memo=None):
         bump("examples", st.st_mtime)
         example["probe_head"] = b.cached("examples/probe.jsonl", st, read_jsonl_head, []) or []
 
-    out = {"project": project, "plan": plan, "runs": runs, "example": example,
-           "updated": updated, "errors": b.errors}
+    # paper-style setup, the project flow chart and the to-do list (all optional)
+    setup = flow = None
+    st = b.stat("setup.json")
+    if st:
+        bump("setup", st.st_mtime)
+        setup = b.json_object("setup.json", st)
+    st = b.stat("flow.json")
+    if st:
+        flow = b.json_object("flow.json", st)
+    todos = {"items": [], "bad": 0}
+    st = b.stat("todos.jsonl")
+    if st:
+        bump("todos", st.st_mtime)
+        todos = b.cached("todos.jsonl", st, read_todos, todos) or todos
+        if todos["bad"]:
+            b.errors.append({"file": "todos.jsonl", "error": "%d 行无法解析或缺少 id / text" % todos["bad"]})
+
+    # general documents: board/plan.md is above; board/docs/*.md and two fixed files in the project root
+    docs = []
+    for fn in b.listdir("docs"):
+        st = b.stat("docs/" + fn) if fn.endswith(".md") and not fn.startswith(".") else None
+        if st:
+            bump("docs", st.st_mtime)
+            docs.append(b.record("docs/" + fn, st))
+    for name in ("NOTES.md", "REPORT.md"):
+        r = b.root_doc(name)
+        if r:
+            bump("docs", r["mtime"])
+            docs.append(r)
+
+    out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
+           "todos": todos["items"], "docs": docs, "updated": updated, "errors": b.errors}
     out.update(records)
+    try:
+        out["checks"] = check_project(out)
+    except Exception as e:  # a check must never break the scan
+        out["checks"] = []
+        b.errors.append({"file": "(记录检查)", "error": _err(e)})
+    return out
+
+
+def _ids(records):
+    return {r["meta"].get("id") for r in records if isinstance(r["meta"].get("id"), str)}
+
+
+def _list(x):
+    return x if isinstance(x, list) else []
+
+
+def check_project(d, limit=200):
+    """Broken links and missing definitions in a project's records: [{"where", "what"}].
+    Only reports what a session writing the records can fix; never raises."""
+    out = []
+
+    def add(where, what):
+        if len(out) < limit:
+            out.append({"where": where, "what": what})
+
+    run_ids = {str(r["run"].get("id") or r["id"]) for r in d["runs"]}
+    att_ids, track_ids, ver_ids = _ids(d["attempts"]), _ids(d["tracks"]), _ids(d["versions"])
+    merged = set()
+    for v in d["versions"]:
+        for t in _list(v["meta"].get("merged_tracks")):
+            merged.add(t)
+            if t not in track_ids:
+                add(v["file"], "merged_tracks 里的支线「%s」不存在" % t)
+    for t in d["tracks"]:
+        fv = t["meta"].get("from_version")
+        if fv and fv not in ver_ids:
+            add(t["file"], "from_version「%s」不存在" % fv)
+        if t["meta"].get("id") not in merged and fv not in ver_ids and ver_ids:
+            add(t["file"], "这条支线没有挂到任何版本上（没有有效的 from_version，也不在任何版本的 merged_tracks 里）")
+    for a in d["attempts"]:
+        m = a["meta"]
+        if not m:
+            add(a["file"], "没有字段区（开头的 --- 块），读不到 id、支线和状态")
+            continue
+        if m.get("track") not in track_ids:
+            add(a["file"], "所属支线「%s」不存在" % m.get("track") if m.get("track") else "没有写所属支线（track）")
+        for rid in _list(m.get("runs")):
+            if rid not in run_ids:
+                add(a["file"], "引用的运行「%s」不存在" % rid)
+        if "例子" not in (a.get("sections") or {}):
+            add(a["file"], "没有「例子」小节")
+    for r in d["runs"]:
+        at = r["run"].get("attempt")
+        if at and at not in att_ids:
+            add(r["dir"] + "/run.json", "attempt「%s」不存在" % at)
+
+    s = d.get("setup")
+    if s:
+        datasets = {x.get("id") for x in _list(s.get("datasets")) if isinstance(x, dict)}
+        metrics = {x.get("id") for x in _list(s.get("metrics")) if isinstance(x, dict)}
+        groups, cols = {}, {}
+        for r in d["runs"]:
+            m = r["run"].get("metrics")
+            if not isinstance(m, dict):
+                continue
+            for g, v in m.items():
+                if isinstance(v, dict):
+                    groups[g] = groups.get(g, 0) + 1
+                    for c in v:
+                        cols[c] = cols.get(c, 0) + 1
+                else:
+                    cols[g] = cols.get(g, 0) + 1
+        for g in sorted(set(groups) - datasets):
+            add("setup.json", "分组「%s」（%d 次运行用到）没有在 datasets 里定义" % (g, groups[g]))
+        for c in sorted(set(cols) - metrics):
+            add("setup.json", "指标「%s」（%d 次运行用到）没有在 metrics 里定义" % (c, cols[c]))
+        for x in _list(s.get("methods")):
+            if not isinstance(x, dict):
+                continue
+            if x.get("track") and x["track"] not in track_ids:
+                add("setup.json", "方法「%s」的 track「%s」不存在" % (x.get("id"), x["track"]))
+            for rid in _list(x.get("runs")):
+                if rid not in run_ids:
+                    add("setup.json", "方法「%s」引用的运行「%s」不存在" % (x.get("id"), rid))
+
+    h = ((d.get("project") or {}).get("display") or {}).get("headline")
+    if isinstance(h, dict) and h.get("group") and h.get("metric"):
+        seen = any(isinstance((r["run"].get("metrics") or {}).get(h["group"]), dict)
+                   and h["metric"] in r["run"]["metrics"][h["group"]] for r in d["runs"])
+        if not seen:
+            add("project.json", "display.headline 指向的「%s / %s」在运行记录里找不到" % (h["group"], h["metric"]))
     return out
 
 
@@ -380,8 +535,8 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [],
-            "runs": [], "example": {"walkthrough": None, "probe_head": []}, "updated": {},
-            "errors": [], "scanned_at": None}
+            "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
+            "todos": [], "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 
 def summary(data):
@@ -418,7 +573,9 @@ def summary(data):
             "scanned_at": data.get("scanned_at"),
             "n_tracks": len(data.get("tracks") or []), "track_status": count(data.get("tracks") or []),
             "n_attempts": len(attempts), "attempt_status": count(attempts),
-            "n_runs": len(data.get("runs") or []), "pending": pending}
+            "n_runs": len(data.get("runs") or []), "pending": pending,
+            "todos": [t for t in data.get("todos") or [] if not t.get("done")],
+            "n_checks": len(data.get("checks") or [])}
 
 
 class ProjectCache:
@@ -432,7 +589,7 @@ class ProjectCache:
         self.root, self.interval = root, interval
         self.log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
         self._lock = threading.Lock()
-        self._projects, self._memo = {}, {}
+        self._projects, self._memo, self._todos, self._todos_sig = {}, {}, [], None
         self._status = {"root": root, "started": None, "finished": None, "duration": None,
                         "running_since": None, "error": None, "error_at": None}
 
@@ -443,6 +600,16 @@ class ProjectCache:
         new_memo = {}
         try:
             projects = scan_root(self.root, self._projects, self._memo, new_memo, self.log)
+            todos, path = self._todos, os.path.join(self.root, "_shared", "todos.jsonl")
+            try:
+                st = os.stat(path)
+                sig = (st.st_mtime_ns, st.st_size)
+                if sig != self._todos_sig:  # unchanged file: keep the previous parse
+                    todos, self._todos_sig = read_todos(path)["items"], sig
+            except MISSING:
+                todos, self._todos_sig = [], None
+            except OSError as e:  # keep the previous list on I/O trouble
+                self.log("[projects] _shared/todos.jsonl: %s" % _err(e))
         except Exception as e:
             self.log("[projects] scan of %s failed, keeping previous data:\n%s"
                      % (self.root, traceback.format_exc()))
@@ -451,7 +618,7 @@ class ProjectCache:
             return False
         t1 = time.time()
         with self._lock:
-            self._projects, self._memo = projects, new_memo
+            self._projects, self._memo, self._todos = projects, new_memo, todos
             self._status.update(started=t0, finished=t1, duration=round(t1 - t0, 3),
                                 running_since=None, error=None)
         return True
@@ -468,6 +635,11 @@ class ProjectCache:
         """(projects, status). Snapshots are replaced, never mutated: treat as read-only."""
         with self._lock:
             return self._projects, dict(self._status)
+
+    def global_todos(self):
+        """Cross-project to-dos from <root>/_shared/todos.jsonl (all rows, done or not)."""
+        with self._lock:
+            return self._todos
 
 
 def safe_board_file(root, name, relpath):

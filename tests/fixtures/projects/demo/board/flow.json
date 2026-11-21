@@ -1,0 +1,4 @@
+{"nodes": [{"id": "gen", "title": "生成数据", "subtitle": "规则打标签", "group": "code", "link": "docs/plan"},
+           {"id": "train", "title": "训练", "group": "model", "link": "runs"},
+           {"id": "eval", "title": "评测", "subtitle": "三个指标", "group": "code", "link": "runs"}],
+ "edges": [["gen", "train"], ["train", "eval"]], "groups": {"code": "我们的代码", "model": "模型"}}

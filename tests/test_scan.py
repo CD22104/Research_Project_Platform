@@ -76,7 +76,7 @@ class Scan(FixtureCase):
         self.assertIn("<script>", d["plan"]["body"])       # backend returns raw text; frontend escapes
         self.assertIn("<script>", d["example"]["walkthrough"]["body"])
         self.assertEqual(len(d["example"]["probe_head"]), 2)
-        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples"})
+        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs"})
 
     def test_runs(self):
         d = self.demo()
@@ -194,6 +194,67 @@ class IOFailures(FixtureCase):
             self.assertTrue(c.scan_once())
             self.assertEqual(rb.call_count, 0)
         self.assertEqual(len(c.snapshot()[0]["demo"]["errors"]), 3)  # cached errors are kept
+
+
+class Extras(FixtureCase):
+    """setup.json, flow.json, to-dos, documents and record checks."""
+
+    def test_setup_flow_docs(self):
+        d = self.demo()
+        self.assertEqual([x["id"] for x in d["setup"]["datasets"]], ["测试集"])
+        self.assertEqual(len(d["flow"]["nodes"]), 3)
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/hparams.md", "NOTES.md", "REPORT.md"])
+        self.assertIn("进度笔记", d["docs"][1]["body"])
+        self.assertIn("setup", d["updated"])
+
+    def test_root_doc_symlink_out_is_ignored(self):
+        os.remove(os.path.join(self.root, "demo", "NOTES.md"))
+        os.symlink(os.path.join(self.tmp, "secret.md"), os.path.join(self.root, "demo", "NOTES.md"))
+        d = self.demo()
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/hparams.md", "REPORT.md"])
+        self.assertNotIn("must never be read", repr(d))
+
+    def test_todos_last_row_wins(self):
+        d = self.demo()
+        self.assertEqual([(t["id"], t["done"]) for t in d["todos"]], [("t2", None), ("t1", "2026-11-21T00:00:00Z"), ("t3", None)])
+        self.assertEqual([t["id"] for t in P.summary(d)["todos"]], ["t2", "t3"])   # open ones only
+        with open(os.path.join(self.root, "demo", "board", "todos.jsonl"), "a") as f:
+            f.write("not json\n{\"id\": \"t9\"}\n")
+        d = self.demo()
+        self.assertIn({"file": "todos.jsonl", "error": "2 行无法解析或缺少 id / text"}, d["errors"])
+
+    def test_global_todos(self):
+        c = P.ProjectCache(self.root, log=lambda m: None)
+        c.scan_once()
+        self.assertEqual([(t["id"], t["done"]) for t in c.global_todos()], [("g1", None), ("g2", "2026-11-21T00:00:00Z")])
+
+    def test_checks(self):
+        board = os.path.join(self.root, "demo", "board")
+        with open(os.path.join(board, "attempts", "2026-11-20-broken.md"), "w") as f:
+            f.write("---\nid: 2026-11-20-broken\ntrack: nope\nruns: [r404]\n---\n## 例子\nx\n")
+        os.makedirs(os.path.join(board, "runs", "r006"))
+        with open(os.path.join(board, "runs", "r006", "run.json"), "w") as f:
+            f.write('{"id": "r006", "attempt": "ghost", "metrics": {"新集": {"acc": 1}}}')
+        checks = {(c["where"], c["what"]) for c in self.demo()["checks"]}
+        for want in [("attempts/2026-11-20-broken.md", "所属支线「nope」不存在"),
+                     ("attempts/2026-11-20-broken.md", "引用的运行「r404」不存在"),
+                     ("runs/r006/run.json", "attempt「ghost」不存在"),
+                     ("setup.json", "分组「新集」（1 次运行用到）没有在 datasets 里定义"),
+                     ("setup.json", "方法「warmup」引用的运行「r999」不存在"),
+                     ("attempts/2026-11-15-focal.md", "没有「例子」小节"),
+                     ("attempts/2026-11-18-no-frontmatter.md", "没有字段区（开头的 --- 块），读不到 id、支线和状态")]:
+            self.assertIn(want, checks)
+        self.assertNotIn(("attempts/2026-11-10-lr-sweep.md", "没有「例子」小节"), checks)
+        self.assertFalse([c for c in checks if c[0] == "tracks/t-old.md"])   # attached through v1.merged_tracks
+
+    def test_checks_survive_odd_values(self):
+        d = self.demo()
+        d["versions"][0]["meta"]["merged_tracks"] = "t-old"
+        d["attempts"][0]["meta"]["runs"] = "r001"
+        d["setup"] = {"datasets": "x", "metrics": [1, None], "methods": [{"runs": 5}]}
+        d["project"]["display"] = {"headline": {"group": "zz", "metric": "acc"}}
+        checks = P.check_project(d)
+        self.assertIn({"where": "project.json", "what": "display.headline 指向的「zz / acc」在运行记录里找不到"}, checks)
 
 
 class SafeFile(FixtureCase):
