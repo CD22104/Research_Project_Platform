@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU 看板</title>
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585;
+  --free:#1a9d5b; --free-bg:#e5f6ec; --busy:#c7791a; --busy-bg:#fdf1dc;
+  --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --track:#e9ecf1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8;
+    --free:#4ccb85; --free-bg:#16321f; --busy:#e3a548; --busy-bg:#3a2c12;
+    --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --track:#2a303b;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
+main{max-width:1180px;margin:0 auto;padding:24px 16px 48px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+h1{font-size:20px;margin:0}
+.sub{color:var(--muted);font-size:13px}
+button{margin-left:auto;font:inherit;padding:5px 12px;border-radius:6px;border:1px solid var(--line);
+  background:var(--card);color:var(--text);cursor:pointer}
+button:hover{border-color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:12px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+section>h2{font-size:15px;margin:0;padding:11px 14px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h2 .meta{font-weight:400;color:var(--muted);font-size:12px}
+h2 .right{margin-left:auto}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th,td{padding:8px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-size:12px;font-weight:500;color:var(--muted)}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;white-space:nowrap}
+.free{color:var(--free);background:var(--free-bg)}
+.busy{color:var(--busy);background:var(--busy-bg)}
+.full{color:var(--full);background:var(--full-bg)}
+.bar{height:6px;border-radius:3px;background:var(--track);width:150px;margin-top:5px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:3px}
+.proc{display:flex;gap:8px;align-items:baseline;margin-bottom:2px}
+.user{font-weight:600;color:var(--accent);white-space:nowrap}
+.me{color:var(--free)}
+.cmd{color:var(--muted);font:12px ui-monospace,SFMono-Regular,Menlo,monospace;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
+.small{color:var(--muted);font-size:12px;white-space:nowrap}
+.err{padding:12px 14px;color:var(--full)}
+.err code{font:12px ui-monospace,Menlo,monospace}
+.hint{padding:0 14px 12px;color:var(--muted);font-size:12px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.empty{padding:14px;color:var(--muted)}
+
+.copy{margin:0;padding:2px 9px;font-size:12px}
+.lead{border-color:var(--free)}
+.lead>h2{font-size:17px}
+.big{font-size:22px;font-variant-numeric:tabular-nums;color:var(--free)}
+.slot{display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line)}
+.slot:last-child{border-bottom:0}
+.where{min-width:150px}
+.where b{display:block;font-size:15px}
+.chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.chip{display:inline-block;min-width:30px;text-align:center;padding:3px 8px;border-radius:6px;font-weight:700;
+  font-variant-numeric:tabular-nums;color:var(--free);background:var(--free-bg)}
+.cmds{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cmds code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--track);padding:3px 8px;border-radius:5px}
+details.box{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+details.box>summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:15px}
+details.box[open]>summary{border-bottom:1px solid var(--line)}
+h3{font-size:13px;color:var(--muted);font-weight:500;margin:22px 2px 8px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>GPU 看板</h1>
+    <span class="sub" id="sub">加载中…</span>
+    <button id="refresh">立即刷新</button>
+  </header>
+  <section class="lead" id="free"></section>
+  <section id="partial"></section>
+  <h3>各服务器明细</h3>
+  <div id="servers"></div>
+  <details class="box"><summary>谁在用（按占用显存排序）</summary><div class="scroll" id="users"></div></details>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const gb = mb => mb == null ? '–' : (mb / 1024).toFixed(1);
+const dur = s => s == null ? '' : s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天';
+const ago = s => s < 90 ? Math.round(s) + ' 秒前' : Math.round(s / 60) + ' 分钟前';
+const FREE_MB = 500;        // 无进程且显存占用低于此值视为空闲
+const SHARE_MB = 10 * 1024; // 在用的卡剩余显存不少于此值，列入“挤一挤能用”
+
+function gpuState(g) {
+  if (!g.procs.length && (g.mem_used ?? 0) < FREE_MB) return 'free';
+  return g.mem_total && g.mem_used / g.mem_total > 0.9 ? 'full' : 'busy';
+}
+const LABEL = {free: '空闲', busy: '使用中', full: '已占满'};
+const errText = e => /退出码 3/.test(e || '') ? 'nvidia-smi 无法运行（显卡驱动没有加载），需要管理员处理' : e;
+
+function render(d) {
+  let total = 0, okServers = 0;
+  const users = {}, freeBy = [], partial = [];
+  let html = '';
+  for (const s of d.servers) {
+    const gpus = s.gpus || [];
+    const live = s.status === 'ok';
+    if (live) okServers++;
+    const freeCards = [];
+    let rows = '';
+    for (const g of gpus) {
+      const st = gpuState(g);
+      if (live) {
+        total++;
+        if (st === 'free') freeCards.push(g);
+        else if (g.mem_total - g.mem_used >= SHARE_MB) partial.push({s, g});
+      }
+      const pct = g.mem_total ? Math.round(100 * g.mem_used / g.mem_total) : 0;
+      const procs = g.procs.map(p => {
+        const u = users[p.user] = users[p.user] || {mem: 0, gpus: new Set(), where: new Set()};
+        u.mem += p.mem || 0; u.gpus.add(s.name + '#' + g.index); u.where.add(s.name);
+        return `<div class="proc"><span class="user">${esc(p.user)}</span>
+          <span class="small">${gb(p.mem)} GB · ${dur(p.elapsed)} · PID ${esc(p.pid)}</span>
+          <span class="cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</span></div>`;
+      }).join('') || (st === 'free' ? '<span class="small">—</span>' : '<span class="small">有显存占用但看不到进程（可能在容器内）</span>');
+      rows += `<tr>
+        <td class="n">${esc(g.index)}</td>
+        <td><span class="pill ${st}">${LABEL[st]}</span></td>
+        <td class="n">${esc(g.name)}</td>
+        <td class="n">${gb(g.mem_used)} / ${gb(g.mem_total)} GB
+          <div class="bar"><i style="width:${pct}%;background:var(--${st})"></i></div></td>
+        <td class="n">${g.util ?? '–'}%</td>
+        <td class="n">${g.temp ?? '–'}°C</td>
+        <td>${procs}</td></tr>`;
+    }
+    if (freeCards.length) freeBy.push({s, cards: freeCards});
+    const color = live ? 'var(--free)' : s.status === 'pending' ? 'var(--busy)' : 'var(--full)';
+    html += `<section><h2><span class="dot" style="background:${color}"></span>${esc(s.name)}
+      <span class="meta">${esc(s.host)}</span>
+      <span class="meta right">${live ? `空闲 ${freeCards.length} / ${gpus.length}` : ''}
+        ${s.updated ? ' · 更新于 ' + ago(d.now - s.updated) : ''}</span></h2>`;
+    if (s.status === 'pending') html += `<div class="empty">正在连接…</div>`;
+    if (s.status === 'error') {
+      html += `<div class="err">读取失败：<code>${esc(errText(s.error))}</code>${gpus.length ? '（下面是上一次成功时的数据）' : ''}</div>`;
+      if (/Permission denied/.test(s.error || ''))
+        html += `<div class="hint">这台机器还没有配置免密登录：<code>ssh-copy-id ${esc(s.host)}</code></div>`;
+    }
+    if (gpus.length) html += `<div class="scroll" style="${live ? '' : 'opacity:.55'}"><table>
+      <tr><th>卡</th><th>状态</th><th>型号</th><th>显存</th><th>利用率</th><th>温度</th><th>使用者 / 进程</th></tr>${rows}</table></div>`;
+    html += '</section>';
+  }
+  $('servers').innerHTML = html;
+
+  // 顶部：现在能跑的卡
+  const nFree = freeBy.reduce((n, x) => n + x.cards.length, 0);
+  freeBy.sort((a, b) => b.cards.length - a.cards.length || b.cards[0].mem_total - a.cards[0].mem_total);
+  $('free').innerHTML = `<h2>现在能跑的卡 <span class="big">${nFree}</span>
+      <span class="meta">张空闲 / 共 ${total} 张</span></h2>` +
+    (nFree ? freeBy.map(({s, cards}) => {
+      const ids = cards.map(g => g.index).join(',');
+      const models = [...new Set(cards.map(g => `${g.name} · ${Math.round(g.mem_total / 1024)} GB`))].join(' / ');
+      return `<div class="slot">
+        <div class="where"><b>${esc(s.name)}</b><span class="small">${esc(models)}</span></div>
+        <div class="chips"><span class="small">卡号</span>${cards.map(g => `<span class="chip">${esc(g.index)}</span>`).join('')}</div>
+        <div class="cmds"><code>CUDA_VISIBLE_DEVICES=${esc(ids)}</code>
+          <button class="copy" data-c="CUDA_VISIBLE_DEVICES=${esc(ids)}">复制</button>
+          <button class="copy" data-c="ssh ${esc(s.host)}">复制 ssh 命令</button></div></div>`;
+    }).join('') : `<div class="empty">现在没有完全空闲的卡。${partial.length ? '可以看看下面还有余量的卡。' : ''}</div>`);
+
+  // 第二块：有人在用但还有余量
+  partial.sort((a, b) => (b.g.mem_total - b.g.mem_used) - (a.g.mem_total - a.g.mem_used));
+  $('partial').style.display = partial.length ? '' : 'none';
+  $('partial').innerHTML = `<h2>挤一挤能用的卡 <span class="meta">已有人在用，但剩余显存不少于 ${SHARE_MB / 1024} GB；共用会互相拖慢</span></h2>
+    <div class="scroll"><table><tr><th>服务器</th><th>卡</th><th>剩余显存</th><th>当前利用率</th><th>已在用的人</th></tr>` +
+    partial.map(({s, g}) => `<tr><td><b>${esc(s.name)}</b></td><td class="n">${esc(g.index)}</td>
+      <td class="n">${gb(g.mem_total - g.mem_used)} GB <span class="small">/ ${gb(g.mem_total)}</span></td>
+      <td class="n">${g.util ?? '–'}%</td>
+      <td>${[...new Set(g.procs.map(p => p.user))].map(u => `<span class="user">${esc(u)}</span>`).join('、') || '<span class="small">看不到进程</span>'}</td></tr>`).join('') +
+    '</table></div>';
+
+  const list = Object.entries(users).sort((a, b) => b[1].mem - a[1].mem);
+  $('users').innerHTML = list.length ? `<table><tr><th>用户</th><th>占用卡数</th><th>显存合计</th><th>所在服务器</th></tr>` +
+    list.map(([u, v]) => `<tr><td><span class="user">${esc(u)}</span></td><td class="n">${v.gpus.size}</td>
+      <td class="n">${gb(v.mem)} GB</td><td>${esc([...v.where].join('、'))}</td></tr>`).join('') + '</table>'
+    : '<div class="empty">当前没有人在用卡。</div>';
+
+  const down = d.servers.length - okServers;
+  $('sub').textContent = `${okServers} / ${d.servers.length} 台服务器在线${down ? '（' + down + ' 台读不到）' : ''} · 每 ${d.interval} 秒更新 · ${new Date().toLocaleTimeString()}`;
+  document.title = `(${nFree} 空) GPU 看板`;
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('.copy'); if (!b) return;
+  navigator.clipboard.writeText(b.dataset.c).then(() => { const t = b.textContent; b.textContent = '已复制'; setTimeout(() => b.textContent = t, 1200); });
+});
+let copying = false;
+document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
+async function load() {
+  if (copying) { copying = false; return; }
+  try { render(await (await fetch('/api/status')).json()); }
+  catch (e) { $('sub').textContent = '连不上看板：请确认 Mac 能连到 xtraa100（校园网 / VPN）'; }
+}
+$('refresh').onclick = async () => { await fetch('/api/refresh'); setTimeout(load, 4000); };
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>
