@@ -83,7 +83,7 @@ def split_sections(body):
     return sections
 
 
-DONE = ("成功", "失败", "放弃", "待确认")
+DONE = ("成功", "部分成功", "失败", "放弃", "待确认")  # attempt statuses that carry a conclusion
 
 
 def needs_input(meta, sections):

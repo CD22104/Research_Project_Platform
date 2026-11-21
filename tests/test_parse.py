@@ -48,6 +48,8 @@ class Sections(unittest.TestCase):
         self.assertEqual(P.needs_input({"status": "成功"}, full), [])
         self.assertEqual(P.needs_input({"status": "进行中"}, {"预期": "x"}), [])  # no conclusion yet is fine
         self.assertEqual(P.needs_input({"status": "失败"}, {"预期": "x"}), ["结论和原因"])
+        self.assertEqual(P.needs_input({"status": "部分成功"}, {"预期": "x"}), ["结论和原因"])
+        self.assertEqual(P.needs_input({"status": "搁置中"}, {"预期": "x"}), [])  # unknown status: no conclusion expected
         self.assertEqual(P.needs_input({"status": "待确认"}, {}), ["预期", "结论和原因", "结论待确认"])
         self.assertEqual(P.needs_input({}, {}), ["预期"])
 
