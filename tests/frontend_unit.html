@@ -96,12 +96,49 @@ check('chart has a path', svg.includes('<path class="ln"') && svg.includes('loss
 check('chart ignores bad points', B.chart([{step: 0, loss: 'x'}], 'loss') === '');
 check('chart escapes key', !B.chart([{step: 0, '<k>': 1}], '<k>').includes('<k>'));
 
-// top bar and free cards
-check('nav marks the active tab', B.nav('projects', {free: 3, projects: 2}).includes('<a class="navtab on" href="./#projects">项目 <span class="cnt">2</span></a>')
-  && B.nav('gpu', {free: 3}).includes('<a class="navtab on" href="./#gpu">GPU <span class="cnt">3 空闲</span></a>') && B.nav('gpu').includes(B.esc(B.APP_NAME)));
+// free cards
 check('isFree / freeCount', B.isFree({procs: [], mem_used: 100}) && !B.isFree({procs: [{pid: 1}], mem_used: 0}) && !B.isFree({procs: [], mem_used: 600})
   && B.freeCount({servers: [{status: 'ok', gpus: [{procs: [], mem_used: 0}, {procs: [], mem_used: 9000}]}, {status: 'error', gpus: [{procs: [], mem_used: 0}]}]}) === 1
   && B.freeCount(null) === 0);
+
+// objects as key/value tables, never a one-line dict
+sb.innerHTML = B.kvTable({lr: 0.001, model: {layers: 6, name: '<b>x</b>'}, tags: ['a', 'b'], none: null});
+const kvRows = [...sb.querySelectorAll('table.kv tr')].map(tr => [tr.querySelector('th').textContent, tr.querySelector('td').textContent]);
+check('kvTable rows', JSON.stringify(kvRows) === JSON.stringify([['lr', '0.0010'], ['model.layers', '6'], ['model.name', '<b>x</b>'], ['tags', 'a、b'], ['none', 'null']]), JSON.stringify(kvRows));
+check('kvTable escapes and aligns numbers', !sb.querySelector('table.kv b') && sb.querySelectorAll('table.kv td.num').length === 2);
+check('kvTable empty / scalar', B.kvTable({}).includes('（空）') && B.kvTable('<s>') === '<span>&lt;s&gt;</span>');
+
+// headline and the best run
+check('headline parsed', JSON.stringify(B.parseDisplay({headline: {group: 'g', metric: 'acc', better: 'lower'}}).headline) === JSON.stringify({group: 'g', metric: 'acc', better: 'lower'})
+  && B.parseDisplay({headline: {group: 'g', metric: 'acc', better: 'up'}}).problems.length === 1);
+const runsB = [
+  {id: 'a', run: {kind: 'eval', metrics: {g: {acc: 0.7, n: 10, of: 10}}}},
+  {id: 'b', run: {kind: 'eval', metrics: {g: {acc: 0.9, n: 5, of: 10}}}},    // spot check: n < of
+  {id: 'c', run: {kind: 'data', metrics: {g: {acc: 0.99}}}},
+  {id: 'd', run: {kind: 'smoke', metrics: {g: {acc: 0.98}}}},
+  {id: 'e', run: {kind: 'train', metrics: {g: {acc: 0.8}}}},
+  {id: 'f', run: {kind: 'eval', metrics: {h: {acc: 1}}}}];
+check('bestRun higher, skipping spot checks, data and smoke', B.bestRun(runsB, {group: 'g', metric: 'acc', better: 'higher'}).run.id === 'e');
+check('bestRun lower', B.bestRun(runsB, {group: 'g', metric: 'acc', better: 'lower'}).run.id === 'a');
+check('bestRun none', B.bestRun(runsB, null) === null && B.bestRun(runsB, {group: 'zz', metric: 'acc', better: 'higher'}) === null);
+
+// recent activity
+const evd = {plan: {mtime: 100}, versions: [{meta: {id: 'v1', date: '1970-01-01T00:03:20Z'}, file: 'versions/v1.md', mtime: 5}],
+  tracks: [{meta: {id: 't', title: 'T', started: '1970-01-01T00:01:40Z', ended: '1970-01-01T00:05:00Z', status: '放弃'}, file: 'tracks/t.md'}],
+  attempts: [{meta: {id: 'x', status: '成功'}, file: 'attempts/x.md', mtime: 400}, {meta: {}, file: 'attempts/y.md', mtime: 390}],
+  runs: [{id: 'r1', run: {started: '1970-01-01T00:06:40Z', ended: '1970-01-01T00:07:00Z', status: '完成', server: 's', gpus: [1]}}, {id: 'r2', run: {}, mtime: 50}]};
+const evs = B.events(evd);
+check('events sorted newest first', evs.map(e => e.t).join() === '420,400,400,390,300,200,100,100,50', evs.map(e => e.t).join());
+check('events text and targets', evs[0].text === '运行 r1 结束：完成' && evs[0].tab === 'runs' && evs.some(e => e.text === '运行 r1 开始（s 卡 1）')
+  && evs.some(e => e.text === '支线「T」结束（放弃）') && evs.some(e => e.text === '尝试「y」' && e.item === 'y'), JSON.stringify(evs));
+const folded = B.foldEvents([{t: 1000, kind: 'run', text: 'r'}, {t: 900, kind: 'attempt', text: 'a1', item: 'a1'}, {t: 800, kind: 'attempt', text: 'a2'},
+  {t: 500, kind: 'attempt', text: 'a3'}, {t: -200, kind: 'attempt', text: 'a4', item: 'a4'}]);
+check('foldEvents', folded.map(e => e.text).join('|') === 'r|3 条尝试记录有更新|a4' && folded[1].item === null, JSON.stringify(folded));
+
+// markdown tables: numeric columns right-aligned
+sb.innerHTML = B.md('| 测试集 | 准确率 | 备注 |\n|---|---|---|\n| 同分布 | 588/602 (0.977) | ok |\n| 换措辞 | 541/601 (0.900) | 12 |');
+check('md table numeric columns', [...sb.querySelectorAll('tbody tr:first-child td')].map(td => td.className).join() === ',num,' && sb.querySelector('thead th.num').textContent === '准确率');
+check('projectUrl', B.projectUrl('a b') === '#/p/a%20b/overview' && B.projectUrl('x', 'runs', 'r/1') === '#/p/x/runs/r%2F1');
 
 // GPU card <-> run matching
 const runs = [{server: 'h200', gpus: [2, 3], pid: 999, id: 'a'}, {server: 'h200', gpus: ['5'], pid: '77', id: 'b'}, {server: 'a100', gpus: [2], id: 'c'}];

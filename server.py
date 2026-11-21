@@ -185,7 +185,7 @@ def api_project(name):
 # The board's own pages, read from the repo on each request
 HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
 STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
-          "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS)}
+          "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS), "/app.js": ("app.js", JS)}
 
 # Served board files must never run code, even when opened directly (SVG can carry scripts)
 FILE_HEADERS = {"X-Content-Type-Options": "nosniff",

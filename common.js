@@ -82,8 +82,12 @@ const Board = (() => {
       } else if (isTable(i)) {
         const head = cells(l), rows = [];
         for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) rows.push(cells(lines[i]));
-        out.push(`<div class="scroll"><table><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr>` +
-          rows.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('') + '</table></div>');
+        // a column whose filled cells all look numeric ("0.81", "-3", "12%", "361/602") is right-aligned
+        const NUMERIC = /^[-+]?(\d[\d,]*(\.\d+)?|\.\d+)(%|\s*\/\s*\d[\d,]*)?(\s*\(\s*[-+]?(\d+(\.\d+)?|\.\d+)%?\s*\))?$/;  // also "588/602 (0.977)"
+        const isNum = head.map((_, k) => rows.some(r => (r[k] || '').trim()) && rows.every(r => !(r[k] || '').trim() || NUMERIC.test(r[k].replace(/`/g, '').trim())));
+        const td = (tag, c, k) => `<${tag}${isNum[k] ? ' class="num"' : ''}>${inline(c)}</${tag}>`;
+        out.push(`<div class="scroll"><table class="mdt"><thead><tr>${head.map((c, k) => td('th', c, k)).join('')}</tr></thead><tbody>` +
+          rows.map(r => `<tr>${head.map((_, k) => td('td', r[k] ?? '', k)).join('')}</tr>`).join('') + '</tbody></table></div>');
       } else if (ITEM.test(l)) {
         const ordered = /^\s*\d/.test(l), items = [];
         while (i < lines.length && ITEM.test(lines[i])) {
@@ -206,7 +210,7 @@ const Board = (() => {
   //   ratio: {column: [numerator column, denominator column]}. Column names are relative to the group.
   // Anything unusable is dropped and reported in .problems; the page then falls back to its defaults.
   function parseDisplay(raw) {
-    const out = {defaultGroup: null, order: [], primary: [], ratio: {}, problems: []};
+    const out = {defaultGroup: null, order: [], primary: [], ratio: {}, headline: null, problems: []};
     if (raw == null) return out;
     if (!isObj(raw)) { out.problems.push('display 应为对象'); return out; }
     const strList = v => Array.isArray(v) && v.every(x => typeof x === 'string');
@@ -220,6 +224,10 @@ const Board = (() => {
           if (strList(pair) && pair.length === 2) out.ratio[col] = pair;
           else out.problems.push(`ratio.${col} 应为 [分子列, 分母列]`);
         }
+      } else if (k === 'headline') {
+        if (isObj(v) && typeof v.group === 'string' && typeof v.metric === 'string' && (v.better === 'higher' || v.better === 'lower'))
+          out.headline = {group: v.group, metric: v.metric, better: v.better};
+        else out.problems.push('headline 应为 {group, metric, better: "higher" 或 "lower"}');
       } else out.problems.push(`不认识的字段 ${k}`);
     }
     return out;
@@ -247,7 +255,70 @@ const Board = (() => {
       (Array.isArray(r.gpus) && r.gpus.map(Number).includes(g.index))));
   }
 
-  const projectUrl = name => 'project.html?p=' + encodeURIComponent(name);
+  // ---- objects as a two-column key/value table (never a one-line dict). Nested keys are dotted.
+  function kvTable(obj) {
+    if (!isObj(obj)) return obj == null ? '' : `<span>${esc(typeof obj === 'object' ? JSON.stringify(obj) : obj)}</span>`;
+    const flat = flatten(obj);
+    const keys = Object.keys(flat);
+    if (!keys.length) return '<span class="faint">（空）</span>';
+    const val = v => typeof v === 'number' ? num(v) : Array.isArray(v) ? v.map(x => esc(typeof x === 'object' ? JSON.stringify(x) : x)).join('、')
+      : v == null ? '<span class="faint">null</span>' : esc(v);
+    return '<table class="kv">' + keys.map(k => `<tr><th>${esc(k)}</th><td${typeof flat[k] === 'number' ? ' class="num"' : ''}>${val(flat[k])}</td></tr>`).join('') + '</table>';
+  }
+
+  // ---- the run that is best on display.headline: {run, value, vals} or null.
+  // Not eligible: kind data or smoke, and spot checks that scored only part of a set (n < of in that group).
+  function bestRun(runs, headline) {
+    if (!headline) return null;
+    let best = null;
+    for (const r of runs || []) {
+      const x = r.run || {};
+      if (x.kind === 'data' || x.kind === 'smoke') continue;
+      const vals = groupValues(x.metrics, headline.group), v = vals[headline.metric];
+      if (typeof v !== 'number' || !isFinite(v)) continue;
+      if (typeof vals.n === 'number' && typeof vals.of === 'number' && vals.n < vals.of) continue;
+      if (!best || (headline.better === 'higher' ? v > best.value : v < best.value)) best = {run: r, value: v, vals};
+    }
+    return best;
+  }
+
+  // ---- recent activity derived from the records: [{t (epoch s), text, tab, item}], newest first
+  function events(d) {
+    const out = [], ts = iso => { const t = Date.parse(iso); return isNaN(t) ? null : t / 1000; };
+    const add = (t, text, tab, item = null, kind = tab) => { if (typeof t === 'number' && isFinite(t)) out.push({t, text, tab, item, kind}); };
+    const idOf = rec => rec.meta && rec.meta.id || rec.file.split('/').pop().replace(/\.md$/, '');
+    if (d.plan) add(d.plan.mtime, '整体方案有更新', 'docs', 'plan');
+    for (const v of d.versions || []) add(ts(v.meta.date) ?? v.mtime, `定版 ${idOf(v)}${v.meta.title ? '：' + v.meta.title : ''}`, 'roadmap', idOf(v));
+    for (const t of d.tracks || []) {
+      const name = t.meta.title || idOf(t);
+      add(ts(t.meta.started), `开启支线「${name}」`, 'experiments', null);
+      if (t.meta.ended) add(ts(t.meta.ended), `支线「${name}」结束${t.meta.status ? '（' + t.meta.status + '）' : ''}`, 'roadmap', idOf(t));
+    }
+    for (const a of d.attempts || []) add(a.mtime, `尝试「${idOf(a)}」${a.meta.status ? '：' + a.meta.status : ''}`, 'experiments', idOf(a), 'attempt');
+    for (const r of d.runs || []) {
+      const x = r.run || {}, id = x.id || r.id;
+      const where = x.server ? `（${x.server}${Array.isArray(x.gpus) && x.gpus.length ? ' 卡 ' + x.gpus.join(',') : ''}）` : '';
+      const start = ts(x.started), end = ts(x.ended);
+      if (start != null) add(start, `运行 ${id} 开始${where}`, 'runs', id);
+      if (end != null) add(end, `运行 ${id} 结束${x.status ? '：' + x.status : ''}`, 'runs', id);
+      if (start == null && end == null) add(r.mtime, `运行 ${id} 有更新${x.status ? '：' + x.status : ''}`, 'runs', id);
+    }
+    return out.sort((a, b) => b.t - a.t);
+  }
+  // Fold a burst of attempt-record updates (e.g. a batch rewrite) into one line: within `gap` seconds of each other.
+  function foldEvents(evs, gap = 600) {
+    const out = [];
+    for (const e of evs) {
+      const prev = out[out.length - 1];
+      if (e.kind === 'attempt' && prev && (prev.kind === 'attempt' || prev.kind === 'attempts') && prev.tLast - e.t <= gap) {
+        if (prev.kind === 'attempt') Object.assign(prev, {kind: 'attempts', n: 1, item: null});
+        prev.n++; prev.tLast = e.t; prev.text = `${prev.n} 条尝试记录有更新`;
+      } else out.push({...e, tLast: e.t});
+    }
+    return out;
+  }
+
+  const projectUrl = (name, tab = 'overview', item = null) => '#/p/' + encodeURIComponent(name) + '/' + tab + (item != null ? '/' + encodeURIComponent(item) : '');
 
   // ---- GPUs: a card is free when no process is on it and almost no memory is used
   const FREE_MB = 500;
@@ -256,15 +327,6 @@ const Board = (() => {
   const freeCount = status => (status && status.servers || [])
     .filter(s => s.status === 'ok').reduce((n, s) => n + (s.gpus || []).filter(isFree).length, 0);
 
-  // ---- top bar shared by every page. active: 'gpu' | 'projects'; counts may be null while loading
-  function nav(active, counts = {}) {
-    const tab = (key, label, cnt) => `<a class="navtab${active === key ? ' on' : ''}" href="./#${key}">${label}` +
-      (cnt != null ? ` <span class="cnt">${cnt}</span>` : '') + '</a>';
-    return `<div class="navin"><a class="brand" href="./#gpu">${esc(APP_NAME)}</a>` +
-      tab('gpu', 'GPU', counts.free != null ? counts.free + ' 空闲' : null) +
-      tab('projects', '项目', counts.projects) + '</div>';
-  }
-
-  return {APP_NAME, FREE_MB, isFree, freeCount, nav, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
-    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl};
+  return {APP_NAME, FREE_MB, isFree, freeCount, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
+    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents};
 })();

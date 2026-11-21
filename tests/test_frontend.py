@@ -77,182 +77,215 @@ class CommonJs(unittest.TestCase):
         self.assertEqual(failed, [], json.dumps(failed, ensure_ascii=False, indent=1))
 
 
+ROUTES = {
+    "overview": "#/overview", "gpu": "#/gpu", "todo": "#/todo", "new": "#/new",
+    "p_overview": "#/p/demo/overview", "p_exp": "#/p/demo/experiments", "p_exp_sel": "#/p/demo/experiments/2026-11-10-lr-sweep",
+    "p_exp_track": "#/p/demo/experiments?track=t-loss", "p_exp_todo": "#/p/demo/experiments?todo=1",
+    "p_roadmap": "#/p/demo/roadmap", "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001",
+    "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "missing": "#/p/nope/overview",
+    "legacy_project": "project.html?p=demo", "legacy_name": "project.html?name=demo", "legacy_projects": "#projects", "root": "",
+}
+
+
+def main_html(dom):
+    m = re.search(r'<div class="page" id="main">(.*)</div></main>', dom, re.S)
+    return m.group(1) if m else ""
+
+
+def title(dom):
+    return re.search(r"<title>(.*?)</title>", dom).group(1)
+
+
 @unittest.skipUnless(CHROME, "Chromium not installed")
 class Pages(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.proc, cls.base, cls.log = start_server(REPO, cls.tmp)
-        cls.demo, cls.demo_errors = dump(cls.base + "project.html?p=demo")
+        cls.pages = {k: dump(cls.base + v, 4000) for k, v in ROUTES.items()}
 
     @classmethod
     def tearDownClass(cls):
         stop_server(cls.proc, cls.log)
         shutil.rmtree(cls.tmp)
 
-    def test_no_js_errors(self):
-        self.assertEqual(self.demo_errors, [])
+    def page(self, key):
+        return self.pages[key][0]
 
-    def test_summary(self):
-        d = self.demo
-        self.assertIn('<h1 id="title">演示项目</h1>', d)
-        self.assertIn("学习率预热能否稳定小模型训练？", d)
-        self.assertIn("预热 500 步后验证集准确率稳定提升约 2 个点。", d)
-        self.assertIn("当前版本 <b>v2</b>", d)
-        self.assertIn("无法确认是否在跑", d)          # r002 liveness: xtrah200 not polled in tests
-        self.assertIn("等你处理", d)
-        for kind in ["方案：", "版本：", "支线：", "尝试：", "运行：", "样例："]:
-            self.assertIn(kind, d)
+    def test_no_js_errors_anywhere(self):
+        for k, (dom, errors) in self.pages.items():
+            with self.subTest(route=k):
+                self.assertEqual(errors, [])
+                self.assertEqual(len(re.findall(r"<script\b", dom)), 2)  # common.js + app.js, nothing injected from records
 
-    def test_example(self):
-        self.assertIn("一个例子", self.demo)
-        self.assertIn("模型输出 <strong>正面</strong>", self.demo)
-        self.assertIn("probe.jsonl 前 2 行", self.demo)
-        self.assertNotIn("FULL-TEXT-MARKER", self.demo)          # folded at "--- / # 完整原文"
-        self.assertIn("<button data-example=\"\">展开完整原文</button>", self.demo)
+    def test_sidebar(self):
+        d = self.page("p_overview")
+        self.assertIn('<a class="brand" href="#/overview">CD的研究控制台</a>', d)
+        self.assertIn('<span class="lbl">GPU</span><span class="cnt">0 空闲</span>', d)
+        self.assertIn('<span class="lbl">待办</span><span class="cnt">2</span>', d)
+        self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/overview"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
+        for t in ["只有标题的项目", "broken", "＋ 新建项目"]:
+            self.assertIn(t, d)
+        self.assertIn('<a class="sitem on" href="#/overview"><span class="lbl">总览</span>', self.page("overview"))
 
-    def test_path(self):
-        d = self.demo
-        for s in ["走过的路", "加入学习率预热", "学习率调度", "数据增强 C# 实验", "损失函数",
-                  "没有归属支线的尝试", "lr-sweep", "aug-mixup", "focal"]:
-            self.assertIn(s, d)
+    def test_titles_and_legacy_addresses(self):
+        self.assertEqual(title(self.page("overview")), "总览 · CD的研究控制台")
+        self.assertEqual(title(self.page("gpu")), "(0 空) CD的研究控制台")
+        self.assertEqual(title(self.page("todo")), "待办 · CD的研究控制台")
+        for k in ["p_overview", "legacy_project", "legacy_name"]:
+            self.assertEqual(title(self.page(k)), "演示项目 · CD的研究控制台", k)
+        for k in ["legacy_projects", "root"]:
+            self.assertIn('<h1 class="pt">总览</h1>', self.page(k), k)
+
+    def test_project_header_and_tabs(self):
+        d = main_html(self.page("p_overview"))
+        self.assertRegex(d, r'<div class="phead"><h1>演示项目</h1><span class="pill t-run">进行中</span>')
+        self.assertIn('<a class="ptab on" href="#/p/demo/overview">概览</a>', d)
+        self.assertIn('<a class="ptab" href="#/p/demo/experiments">实验<span class="cnt">7</span></a>', d)
+        for t in ["路线", "运行", "样例", "文档"]:
+            self.assertIn(">" + t, d)
+
+    def test_project_overview(self):
+        d = main_html(self.page("p_overview"))
+        self.assertIn('<p class="concl">预热 500 步后验证集准确率稳定提升约 2 个点。</p>', d)
+        self.assertRegex(d, r'<div class="k">支线</div><div class="v">4</div>\s*<div class="s"><b>1</b> 条进行中')
+        self.assertRegex(d, r'<div class="k">尝试</div><div class="v">7</div>')
+        self.assertRegex(d, r'最好的 acc · 测试集</div>\s*<div class="v">0.8100</div><div class="s">来自运行 <b>r001</b>（488/602）')
+        self.assertIn('href="#/p/demo/runs/r001"', d)
+        self.assertRegex(d, r'<div class="k">正在跑</div><div class="v">1</div>')
+        self.assertIn("等你处理 <span class=\"meta\">2 条</span>", d)
         self.assertIn('<span class="todo">待你确认结论</span>', d)
-        self.assertIn('<span class="faint">未写预期</span>', d)
-        self.assertNotIn("<details class=\"att\" id=\"att-attempts/2026-11-10-lr-sweep.md\" open", d)  # collapsed
-        self.assertNotIn("没有挂到版本上的支线", d)                 # t-old is placed under v1 via merged_tracks
-        self.assertRegex(d, r'(?s)<b>v1</b>.*旧基线整理.*<span class="merge">并入此版本</span>.*<b>v2</b>')
-        self.assertRegex(d, r'(?s)学习率调度</b>.*<span class="merge">→ 并入 v2</span>')
-        self.assertIn('<div class="gist"><span class="small">假设</span> 旧脚本的基线结果可以直接沿用。</div>', d)
-        self.assertNotIn("<details class=\"tbody\" id=\"trk-tracks/t-old.md\" open", d)   # track note folded
-        self.assertIn('<span class="pill t-part">部分成功</span>', d)
-        self.assertIn('<span class="pill t-other">搁置中</span>', d)                       # unknown status, neutral
-        self.assertIn('<span class="todo">待你填写结论和原因</span>', d)
+        self.assertIn("最近动态", d)
+        self.assertIn("runs/r003/run.json", d)                       # unreadable files listed on the overview
+        self.assertNotIn("FULL-TEXT-MARKER", d)
 
-    def test_evidence(self):
-        d = self.demo
-        self.assertIn("5 次运行", d)
-        self.assertRegex(d, r'data-view="main" data-group="测试集">测试集 <span class="small">2</span>')
-        self.assertIn(">其他指标 <span", d)
-        self.assertIn("本组 2 次运行", d)
-        self.assertRegex(d, r'<th class="n">acc</th><th class="n">f1</th></tr>')  # primary_metrics only
-        self.assertIn('0.8100 <span class="small">(488/602)</span>', d)            # ratio acc = correct / n
-        self.assertIn('显示全部列（4）', d)
-        self.assertIn("还没有指标的运行：", d)
-        self.assertIn("display 里有用不上的设置：不认识的字段 colour", d)
+    def test_experiments_master_detail(self):
+        d = main_html(self.page("p_exp"))
+        self.assertEqual(len(re.findall(r'<a class="li', d)), 7)
+        self.assertEqual(len(re.findall(r'<a class="li on"', d)), 1)
+        self.assertIn('<option value="t-loss">损失函数（3）</option>', d)
+        self.assertIn(">等你处理 2</a>", d)
+        sel = main_html(self.page("p_exp_sel"))
+        self.assertRegex(sel, r'<a class="li on" href="#/p/demo/experiments/2026-11-10-lr-sweep">')
+        heads = re.findall(r'<div class="sec[^"]*"><h3>(.*?)</h3>', sel)
+        self.assertEqual(heads[:5], ["假设", "预期", "改了什么", "结果", "结论和原因"])
+        self.assertIn("关联的运行（1）", sel)
+        self.assertRegex(sel, r'<th>分组</th><th class="num">acc</th><th class="num">f1</th>')   # display primary_metrics
+        self.assertIn('<td class="num">0.8100 <span class="small">(488/602)</span></td>', sel)  # display ratio
+        self.assertEqual(len(re.findall(r'<a class="li', main_html(self.page("p_exp_track")))), 3)
+        self.assertEqual(len(re.findall(r'<a class="li', main_html(self.page("p_exp_todo")))), 2)
 
-    def test_data_runs_have_their_own_table(self):
-        d = self.demo
+    def test_runs_and_data_table(self):
+        d = main_html(self.page("p_runs"))
         main, _, data = d.partition('<h3 class="tt">数据')
-        self.assertTrue(data, "no data table")
+        self.assertIn("<b>r001</b>", main)
         self.assertNotIn("<b>r005</b>", main)
         self.assertIn("<b>r005</b>", data)
-        self.assertRegex(data, r'<th class="n">rows</th><th class="n">allow</th><th class="n">ask</th><th class="n">deny</th>')
+        self.assertIn("display 里有用不上的设置：不认识的字段 colour", d)
+        run = main_html(self.page("p_run"))
+        self.assertIn('<tr class="run open" data-dir="runs/r001" data-key="r001">', run)
+        self.assertRegex(run, r'<table class="kv">.*<th>warmup</th><td class="num">500</td>')   # config as key/value rows
+        self.assertNotIn('{"lr"', run)                                                        # never a one-line dict
 
-    def test_errors_listed(self):
-        self.assertIn("读取有问题的文件", self.demo)
-        self.assertIn("runs/r003/run.json", self.demo)
+    def test_examples_and_docs(self):
+        ex = main_html(self.page("p_examples"))
+        self.assertIn("展开完整原文", ex)
+        self.assertNotIn("FULL-TEXT-MARKER", ex)
+        self.assertIn('&lt;script&gt;alert("xss in walkthrough")&lt;/script&gt;', ex)
+        docs = main_html(self.page("p_docs"))
+        for g in ["方案", "版本说明", "支线说明"]:
+            self.assertIn(f">{g}</div>", docs)
+        self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
+        self.assertIn('<a href="https://example.org/paper" target="_blank" rel="noopener noreferrer">论文</a>', docs)
+        self.assertNotIn('href="javascript:', docs.lower())
 
-    def test_untrusted_text_stays_text(self):
-        d = self.demo
-        self.assertEqual(len(re.findall(r"<script\b", d)), 2)      # common.js + the page's own
-        self.assertNotIn('href="javascript:', d.lower())
-        self.assertIn("&lt;script&gt;alert(\"xss in walkthrough\")&lt;/script&gt;", d)
-        self.assertIn("&lt;script&gt;alert(\"xss in plan\")&lt;/script&gt;", d)    # plan.md, rendered as text
-        self.assertIn('<a href="https://example.org/paper" target="_blank" rel="noopener noreferrer">论文</a>', d)
-        self.assertIn("危险链接", d)                                             # javascript: link kept as text only
-        self.assertIn("lr = base_lr * min(1, step / warmup)  # &lt;b&gt;not bold&lt;/b&gt;", d)
+    def test_roadmap(self):
+        d = main_html(self.page("p_roadmap"))
+        self.assertRegex(d, r'(?s)<b>v1</b>.*旧基线整理.*<span class="merge">并入此版本</span>.*<b>v2</b>')
+        self.assertRegex(d, r'(?s)学习率调度</b>.*<span class="merge">→ 并入 v2</span>')
+        self.assertNotIn("没有挂到版本上的支线", d)
 
-    def test_plan_collapsed(self):
-        self.assertRegex(self.demo, r'<details class="sub" id="plan"><summary>整体方案（plan\.md，')
-
-    def test_index_projects_section(self):
-        d, errors = dump(self.base + "#projects")
-        self.assertEqual(errors, [])
-        self.assertIn("项目 <span class=\"meta\">3 个", d)
-        self.assertIn("演示项目", d)
-        self.assertIn("运行中 r002 · xtrah200 卡 2,3", d)
-        self.assertIn("1 个记录文件读取有问题", d)
-        self.assertIn('href="project.html?p=demo"', d)
-
-    def test_tabs(self):
-        gpu, errors = dump(self.base)
-        self.assertEqual(errors, [])
-        self.assertIn('<div id="tab-projects" hidden="">', gpu)       # GPU tab is the default
-        self.assertNotIn('<div id="tab-gpu" hidden', gpu)
-        self.assertIn('<a class="brand" href="./#gpu">CD的研究控制台</a>', gpu)
-        self.assertRegex(gpu, r"<title>\(0 空\) CD的研究控制台</title>")       # GPU tab title keeps the free count
-        self.assertIn('<a class="navtab on" href="./#gpu">GPU <span class="cnt">0 空闲</span></a>', gpu)
-        self.assertNotIn("演示项目", gpu.split('<div id="tab-projects"')[0])  # no project list in the GPU tab
-        proj, errors = dump(self.base + "#projects")
-        self.assertEqual(errors, [])
-        self.assertIn('<div id="tab-gpu" hidden="">', proj)
-        self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', proj)
-        self.assertIn("<title>项目 · CD的研究控制台</title>", proj)
-
-    def test_project_page_top_bar(self):
-        d = self.demo
-        self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', d)
-        self.assertIn('<span class="crumb"><a href="./#projects">项目</a> /</span>', d)
-        self.assertIn("<title>演示项目 · CD的研究控制台</title>", d)
-        self.assertNotIn("← GPU 看板", d)
-
-    def test_missing_project(self):
-        d, errors = dump(self.base + "project.html?p=nope")
-        self.assertEqual(errors, [])
-        self.assertIn("没有这个项目", d)
+    def test_global_pages(self):
+        ov = main_html(self.page("overview"))
+        self.assertEqual(len(re.findall(r'<a class="pcard"', ov)), 3)
+        self.assertLess(ov.index("演示项目"), ov.index("broken"))                    # 进行中 first
+        self.assertIn("正在跑 r002 · xtrah200 卡 2,3", ov)
+        todo = main_html(self.page("todo"))
+        self.assertIn("<b>演示项目</b>：1 条尝试等你确认结论，1 条尝试缺结论和原因", todo)
+        self.assertIn('href="#/p/demo/experiments?todo=1"', todo)
+        self.assertIn("现在能跑的卡", main_html(self.page("gpu")))
+        self.assertIn("新建项目 &lt;名字&gt;", main_html(self.page("new")))
+        self.assertIn("没有这个项目", main_html(self.page("missing")))
 
 
 CLICKS = """<script>
-setTimeout(() => {
-  const out = {}, ev = () => document.getElementById('evidence');
-  document.querySelector('[data-example]').click();
-  out.example_open = document.getElementById('example').innerHTML.includes('FULL-TEXT-MARKER');
-  document.querySelector('[data-allcols="main"]').click();
-  out.all_cols = [...ev().querySelector('table.runs').querySelectorAll('th')].map(t => t.textContent).slice(5);
-  document.querySelector('button[data-view="main"][data-group=""]').click();
-  out.other_group_cols = [...ev().querySelector('table.runs').querySelectorAll('th')].map(t => t.textContent).slice(5);
-  document.querySelector('a[data-run="r002"]').click();
-  out.r002_open = !!ev().querySelector('tr.run.open[data-dir="runs/r002"]');
-  out.group_after_jump = ev().querySelector('button.tab.on').dataset.group;
-  document.querySelector('a[data-bare="runs/r004"]').click();
-  out.bare_detail = ev().innerHTML.includes('samples.jsonl 前 2 行');
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const th = () => [...document.querySelector('#main table.runs').querySelectorAll('th')].map(t => t.textContent).slice(5);
+(async () => {
+  const out = {};
+  await wait(800);
+  location.hash = '#/p/demo/runs'; await wait(600);
+  document.querySelector('[data-allcols="main"]').click(); await wait(50);
+  out.all_cols = th();
+  document.querySelector('button[data-view="main"][data-group=""]').click(); await wait(50);
+  out.other_group_cols = th();
+  document.querySelector('tr.run[data-dir="runs/r002"]').click(); await wait(50);
+  out.r002_open = !!document.querySelector('tr.run.open[data-dir="runs/r002"]') && !!document.querySelector('tr.rdetail');
+  document.querySelector('a[data-bare="runs/r004"]').click(); await wait(50);
+  out.bare_detail = document.getElementById('main').innerHTML.includes('samples.jsonl 前 2 行');
+  location.hash = '#/p/demo/examples'; await wait(300);
+  document.querySelector('[data-example]').click(); await wait(50);
+  out.example_open = document.getElementById('main').innerHTML.includes('FULL-TEXT-MARKER');
+  location.hash = '#/p/demo/experiments'; await wait(300);
+  const sel = document.querySelector('select[data-qtrack]'); sel.value = 't-loss'; sel.dispatchEvent(new Event('change', {bubbles: true})); await wait(300);
+  out.track_hash = location.hash;
+  out.track_items = document.querySelectorAll('#main a.li').length;
+  document.querySelectorAll('#main a.li')[1].click(); await wait(300);
+  out.selected_after_click = document.querySelector('#main a.li.on .name').textContent;
+  location.hash = '#/gpu'; await wait(300);
+  out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
   const pre = document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
-}, 1000);
+})();
 <\/script>
 </body>"""
 
 
 @unittest.skipUnless(CHROME, "Chromium not installed")
 class Interactions(unittest.TestCase):
-    """Clicks on a copy of the repo whose project.html has a test script appended."""
+    """Clicks on a copy of the repo whose index.html has a test script appended."""
 
     def test_clicks(self):
         tmp = tempfile.mkdtemp()
         try:
             repo = os.path.join(tmp, "repo")
             os.mkdir(repo)
-            for f in ["server.py", "projects.py", "index.html", "project.html", "common.js"]:
+            for f in ["server.py", "projects.py", "index.html", "project.html", "common.js", "app.js"]:
                 shutil.copy(os.path.join(REPO, f), repo)
-            page = os.path.join(repo, "project.html")
+            page = os.path.join(repo, "index.html")
             with open(page, encoding="utf-8") as f:
                 text = f.read()
             with open(page, "w", encoding="utf-8") as f:
                 f.write(text.replace("</body>", CLICKS.replace("<\\/script>", "</" + "script>"), 1))
             proc, base, log = start_server(repo, tmp)
             try:
-                dom, errors = dump(base + "project.html?p=demo")
+                dom, errors = dump(base + "#/overview", 9000)
             finally:
                 stop_server(proc, log)
         finally:
             shutil.rmtree(tmp)
         self.assertEqual(errors, [])
-        out = json.loads(html.unescape(re.search(r'<pre id="clicks">(.*?)</pre>', dom, re.S).group(1)))
-        self.assertTrue(out["example_open"])
+        m = re.search(r'<pre id="clicks">(.*?)</pre>', dom, re.S)
+        self.assertTrue(m, "click script did not finish")
+        out = json.loads(html.unescape(m.group(1)))
         self.assertEqual(out["all_cols"], ["acc", "f1", "correct", "n"])
-        self.assertEqual(out["other_group_cols"], ["少数类召回", "train_loss"])  # columns in order of first appearance, newest run first
+        self.assertEqual(out["other_group_cols"], ["少数类召回", "train_loss"])
         self.assertTrue(out["r002_open"])
-        self.assertEqual(out["group_after_jump"], "")   # r002 has numbers in the current group, so no switch
         self.assertTrue(out["bare_detail"])
+        self.assertTrue(out["example_open"])
+        self.assertEqual(out["track_hash"], "#/p/demo/experiments?track=t-loss")
+        self.assertEqual(out["track_items"], 3)
+        self.assertEqual(out["selected_after_click"], "focal-gamma1")
+        self.assertEqual(out["sidebar_on"], "GPU")
 
 
 if __name__ == "__main__":

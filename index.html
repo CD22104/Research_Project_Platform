@@ -6,55 +6,242 @@
 <title>CD的研究控制台</title>
 <style>
 :root{
-  --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585;
+  --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585; --side:#fbfbfc;
   --free:#1a9d5b; --free-bg:#e5f6ec; --busy:#c7791a; --busy-bg:#fdf1dc;
   --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --accent-bg:#e8eefb; --track:#e9ecf1;
-  --part:#0f8a8a; --part-bg:#dff3f2;
+  --part:#0f8a8a; --part-bg:#dff3f2; --hover:#f0f2f5;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8;
+    --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8; --side:#171b22;
     --free:#4ccb85; --free-bg:#16321f; --busy:#e3a548; --busy-bg:#3a2c12;
     --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --accent-bg:#1e2a45; --track:#2a303b;
-    --part:#4fc7c3; --part-bg:#123331;
+    --part:#4fc7c3; --part-bg:#123331; --hover:#222834;
   }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
-  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
-main{max-width:1180px;margin:0 auto;padding:18px 16px 48px}
-.topnav{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line)}
-.navin{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;align-items:stretch;gap:2px;height:46px}
-.brand{display:flex;align-items:center;margin-right:16px;font-weight:700;font-size:16px;color:var(--text);text-decoration:none;white-space:nowrap}
-.navtab{display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--muted);text-decoration:none;font-weight:600;
-  border-bottom:2px solid transparent;white-space:nowrap}
-.navtab:hover{color:var(--text)}
-.navtab.on{color:var(--text);border-bottom-color:var(--accent)}
-.navtab .cnt{font-size:12px;font-weight:500;color:var(--muted);background:var(--track);border-radius:99px;padding:0 7px}
-[id],tr.run{scroll-margin-top:58px}  /* jumps land below the sticky top bar */
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
 [hidden]{display:none !important}
-header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-h1{font-size:20px;margin:0}
-.sub{color:var(--muted);font-size:13px}
-button{margin-left:auto;font:inherit;padding:5px 12px;border-radius:6px;border:1px solid var(--line);
-  background:var(--card);color:var(--text);cursor:pointer}
+button{font:inherit;padding:4px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
 button:hover{border-color:var(--accent)}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}
-.stat span{color:var(--muted);font-size:12px}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
-section>h2{font-size:15px;margin:0;padding:11px 14px;border-bottom:1px solid var(--line);
-  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+select{font:inherit;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--track);padding:1px 5px;border-radius:4px}
+.small{color:var(--muted);font-size:12px}
+.faint{color:var(--muted);font-size:12px;font-weight:400}
+.empty{padding:16px;color:var(--muted)}
+.scroll{overflow-x:auto}
+
+/* ---------- shell: fixed sidebar + main */
+.app{display:flex;min-height:100vh}
+.side{width:212px;flex:none;position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--side);
+  border-right:1px solid var(--line);padding:14px 10px 20px;display:flex;flex-direction:column;gap:2px}
+.brand{font-weight:700;font-size:15px;padding:2px 10px 12px;color:var(--text);text-decoration:none}
+.brand:hover{text-decoration:none}
+.sitem{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:7px;color:var(--text);text-decoration:none;font-size:14px;min-width:0}
+.sitem:hover{background:var(--hover);text-decoration:none}
+.sitem.on{background:var(--accent-bg);color:var(--accent);font-weight:600}
+.sitem .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sitem .cnt{font-size:12px;color:var(--muted);background:var(--track);border-radius:99px;padding:0 7px;white-space:nowrap}
+.sitem.on .cnt{background:var(--card)}
+.shead{font-size:12px;color:var(--muted);padding:14px 10px 4px;font-weight:600}
+.sitem.new{margin-top:auto;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block;background:var(--muted)}
+.d-run{background:var(--accent)} .d-ok{background:var(--free)} .d-part{background:var(--part)}
+.d-bad{background:var(--full)} .d-todo{background:var(--busy)} .d-off,.d-other{background:var(--muted)}
+.main{flex:1;min-width:0;padding:18px 24px 48px}
+.page{max-width:1240px}
+@media (max-width:900px){
+  .app{flex-direction:column}
+  .side{width:auto;height:auto;position:sticky;top:0;z-index:20;flex-direction:row;align-items:center;overflow-x:auto;
+    padding:6px 8px;border-right:0;border-bottom:1px solid var(--line);gap:4px}
+  .brand{padding:0 8px 0 4px;white-space:nowrap}
+  .shead{display:none}
+  .sitem{flex:none;padding:5px 9px}
+  .sitem .lbl{max-width:9em}
+  .sitem.new{margin-top:0}
+  .main{padding:14px 12px 40px}
+}
+
+/* ---------- common blocks */
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+.card>h2{font-size:15px;margin:0;padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 h2 .meta{font-weight:400;color:var(--muted);font-size:12px}
 h2 .right{margin-left:auto}
-.scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;min-width:640px}
-th,td{padding:8px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
-tr:last-child td{border-bottom:0}
-th{font-size:12px;font-weight:500;color:var(--muted)}
-td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
-.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;white-space:nowrap}
+.pad{padding:12px 14px}
+.notice{background:var(--busy-bg);color:var(--busy);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:13px}
+.pill{display:inline-block;padding:0 8px;border-radius:99px;font-size:12px;font-weight:600;white-space:nowrap;line-height:20px}
+.t-run{color:var(--accent);background:var(--accent-bg)}
+.t-ok{color:var(--free);background:var(--free-bg)}
+.t-bad{color:var(--full);background:var(--full-bg)}
+.t-todo{color:var(--busy);background:var(--busy-bg)}
+.t-part{color:var(--part);background:var(--part-bg);box-shadow:inset 0 0 0 1px var(--part)}
+.t-off,.t-other{color:var(--muted);background:var(--track)}
+.todo{display:inline-block;color:var(--busy);background:var(--busy-bg);border:1px solid var(--busy);border-radius:6px;
+  padding:0 7px;font-size:12px;font-weight:700;white-space:nowrap;line-height:19px}
+
+/* ---------- project header and tabs */
+.phead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:2px}
+.phead h1{font-size:20px;margin:0}
+.phead .right{margin-left:auto}
+.ptabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:8px 0 16px;overflow-x:auto}
+.ptab{padding:8px 14px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;white-space:nowrap;text-decoration:none}
+.ptab:hover{color:var(--text);text-decoration:none}
+.ptab.on{color:var(--text);border-bottom-color:var(--accent)}
+.ptab .cnt{font-weight:500;font-size:12px;color:var(--muted);margin-left:4px}
+
+/* ---------- project overview */
+.concl{font-size:16px;line-height:1.7;margin:0 0 4px;max-width:72em}
+.question{color:var(--muted);font-size:13px;margin:0 0 14px;max-width:72em}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;color:var(--text);text-decoration:none;display:block}
+a.stat:hover{border-color:var(--accent);text-decoration:none}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.3}
+.stat .s{font-size:12px;color:var(--muted);line-height:1.6}
+.stat .s b{color:var(--text);font-weight:600}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:1000px){.cols2{grid-template-columns:1fr}}
+.feed{list-style:none;margin:0;padding:4px 0}
+.feed li{display:flex;gap:10px;align-items:baseline;padding:6px 14px;border-bottom:1px solid var(--line)}
+.feed li:last-child{border-bottom:0}
+.feed .when{flex:none;width:5.5em;color:var(--muted);font-size:12px;text-align:right}
+.feed a{color:var(--text)}
+
+/* ---------- master / detail */
+.md2{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:1000px){.md2{grid-template-columns:1fr}}
+.list{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;position:sticky;top:12px;
+  max-height:calc(100vh - 24px);display:flex;flex-direction:column}
+@media (max-width:1000px){.list{position:static;max-height:none}}
+.filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+.chips{display:flex;gap:4px;flex-wrap:wrap}
+.chip{font-size:12px;padding:1px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);text-decoration:none;white-space:nowrap}
+.chip:hover{text-decoration:none;border-color:var(--accent)}
+.chip.on{background:var(--accent-bg);color:var(--accent);border-color:var(--accent);font-weight:600}
+.items{overflow-y:auto}
+.li{display:block;padding:8px 12px;border-bottom:1px solid var(--line);color:var(--text);text-decoration:none}
+.li:last-child{border-bottom:0}
+.li:hover{background:var(--hover);text-decoration:none}
+.li.on{background:var(--accent-bg);box-shadow:inset 3px 0 0 var(--accent)}
+.li .row1{display:flex;gap:6px;align-items:center;min-width:0}
+.li .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.li .row2{font-size:12px;color:var(--muted);margin-top:1px;display:flex;gap:6px;flex-wrap:wrap}
+.detail{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 20px 20px;min-width:0}
+.detail>h2{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dmeta{font-size:13px;color:var(--muted);margin-bottom:12px;display:flex;flex-wrap:wrap;gap:4px 14px}
+.sec{margin:18px 0 0;padding-top:14px;border-top:1px solid var(--line)}
+.sec.first{border-top:0;padding-top:0;margin-top:8px}
+.sec>h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 6px;letter-spacing:.02em}
+.sec .none{color:var(--muted);font-size:13px}
+
+/* ---------- markdown */
+.md{overflow-wrap:anywhere;min-width:0}
+.md>:first-child{margin-top:0}
+.md>:last-child{margin-bottom:0}
+.md p,.md li,.md blockquote{max-width:72em}
+.md h3,.md h4,.md h5,.md h6{margin:18px 0 6px;font-size:14px}
+.md h3{font-size:15px}
+.md p{margin:8px 0}
+.md ul,.md ol{margin:6px 0;padding-left:22px}
+.md li{margin:2px 0}
+.md pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--track);padding:10px 12px;border-radius:6px;
+  font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;margin:10px 0}
+.md pre code{background:none;padding:0}
+.md blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+.md hr{border:0;border-top:1px dashed var(--line);margin:16px 0}
+table.mdt{border-collapse:collapse;margin:10px 0;font-size:13px}
+table.mdt th{background:var(--bg);font-weight:600;text-align:left;border-bottom:2px solid var(--line);padding:5px 12px;white-space:nowrap}
+table.mdt td{border-bottom:1px solid var(--line);padding:5px 12px;vertical-align:top}
+.num{text-align:right !important;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.kv{border-collapse:collapse;font-size:13px;margin:4px 0 10px}
+table.kv th{text-align:left;font-weight:500;color:var(--muted);padding:3px 18px 3px 0;vertical-align:top;white-space:nowrap}
+table.kv td{padding:3px 0;overflow-wrap:anywhere}
+table.mt{border-collapse:collapse;font-size:13px;margin:6px 0}
+table.mt th{text-align:left;font-weight:600;color:var(--muted);font-size:12px;border-bottom:2px solid var(--line);padding:5px 12px;white-space:nowrap}
+table.mt td{border-bottom:1px solid var(--line);padding:5px 12px;white-space:nowrap}
+
+/* ---------- runs table (interim view until the master/detail step) */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:10px 14px 0}
+.tab{font-size:13px;padding:3px 10px}
+.tab.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.tmeta{padding:8px 14px 4px;font-size:12px;color:var(--muted)}
+.dnote{padding:8px 14px 0;font-size:12px;color:var(--busy)}
+h3.tt{font-size:14px;margin:0;padding:14px 14px 0;border-top:1px solid var(--line)}
+.bare{padding:4px 14px 12px;font-size:13px}
+.bare a{margin-right:8px}
+table.runs{width:100%;border-collapse:collapse}
+table.runs th,table.runs td{padding:7px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+table.runs th{font-size:12px;font-weight:500;color:var(--muted);white-space:nowrap}
+table.runs .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.runs td:nth-child(-n+5){white-space:nowrap}
+tr.run{cursor:pointer}
+tr.run:hover td{background:var(--bg)}
+tr.run.open td{background:var(--accent-bg)}
+tr.rdetail>td{background:var(--bg);padding:12px 14px}
+.facts{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;margin-bottom:8px}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin:8px 0}
+.chart{margin:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.chart figcaption{font-size:13px}
+.chart svg{width:100%;height:auto;display:block}
+.chart text{font-size:11px;fill:var(--muted)}
+.chart .ax{stroke:var(--line)}
+.chart .ln{fill:none;stroke:var(--accent);stroke-width:1.8;vector-effect:non-scaling-stroke}
+.chart .pt{fill:var(--accent)}
+.imgs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.imgs img{max-width:320px;max-height:220px;border:1px solid var(--line);border-radius:6px;background:#fff}
+pre.json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:8px 10px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:4px 0 10px}
+.clip{max-height:60vh;overflow:hidden;position:relative}
+.clip::after{content:"";position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(rgba(0,0,0,0),var(--card))}
+.more{padding:0 14px 12px}
+
+/* ---------- roadmap tree (interim view until the graph step) */
+.tree{padding-left:22px}
+.ver{position:relative;padding:0 0 14px 18px;border-left:2px solid var(--line)}
+.ver:last-child{border-left-color:transparent}
+.vdot{position:absolute;left:-7px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--card);border:2px solid var(--muted)}
+.ver.cur .vdot{background:var(--accent);border-color:var(--accent)}
+.vhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.track{margin:8px 0 0;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:8px}
+.track.k-run{border-left-color:var(--accent)} .track.k-ok{border-left-color:var(--free)} .track.k-part{border-left-color:var(--part)}
+.track.k-bad,.track.k-off{border-left-color:var(--full);border-left-style:dashed}
+.thead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+.merge{font-size:12px;color:var(--free);font-weight:600}
+.gist{font-size:13px;margin:0 0 4px}
+.attl{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.group>h3{font-size:13px;color:var(--muted);font-weight:500;margin:10px 0 4px}
+
+/* ---------- global overview, todo, new project */
+.summary{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.summary .stat{min-width:180px}
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+.pcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;color:var(--text);text-decoration:none;
+  display:flex;flex-direction:column;gap:6px}
+.pcard:hover{border-color:var(--accent);text-decoration:none}
+.pcard .t{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pcard .t b{font-size:16px}
+.pcard .c{font-size:13px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.pcard .n{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.pcard .n b{color:var(--text);font-size:14px}
+.pcard .w{font-size:12px;color:var(--busy)}
+.tlist{list-style:none;margin:0;padding:0}
+.tlist li{padding:10px 14px;border-bottom:1px solid var(--line)}
+.tlist li:last-child{border-bottom:0}
+h1.pt{font-size:20px;margin:0 0 14px}
+
+/* ---------- GPU page */
+.gtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.gtop h1{font-size:20px;margin:0}
+.gtop button{margin-left:auto}
+.sub{color:var(--muted);font-size:13px}
+table.gt{width:100%;border-collapse:collapse;min-width:640px}
+table.gt th,table.gt td{padding:8px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+table.gt tr:last-child td{border-bottom:0}
+table.gt th{font-size:12px;font-weight:500;color:var(--muted)}
+table.gt td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
 .free{color:var(--free);background:var(--free-bg)}
 .busy{color:var(--busy);background:var(--busy-bg)}
 .full{color:var(--full);background:var(--full-bg)}
@@ -63,15 +250,10 @@ td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
 .proc{display:flex;gap:8px;align-items:baseline;margin-bottom:2px}
 .user{font-weight:600;color:var(--accent);white-space:nowrap}
 .me{color:var(--free)}
-.cmd{color:var(--muted);font:12px ui-monospace,SFMono-Regular,Menlo,monospace;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
-.small{color:var(--muted);font-size:12px;white-space:nowrap}
+.cmd{color:var(--muted);font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
 .err{padding:12px 14px;color:var(--full)}
 .err code{font:12px ui-monospace,Menlo,monospace}
 .hint{padding:0 14px 12px;color:var(--muted);font-size:12px}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.empty{padding:14px;color:var(--muted)}
-
 .copy{margin:0;padding:2px 9px;font-size:12px}
 .lead{border-color:var(--free)}
 .lead>h2{font-size:17px}
@@ -80,230 +262,27 @@ td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
 .slot:last-child{border-bottom:0}
 .where{min-width:150px}
 .where b{display:block;font-size:15px}
-.chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.chip{display:inline-block;min-width:30px;text-align:center;padding:3px 8px;border-radius:6px;font-weight:700;
+.gchips{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.gchip{display:inline-block;min-width:30px;text-align:center;padding:3px 8px;border-radius:6px;font-weight:700;
   font-variant-numeric:tabular-nums;color:var(--free);background:var(--free-bg)}
 .cmds{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.cmds code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--track);padding:3px 8px;border-radius:5px}
+.cmds code{background:var(--track);padding:3px 8px;border-radius:5px}
 details.box{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
 details.box>summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:15px}
 details.box[open]>summary{border-bottom:1px solid var(--line)}
-h3{font-size:13px;color:var(--muted);font-weight:500;margin:22px 2px 8px}
-
-/* projects */
-.t-run{color:var(--accent);background:var(--accent-bg)}
-.t-ok{color:var(--free);background:var(--free-bg)}
-.t-bad{color:var(--full);background:var(--full-bg)}
-.t-todo{color:var(--busy);background:var(--busy-bg)}
-.t-part{color:var(--part);background:var(--part-bg);box-shadow:inset 0 0 0 1px var(--part)}
-.t-off,.t-other{color:var(--muted);background:var(--track)}
-.proj{padding:10px 14px;border-bottom:1px solid var(--line)}
-.proj:last-child{border-bottom:0}
-.proj.dim{opacity:.6}
-.ptop{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.ptop .right{margin-left:auto}
-.ptop a{color:var(--text);text-decoration:none}
-.ptop a:hover{color:var(--accent)}
-.pconc{margin:2px 0;font-size:13px}
-.pwarn{color:var(--busy);font-size:12px}
-.pnote{color:var(--busy);font-size:12px;padding:8px 14px 0}
+h3.gh{font-size:13px;color:var(--muted);font-weight:500;margin:22px 2px 8px}
+.dotc{width:8px;height:8px;border-radius:50%;display:inline-block}
 a.tag{display:inline-block;margin:0 4px 3px 0;padding:0 7px;border-radius:5px;font-size:12px;font-weight:600;
   color:var(--accent);background:var(--accent-bg);text-decoration:none}
 a.tag.warn{color:var(--full);background:var(--full-bg)}
 </style>
 </head>
 <body>
-<nav class="topnav" id="nav"></nav>
-<main>
-  <div id="tab-gpu">
-    <header>
-      <span class="sub" id="sub">加载中…</span>
-      <button id="refresh">立即刷新</button>
-    </header>
-    <section class="lead" id="free"></section>
-    <section id="partial"></section>
-    <h3>各服务器明细</h3>
-    <div id="servers"></div>
-    <details class="box"><summary>谁在用（按占用显存排序）</summary><div class="scroll" id="users"></div></details>
-  </div>
-  <div id="tab-projects" hidden>
-    <section id="projects"></section>
-  </div>
-</main>
+<div class="app">
+  <aside class="side" id="side"></aside>
+  <main class="main"><div class="page" id="main">加载中…</div></main>
+</div>
 <script src="common.js"></script>
-<script>
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const gb = mb => mb == null ? '–' : (mb / 1024).toFixed(1);
-const dur = s => s == null ? '' : s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天';
-const ago = s => s < 90 ? Math.round(s) + ' 秒前' : Math.round(s / 60) + ' 分钟前';
-const SHARE_MB = 10 * 1024; // 在用的卡剩余显存不少于此值，列入“挤一挤能用”
-
-function gpuState(g) {
-  if (Board.isFree(g)) return 'free';  // no process and almost no memory used
-  return g.mem_total && g.mem_used / g.mem_total > 0.9 ? 'full' : 'busy';
-}
-const LABEL = {free: '空闲', busy: '使用中', full: '已占满'};
-const errText = e => /退出码 3/.test(e || '') ? 'nvidia-smi 无法运行（显卡驱动没有加载），需要管理员处理' : e;
-
-function render(d) {
-  let total = 0, okServers = 0;
-  const users = {}, freeBy = [], partial = [];
-  let html = '';
-  for (const s of d.servers) {
-    const gpus = s.gpus || [];
-    const live = s.status === 'ok';
-    if (live) okServers++;
-    const freeCards = [];
-    let rows = '';
-    for (const g of gpus) {
-      const st = gpuState(g);
-      if (live) {
-        total++;
-        if (st === 'free') freeCards.push(g);
-        else if (g.mem_total - g.mem_used >= SHARE_MB) partial.push({s, g});
-      }
-      const pct = g.mem_total ? Math.round(100 * g.mem_used / g.mem_total) : 0;
-      const procs = g.procs.map(p => {
-        const u = users[p.user] = users[p.user] || {mem: 0, gpus: new Set(), where: new Set()};
-        u.mem += p.mem || 0; u.gpus.add(s.name + '#' + g.index); u.where.add(s.name);
-        return `<div class="proc"><span class="user">${esc(p.user)}</span>
-          <span class="small">${gb(p.mem)} GB · ${dur(p.elapsed)} · PID ${esc(p.pid)}</span>
-          <span class="cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</span></div>`;
-      }).join('') || (st === 'free' ? '<span class="small">—</span>' : '<span class="small">有显存占用但看不到进程（可能在容器内）</span>');
-      // which recorded project run this card belongs to (no match, no tag)
-      const tags = Board.runsOnGpu(activeRuns, s.name, g).map(r => {
-        const lost = r.liveness === 'maybe_interrupted';
-        return `<a class="tag${lost ? ' warn' : ''}" href="${Board.projectUrl(r.project)}" title="tmux ${esc(r.tmux || '?')} · PID ${esc(r.pid ?? '?')}">` +
-          `${esc(r.title)} · ${esc(r.id)}${lost ? '（记录说在这里跑，但没找到进程）' : ''}</a>`;
-      }).join('');
-      rows += `<tr>
-        <td class="n">${esc(g.index)}</td>
-        <td><span class="pill ${st}">${LABEL[st]}</span></td>
-        <td class="n">${esc(g.name)}</td>
-        <td class="n">${gb(g.mem_used)} / ${gb(g.mem_total)} GB
-          <div class="bar"><i style="width:${pct}%;background:var(--${st})"></i></div></td>
-        <td class="n">${g.util ?? '–'}%</td>
-        <td class="n">${g.temp ?? '–'}°C</td>
-        <td>${tags ? `<div>${tags}</div>` : ''}${procs}</td></tr>`;
-    }
-    if (freeCards.length) freeBy.push({s, cards: freeCards});
-    const color = live ? 'var(--free)' : s.status === 'pending' ? 'var(--busy)' : 'var(--full)';
-    html += `<section><h2><span class="dot" style="background:${color}"></span>${esc(s.name)}
-      <span class="meta">${esc(s.host)}</span>
-      <span class="meta right">${live ? `空闲 ${freeCards.length} / ${gpus.length}` : ''}
-        ${s.updated ? ' · 更新于 ' + ago(d.now - s.updated) : ''}</span></h2>`;
-    if (s.status === 'pending') html += `<div class="empty">正在连接…</div>`;
-    if (s.status === 'error') {
-      html += `<div class="err">读取失败：<code>${esc(errText(s.error))}</code>${gpus.length ? '（下面是上一次成功时的数据）' : ''}</div>`;
-      if (/Permission denied/.test(s.error || ''))
-        html += `<div class="hint">这台机器还没有配置免密登录：<code>ssh-copy-id ${esc(s.host)}</code></div>`;
-    }
-    if (gpus.length) html += `<div class="scroll" style="${live ? '' : 'opacity:.55'}"><table>
-      <tr><th>卡</th><th>状态</th><th>型号</th><th>显存</th><th>利用率</th><th>温度</th><th>使用者 / 进程</th></tr>${rows}</table></div>`;
-    html += '</section>';
-  }
-  $('servers').innerHTML = html;
-
-  // 顶部：现在能跑的卡
-  const nFree = freeBy.reduce((n, x) => n + x.cards.length, 0);
-  freeBy.sort((a, b) => b.cards.length - a.cards.length || b.cards[0].mem_total - a.cards[0].mem_total);
-  $('free').innerHTML = `<h2>现在能跑的卡 <span class="big">${nFree}</span>
-      <span class="meta">张空闲 / 共 ${total} 张</span></h2>` +
-    (nFree ? freeBy.map(({s, cards}) => {
-      const ids = cards.map(g => g.index).join(',');
-      const models = [...new Set(cards.map(g => `${g.name} · ${Math.round(g.mem_total / 1024)} GB`))].join(' / ');
-      return `<div class="slot">
-        <div class="where"><b>${esc(s.name)}</b><span class="small">${esc(models)}</span></div>
-        <div class="chips"><span class="small">卡号</span>${cards.map(g => `<span class="chip">${esc(g.index)}</span>`).join('')}</div>
-        <div class="cmds"><code>CUDA_VISIBLE_DEVICES=${esc(ids)}</code>
-          <button class="copy" data-c="CUDA_VISIBLE_DEVICES=${esc(ids)}">复制</button>
-          <button class="copy" data-c="ssh ${esc(s.host)}">复制 ssh 命令</button></div></div>`;
-    }).join('') : `<div class="empty">现在没有完全空闲的卡。${partial.length ? '可以看看下面还有余量的卡。' : ''}</div>`);
-
-  // 第二块：有人在用但还有余量
-  partial.sort((a, b) => (b.g.mem_total - b.g.mem_used) - (a.g.mem_total - a.g.mem_used));
-  $('partial').style.display = partial.length ? '' : 'none';
-  $('partial').innerHTML = `<h2>挤一挤能用的卡 <span class="meta">已有人在用，但剩余显存不少于 ${SHARE_MB / 1024} GB；共用会互相拖慢</span></h2>
-    <div class="scroll"><table><tr><th>服务器</th><th>卡</th><th>剩余显存</th><th>当前利用率</th><th>已在用的人</th></tr>` +
-    partial.map(({s, g}) => `<tr><td><b>${esc(s.name)}</b></td><td class="n">${esc(g.index)}</td>
-      <td class="n">${gb(g.mem_total - g.mem_used)} GB <span class="small">/ ${gb(g.mem_total)}</span></td>
-      <td class="n">${g.util ?? '–'}%</td>
-      <td>${[...new Set(g.procs.map(p => p.user))].map(u => `<span class="user">${esc(u)}</span>`).join('、') || '<span class="small">看不到进程</span>'}</td></tr>`).join('') +
-    '</table></div>';
-
-  const list = Object.entries(users).sort((a, b) => b[1].mem - a[1].mem);
-  $('users').innerHTML = list.length ? `<table><tr><th>用户</th><th>占用卡数</th><th>显存合计</th><th>所在服务器</th></tr>` +
-    list.map(([u, v]) => `<tr><td><span class="user">${esc(u)}</span></td><td class="n">${v.gpus.size}</td>
-      <td class="n">${gb(v.mem)} GB</td><td>${esc([...v.where].join('、'))}</td></tr>`).join('') + '</table>'
-    : '<div class="empty">当前没有人在用卡。</div>';
-
-  const down = d.servers.length - okServers;
-  $('sub').textContent = `${okServers} / ${d.servers.length} 台服务器在线${down ? '（' + down + ' 台读不到）' : ''} · 每 ${d.interval} 秒更新 · ${new Date().toLocaleTimeString()}`;
-  counts.free = nFree;
-  showTab();
-}
-
-// Project list: one row per project; running runs say where they are
-function renderProjects(pj) {
-  const el = $('projects'), B = Board;
-  if (!pj) { el.innerHTML = '<h2>项目</h2><div class="empty">读不到项目数据。</div>'; return; }
-  const sc = pj.scan || {}, now = pj.now, notes = [];
-  if (sc.running_since && now - sc.running_since > 5) notes.push(`正在扫描共享盘，已 ${B.span(now - sc.running_since)}；下面是上一次的结果`);
-  if (sc.error) notes.push(`最近一次扫描失败（${esc(sc.error)}），下面是 ${B.ago(sc.finished, now)}的结果`);
-  const order = {'进行中': 0, '暂停': 1, '已归档': 2};
-  const list = [...pj.projects].sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1) || (b.mtime || 0) - (a.mtime || 0));
-  el.innerHTML = `<h2>项目 <span class="meta">${list.length} 个${sc.finished ? ' · 扫描于 ' + B.ago(sc.finished, now) : ''}</span></h2>` +
-    notes.map(t => `<div class="pnote">${t}</div>`).join('') +
-    (list.length ? list.map(p => `<div class="proj${p.status === '已归档' ? ' dim' : ''}">
-        <div class="ptop"><a href="${B.projectUrl(p.name)}"><b>${esc(p.title)}</b></a> ${B.pill(p.status)}
-          ${p.current_version ? `<span class="small">当前版本 ${esc(p.current_version)}</span>` : ''}
-          <span class="small right">最后更新 ${B.ago(p.mtime, now)}</span></div>
-        <div class="pconc">${p.conclusion ? esc(p.conclusion) : '<span class="small">还没有结论</span>'}</div>
-        ${(p.active_runs || []).map(r => `<div class="small">运行中 ${esc(r.id)} · ${esc(r.server || '?')}` +
-          `${Array.isArray(r.gpus) && r.gpus.length ? ' 卡 ' + esc(r.gpus.join(',')) : ''} ${B.livePill(r.liveness)}</div>`).join('')}
-        ${p.stale ? `<div class="pwarn">${p.scanned_at ? `这个项目的数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败` : '这个项目还没有读取成功过'}</div>` : ''}
-        ${p.n_errors ? `<div class="pwarn">${p.n_errors} 个记录文件读取有问题，详情在项目页底部</div>` : ''}
-      </div>`).join('')
-     : `<div class="empty">还没有项目。在 ${esc(sc.root || '共享盘')}/&lt;项目名&gt;/board/ 下写好 project.json，一分钟内就会出现在这里。</div>`);
-}
-
-document.addEventListener('click', e => {
-  const b = e.target.closest('.copy'); if (!b) return;
-  navigator.clipboard.writeText(b.dataset.c).then(() => { const t = b.textContent; b.textContent = '已复制'; setTimeout(() => b.textContent = t, 1200); });
-});
-let copying = false;
-document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
-// ---- tabs: #gpu (default) and #projects; the hash keeps the tab across reloads
-const counts = {free: null, projects: null};
-const currentTab = () => location.hash === '#projects' ? 'projects' : 'gpu';
-function showTab() {
-  const t = currentTab();
-  $('tab-gpu').hidden = t !== 'gpu';
-  $('tab-projects').hidden = t !== 'projects';
-  $('nav').innerHTML = Board.nav(t, counts);
-  document.title = t === 'projects' ? `项目 · ${Board.APP_NAME}`
-    : (counts.free != null ? `(${counts.free} 空) ` : '') + Board.APP_NAME;
-}
-window.addEventListener('hashchange', () => { showTab(); scrollTo(0, 0); });
-showTab();
-
-let activeRuns = [];  // running runs of all projects, for tagging GPU cards
-async function load() {
-  if (copying) { copying = false; return; }
-  try {
-    const [st, pj] = await Promise.all([
-      fetch('/api/status').then(r => r.json()),
-      fetch('/api/projects').then(r => r.ok ? r.json() : null).catch(() => null)]);
-    activeRuns = pj ? pj.projects.flatMap(p => (p.active_runs || []).map(r => ({...r, project: p.name, title: p.title}))) : [];
-    counts.projects = pj ? pj.projects.length : null;
-    render(st);
-    renderProjects(pj);
-  }
-  catch (e) { $('sub').textContent = `连不上${Board.APP_NAME}：请确认 Mac 能连到 xtraa100（校园网 / VPN）`; }
-}
-$('refresh').onclick = async () => { await fetch('/api/refresh'); setTimeout(load, 4000); };
-load(); setInterval(load, 5000);
-</script>
+<script src="app.js"></script>
 </body>
 </html>
