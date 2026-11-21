@@ -8,13 +8,13 @@
 :root{
   --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585;
   --free:#1a9d5b; --free-bg:#e5f6ec; --busy:#c7791a; --busy-bg:#fdf1dc;
-  --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --track:#e9ecf1;
+  --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --accent-bg:#e8eefb; --track:#e9ecf1;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8;
     --free:#4ccb85; --free-bg:#16321f; --busy:#e3a548; --busy-bg:#3a2c12;
-    --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --track:#2a303b;
+    --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --accent-bg:#1e2a45; --track:#2a303b;
   }
 }
 *{box-sizing:border-box}
@@ -77,6 +77,26 @@ details.box{background:var(--card);border:1px solid var(--line);border-radius:10
 details.box>summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:15px}
 details.box[open]>summary{border-bottom:1px solid var(--line)}
 h3{font-size:13px;color:var(--muted);font-weight:500;margin:22px 2px 8px}
+
+/* projects */
+.t-run{color:var(--accent);background:var(--accent-bg)}
+.t-ok{color:var(--free);background:var(--free-bg)}
+.t-bad{color:var(--full);background:var(--full-bg)}
+.t-todo{color:var(--busy);background:var(--busy-bg)}
+.t-off,.t-other{color:var(--muted);background:var(--track)}
+.proj{padding:10px 14px;border-bottom:1px solid var(--line)}
+.proj:last-child{border-bottom:0}
+.proj.dim{opacity:.6}
+.ptop{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.ptop .right{margin-left:auto}
+.ptop a{color:var(--text);text-decoration:none}
+.ptop a:hover{color:var(--accent)}
+.pconc{margin:2px 0;font-size:13px}
+.pwarn{color:var(--busy);font-size:12px}
+.pnote{color:var(--busy);font-size:12px;padding:8px 14px 0}
+a.tag{display:inline-block;margin:0 4px 3px 0;padding:0 7px;border-radius:5px;font-size:12px;font-weight:600;
+  color:var(--accent);background:var(--accent-bg);text-decoration:none}
+a.tag.warn{color:var(--full);background:var(--full-bg)}
 </style>
 </head>
 <body>
@@ -88,10 +108,12 @@ h3{font-size:13px;color:var(--muted);font-weight:500;margin:22px 2px 8px}
   </header>
   <section class="lead" id="free"></section>
   <section id="partial"></section>
+  <section id="projects"></section>
   <h3>各服务器明细</h3>
   <div id="servers"></div>
   <details class="box"><summary>谁在用（按占用显存排序）</summary><div class="scroll" id="users"></div></details>
 </main>
+<script src="common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -133,6 +155,12 @@ function render(d) {
           <span class="small">${gb(p.mem)} GB · ${dur(p.elapsed)} · PID ${esc(p.pid)}</span>
           <span class="cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</span></div>`;
       }).join('') || (st === 'free' ? '<span class="small">—</span>' : '<span class="small">有显存占用但看不到进程（可能在容器内）</span>');
+      // which recorded project run this card belongs to (no match, no tag)
+      const tags = Board.runsOnGpu(activeRuns, s.name, g).map(r => {
+        const lost = r.liveness === 'maybe_interrupted';
+        return `<a class="tag${lost ? ' warn' : ''}" href="${Board.projectUrl(r.project)}" title="tmux ${esc(r.tmux || '?')} · PID ${esc(r.pid ?? '?')}">` +
+          `${esc(r.title)} · ${esc(r.id)}${lost ? '（记录说在这里跑，但没找到进程）' : ''}</a>`;
+      }).join('');
       rows += `<tr>
         <td class="n">${esc(g.index)}</td>
         <td><span class="pill ${st}">${LABEL[st]}</span></td>
@@ -141,7 +169,7 @@ function render(d) {
           <div class="bar"><i style="width:${pct}%;background:var(--${st})"></i></div></td>
         <td class="n">${g.util ?? '–'}%</td>
         <td class="n">${g.temp ?? '–'}°C</td>
-        <td>${procs}</td></tr>`;
+        <td>${tags ? `<div>${tags}</div>` : ''}${procs}</td></tr>`;
     }
     if (freeCards.length) freeBy.push({s, cards: freeCards});
     const color = live ? 'var(--free)' : s.status === 'pending' ? 'var(--busy)' : 'var(--full)';
@@ -199,15 +227,47 @@ function render(d) {
   document.title = `(${nFree} 空) GPU 看板`;
 }
 
+// Project list: one row per project; running runs say where they are
+function renderProjects(pj) {
+  const el = $('projects'), B = Board;
+  if (!pj) { el.innerHTML = '<h2>项目</h2><div class="empty">读不到项目数据。</div>'; return; }
+  const sc = pj.scan || {}, now = pj.now, notes = [];
+  if (sc.running_since && now - sc.running_since > 5) notes.push(`正在扫描共享盘，已 ${B.span(now - sc.running_since)}；下面是上一次的结果`);
+  if (sc.error) notes.push(`最近一次扫描失败（${esc(sc.error)}），下面是 ${B.ago(sc.finished, now)}的结果`);
+  const order = {'进行中': 0, '暂停': 1, '已归档': 2};
+  const list = [...pj.projects].sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1) || (b.mtime || 0) - (a.mtime || 0));
+  el.innerHTML = `<h2>项目 <span class="meta">${list.length} 个${sc.finished ? ' · 扫描于 ' + B.ago(sc.finished, now) : ''}</span></h2>` +
+    notes.map(t => `<div class="pnote">${t}</div>`).join('') +
+    (list.length ? list.map(p => `<div class="proj${p.status === '已归档' ? ' dim' : ''}">
+        <div class="ptop"><a href="${B.projectUrl(p.name)}"><b>${esc(p.title)}</b></a> ${B.pill(p.status)}
+          ${p.current_version ? `<span class="small">当前版本 ${esc(p.current_version)}</span>` : ''}
+          <span class="small right">最后更新 ${B.ago(p.mtime, now)}</span></div>
+        <div class="pconc">${p.conclusion ? esc(p.conclusion) : '<span class="small">还没有结论</span>'}</div>
+        ${(p.active_runs || []).map(r => `<div class="small">运行中 ${esc(r.id)} · ${esc(r.server || '?')}` +
+          `${Array.isArray(r.gpus) && r.gpus.length ? ' 卡 ' + esc(r.gpus.join(',')) : ''} ${B.livePill(r.liveness)}</div>`).join('')}
+        ${p.stale ? `<div class="pwarn">${p.scanned_at ? `这个项目的数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败` : '这个项目还没有读取成功过'}</div>` : ''}
+        ${p.n_errors ? `<div class="pwarn">${p.n_errors} 个记录文件读取有问题，详情在项目页底部</div>` : ''}
+      </div>`).join('')
+     : `<div class="empty">还没有项目。在 ${esc(sc.root || '共享盘')}/&lt;项目名&gt;/board/ 下写好 project.json，一分钟内就会出现在这里。</div>`);
+}
+
 document.addEventListener('click', e => {
   const b = e.target.closest('.copy'); if (!b) return;
   navigator.clipboard.writeText(b.dataset.c).then(() => { const t = b.textContent; b.textContent = '已复制'; setTimeout(() => b.textContent = t, 1200); });
 });
 let copying = false;
 document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
+let activeRuns = [];  // running runs of all projects, for tagging GPU cards
 async function load() {
   if (copying) { copying = false; return; }
-  try { render(await (await fetch('/api/status')).json()); }
+  try {
+    const [st, pj] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/projects').then(r => r.ok ? r.json() : null).catch(() => null)]);
+    activeRuns = pj ? pj.projects.flatMap(p => (p.active_runs || []).map(r => ({...r, project: p.name, title: p.title}))) : [];
+    render(st);
+    renderProjects(pj);
+  }
   catch (e) { $('sub').textContent = '连不上看板：请确认 Mac 能连到 xtraa100（校园网 / VPN）'; }
 }
 $('refresh').onclick = async () => { await fetch('/api/refresh'); setTimeout(load, 4000); };

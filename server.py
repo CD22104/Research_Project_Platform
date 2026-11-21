@@ -175,11 +175,16 @@ def api_project(name):
     data = snap.get(name) if projects.valid_name(name) else None
     if data is None:
         return None
-    out = dict(data, scan=status)  # shallow copy: cached snapshots are never mutated
+    out = dict(data, scan=status, now=time.time())  # shallow copy: cached snapshots are never mutated
     out["runs"] = [dict(r, liveness=run_liveness(r["run"]) if r["run"].get("status") == "运行中" else None)
                    for r in data["runs"]]
     return out
 
+
+# The board's own pages, read from the repo on each request
+HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
+STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
+          "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS)}
 
 # Served board files must never run code, even when opened directly (SVG can carry scripts)
 FILE_HEADERS = {"X-Content-Type-Options": "nosniff",
@@ -239,9 +244,10 @@ class Handler(BaseHTTPRequestHandler):
             wake.set()
             wake.clear()
             self.send(200, "application/json", b"{}")
-        elif path in ("/", "/index.html"):
-            with open(os.path.join(HERE, "index.html"), "rb") as f:
-                self.send(200, "text/html; charset=utf-8", f.read())
+        elif path in STATIC:
+            name, ctype = STATIC[path]
+            with open(os.path.join(HERE, name), "rb") as f:
+                self.send(200, ctype, f.read())
         else:
             self.send(404, "text/plain", b"not found")
 

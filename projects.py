@@ -399,7 +399,8 @@ def summary(data):
             "status": p.get("status"), "conclusion": p.get("conclusion"),
             "current_version": p.get("current_version"), "updated": p.get("updated"),
             "mtime": max(times) if times else None, "active_runs": active,
-            "n_errors": len(data.get("errors") or []), "stale": data.get("stale")}
+            "n_errors": len(data.get("errors") or []), "stale": data.get("stale"),
+            "scanned_at": data.get("scanned_at")}
 
 
 class ProjectCache:
