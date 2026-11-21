@@ -9,12 +9,14 @@
   --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585;
   --free:#1a9d5b; --free-bg:#e5f6ec; --busy:#c7791a; --busy-bg:#fdf1dc;
   --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --accent-bg:#e8eefb; --track:#e9ecf1;
+  --part:#0f8a8a; --part-bg:#dff3f2;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8;
     --free:#4ccb85; --free-bg:#16321f; --busy:#e3a548; --busy-bg:#3a2c12;
     --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --accent-bg:#1e2a45; --track:#2a303b;
+    --part:#4fc7c3; --part-bg:#123331;
   }
 }
 *{box-sizing:border-box}
@@ -44,6 +46,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--trac
 .t-ok{color:var(--free);background:var(--free-bg)}
 .t-bad{color:var(--full);background:var(--full-bg)}
 .t-todo{color:var(--busy);background:var(--busy-bg)}
+.t-part{color:var(--part);background:var(--part-bg);box-shadow:inset 0 0 0 1px var(--part)}
 .t-off,.t-other{color:var(--muted);background:var(--track)}
 .todo{display:inline-block;color:var(--busy);background:var(--busy-bg);border:1px solid var(--busy);border-radius:6px;
   padding:0 7px;font-size:12px;font-weight:700;white-space:nowrap}
@@ -83,9 +86,20 @@ a.todo:hover{text-decoration:none;filter:brightness(1.05)}
 .track{margin:8px 0 0;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:8px}
 .track.k-run{border-left-color:var(--accent)}
 .track.k-ok{border-left-color:var(--free)}
+.track.k-part{border-left-color:var(--part)}
 .track.k-bad,.track.k-off{border-left-color:var(--full);border-left-style:dashed}
-.thead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:4px}
-.tnote{font-size:13px;color:var(--muted);margin:2px 0 4px}
+.thead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+.merge{font-size:12px;color:var(--free);font-weight:600}
+.gist{font-size:13px;margin:0 0 4px}
+details.tbody>summary{font-size:12px;color:var(--muted);cursor:pointer;margin:0 0 2px}
+details.tbody>.md{font-size:13px;padding:4px 0 6px 14px}
+
+/* long example: clipped with a fade until expanded */
+.clip{max-height:60vh;overflow:hidden;position:relative}
+.clip::after{content:"";position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(rgba(0,0,0,0),var(--card))}
+.more{padding:0 14px 12px}
+.more[hidden]{display:none}
+.md hr{border:0;border-top:1px dashed var(--line);margin:14px 0}
 .group{margin:6px 0 14px}
 .group>h3{font-size:13px;color:var(--muted);font-weight:500;margin:0 0 4px}
 details.att{border-top:1px dashed var(--line);padding:3px 0}
@@ -95,12 +109,19 @@ details.att[open]>summary::before{content:"▾"}
 details.att>.md{padding:6px 4px 8px 16px}
 
 /* 4. evidence */
-.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px 0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:10px 14px 0}
 .tab.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.tabs select{font:inherit;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+.tmeta{padding:8px 14px 4px;font-size:12px;color:var(--muted)}
+.dnote{padding:8px 14px 0;font-size:12px;color:var(--busy)}
+h3.tt{font-size:14px;margin:0;padding:14px 14px 0;border-top:1px solid var(--line)}
+.bare{padding:4px 14px 12px;font-size:13px}
+.bare a{margin-right:8px}
 table.runs{width:100%;border-collapse:collapse}
 table.runs th,table.runs td{padding:7px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
 table.runs th{font-size:12px;font-weight:500;color:var(--muted);white-space:nowrap}
 table.runs .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.runs td:nth-child(-n+5){white-space:nowrap}
 tr.run{cursor:pointer}
 tr.run:hover td{background:var(--bg)}
 tr.run.open td{background:var(--accent-bg)}
@@ -145,11 +166,12 @@ table.errs td{padding:6px 14px;border-bottom:1px solid var(--line);vertical-alig
 <script src="common.js"></script>
 <script>
 const B = Board, esc = B.esc, $ = id => document.getElementById(id);
-const NAME = new URLSearchParams(location.search).get('p') || '';
-const ui = {group: null, openRuns: new Set()};  // survives auto-refresh
+const QS = new URLSearchParams(location.search);
+const NAME = QS.get('p') || QS.get('name') || '';
+// view state that survives auto-refresh
+const ui = {view: {}, openRuns: new Set(), exampleOpen: false};
 let data = null;
 
-const TONE = s => ({'进行中': 'run', '并入主线': 'ok', '放弃': 'off', '失败': 'bad', '暂停': 'other'}[s] || 'other');
 const byDate = (a, b) => String(a.meta.date || a.meta.started || a.file).localeCompare(String(b.meta.date || b.meta.started || b.file));
 const attId = a => 'att-' + a.file;
 const attName = a => String(a.meta.id || a.file.split('/').pop().replace(/\.md$/, '')).replace(/^\d{4}-\d{2}-\d{2}-/, '');
@@ -201,13 +223,22 @@ function summary(d) {
      : '<div class="pad faint" style="padding-top:0">还没有 plan.md（整体方案）。</div>');
 }
 
-// 2. one worked example
+// 2. one worked example. Folded: the short version before "--- / # 完整原文" if the file has that
+// marker, otherwise the first ~60% of a screen with a fade.
 function example(d) {
   const w = d.example && d.example.walkthrough, probe = (d.example && d.example.probe_head) || [];
-  return `<h2>一个例子${w ? ` <span class="meta">${esc(w.file)} · ${B.ago(w.mtime, d.now)}更新</span>` : ''}</h2>` +
-    (w ? `<div class="md pad">${B.md(w.body) || '<span class="faint">文件是空的</span>'}</div>` +
-         (w.truncated ? '<div class="pad faint">文件太长，只显示了前 200 KB。</div>' : '')
-       : '<div class="empty">还没有样例（examples/walkthrough.md）。</div>') +
+  let body = '<div class="empty">还没有样例（examples/walkthrough.md）。</div>';
+  if (w) {
+    const parts = B.splitFull(w.body), open = ui.exampleOpen;
+    if (!w.body.trim()) body = '<div class="pad faint">文件是空的</div>';
+    else if (parts) body = `<div class="md pad">${B.md(open ? w.body : parts.head)}</div>
+        <div class="more"><button data-example>${open ? '收起完整原文' : '展开完整原文'}</button>
+          <span class="small">完整原文约 ${Math.max(1, Math.round(parts.full.length / 1000))} 千字</span></div>`;
+    else body = `<div class="md pad${open ? '' : ' clip'}" id="exbody">${B.md(w.body)}</div>
+        <div class="more" id="exmore"><button data-example>${open ? '收起' : '展开全文'}</button></div>`;
+    if (w.truncated) body += '<div class="pad faint">文件太长，只读了前 200 KB。</div>';
+  }
+  return `<h2>一个例子${w ? ` <span class="meta">${esc(w.file)} · ${B.ago(w.mtime, d.now)}更新</span>` : ''}</h2>` + body +
     (probe.length ? `<details class="sub" id="probe"><summary>probe.jsonl 前 ${probe.length} 行</summary>` +
       `<pre class="json">${esc(probe.map(x => JSON.stringify(x)).join('\n'))}</pre></details>` : '');
 }
@@ -224,12 +255,15 @@ function attempt(a) {
       ${runs.length ? `<span class="small">· 运行 ${runs.map(r => `<a href="#" data-run="${esc(r)}">${esc(r)}</a>`).join(' ')}</span>` : ''}</summary>
     <div class="md">${B.md(a.body) || '<span class="faint">没有正文</span>'}</div></details>`;
 }
-function track(t, atts) {
-  const m = t.meta;
-  return `<div class="track k-${TONE(m.status)}">
+// A track shows its header, a one-line gist of 假设 and its attempts; the full note is folded.
+function track(t, atts, mergeNote) {
+  const m = t.meta, gist = B.firstSentence(t.body, '假设');
+  return `<div class="track k-${B.tone(m.status)}">
     <div class="thead">${B.pill(m.status)} <b>${esc(m.title || m.id || t.file)}</b>
-      <span class="small">${m.title && m.id ? esc(m.id) + ' · ' : ''}${esc(B.day(m.started))}${m.ended ? ' → ' + esc(B.day(m.ended)) : ''}</span></div>
-    ${t.body.trim() ? `<div class="md tnote">${B.md(t.body)}</div>` : ''}
+      <span class="small">${m.title && m.id ? esc(m.id) + ' · ' : ''}${esc(B.day(m.started))}${m.ended ? ' → ' + esc(B.day(m.ended)) : ''}</span>
+      ${mergeNote ? `<span class="merge">${esc(mergeNote)}</span>` : ''}</div>
+    ${gist ? `<div class="gist"><span class="small">假设</span> ${esc(gist)}</div>` : ''}
+    ${t.body.trim() ? `<details class="tbody" id="${esc('trk-' + t.file)}"><summary>支线说明</summary><div class="md">${B.md(t.body)}</div></details>` : ''}
     ${atts.length ? atts.map(attempt).join('') : '<div class="faint">还没有尝试</div>'}</div>`;
 }
 function path(d) {
@@ -238,6 +272,13 @@ function path(d) {
   const tids = new Set(tracks.map(t => t.meta.id).filter(Boolean));
   const attemptsOf = tid => tid ? d.attempts.filter(a => a.meta.track === tid).sort(byDate) : [];
   const cur = (d.project || {}).current_version;
+  // a track hangs under its from_version; without one, under the version that merged it
+  const mergedInto = new Map();
+  for (const v of versions)
+    for (const tid of Array.isArray(v.meta.merged_tracks) ? v.meta.merged_tracks : [])
+      if (v.meta.id && !mergedInto.has(tid)) mergedInto.set(tid, v.meta.id);
+  const home = t => vids.has(t.meta.from_version) ? t.meta.from_version : mergedInto.get(t.meta.id) || null;
+  const note = (t, vid) => { const into = mergedInto.get(t.meta.id); return !into ? '' : into === vid ? '并入此版本' : `→ 并入 ${into}`; };
   let html = '';
   for (const v of versions) {
     const m = v.meta, merged = Array.isArray(m.merged_tracks) ? m.merged_tracks : [];
@@ -246,11 +287,11 @@ function path(d) {
         <span class="small">${esc(B.day(m.date))}${m.parent ? ' · 来自 ' + esc(m.parent) : ''}${merged.length ? ' · 并入 ' + esc(merged.join('、')) : ''}</span>
         ${m.id && m.id === cur ? '<span class="pill t-run">当前版本</span>' : ''}</div>
       ${v.body.trim() ? `<details class="vbody" id="${esc('ver-' + v.file)}"><summary>版本说明</summary><div class="md">${B.md(v.body)}</div></details>` : ''}
-      ${tracks.filter(t => m.id && t.meta.from_version === m.id).map(t => track(t, attemptsOf(t.meta.id))).join('')}</div>`;
+      ${tracks.filter(t => m.id && home(t) === m.id).map(t => track(t, attemptsOf(t.meta.id), note(t, m.id))).join('')}</div>`;
   }
   const group = (title, inner) => `<div class="group"><h3>${title}</h3>${inner}</div>`;
-  const loose = tracks.filter(t => !vids.has(t.meta.from_version));
-  if (loose.length) html += group('没有挂到版本上的支线', loose.map(t => track(t, attemptsOf(t.meta.id))).join(''));
+  const loose = tracks.filter(t => !home(t));
+  if (loose.length) html += group('没有挂到版本上的支线', loose.map(t => track(t, attemptsOf(t.meta.id), note(t, null))).join(''));
   const orphans = d.attempts.filter(a => !tids.has(a.meta.track)).sort(byDate);
   if (orphans.length) html += group('没有归属支线的尝试', `<div class="track">${orphans.map(attempt).join('')}</div>`);
   return `<h2>走过的路 <span class="meta">${versions.length} 个版本 · ${tracks.length} 条支线 · ${d.attempts.length} 次尝试 · 失败和放弃的也在</span></h2>` +
@@ -280,26 +321,72 @@ function evidence(d) {
   const key = r => String((r.run || {}).started || '') + ' ' + r.id;
   const runs = [...d.runs].sort((a, b) => key(b).localeCompare(key(a)));  // newest first
   if (!runs.length) return '<h2>证据</h2><div class="empty">还没有运行记录（runs/）。</div>';
+  const disp = B.parseDisplay((d.project || {}).display), notes = [...disp.problems];
+  // kind "data" runs describe datasets (rows, label counts): their own small table
+  const main = runs.filter(r => (r.run || {}).kind !== 'data'), dataRuns = runs.filter(r => (r.run || {}).kind === 'data');
+  const mainHtml = main.length ? runTable('main', main, disp, notes) : '<div class="empty">没有评测或训练的运行。</div>';
+  return `<h2>证据 <span class="meta">${runs.length} 次运行 · 点一行展开详情和曲线</span></h2>` +
+    (notes.length ? `<div class="dnote">project.json 的 display 里有用不上的设置：${notes.map(esc).join('；')}。已按默认方式显示。</div>` : '') +
+    mainHtml +
+    (dataRuns.length ? `<h3 class="tt">数据 <span class="faint">kind 为 data 的运行：数据集的行数、标签分布等</span></h3>` +
+      runTable('data', dataRuns, null, []) : '');
+}
+
+const SHOW_GROUPS = 6;  // more groups than this go into a dropdown
+// One table: group switcher, then the runs that have numbers in the selected group.
+function runTable(key, runs, disp, notes) {
+  const st = ui.view[key] || (ui.view[key] = {group: undefined, all: false});
   const groups = B.metricGroups(runs.map(r => (r.run || {}).metrics));
-  if (!groups.some(g => g.name === ui.group)) ui.group = groups.length ? groups[0].name : null;
-  const g = groups.find(x => x.name === ui.group), cols = g ? g.cols : [];
-  const label = c => g && g.name ? c.slice(g.name.length + 1) : c;
-  const tabs = groups.length > 1 ? `<div class="tabs"><span class="small">指标分组</span>${groups.map(x =>
-    `<button class="tab${x.name === ui.group ? ' on' : ''}" data-group="${esc(x.name)}">${esc(x.name || '其他指标')}</button>`).join('')}</div>` : '';
-  const rows = runs.map(r => {
-    const x = r.run || {}, flat = B.flatten(x.metrics), open = ui.openRuns.has(r.dir);
+  const {ordered, defaultName, missingDefault} = B.arrangeGroups(groups, disp);
+  if (missingDefault != null) notes.push(`default_group「${missingDefault}」不存在`);
+  if (!groups.some(g => g.name === st.group)) st.group = defaultName;
+  const g = groups.find(x => x.name === st.group);
+  const vals = r => g ? B.groupValues((r.run || {}).metrics, g.name) : {};
+  const shownRuns = g ? runs.filter(r => B.hasNumber(vals(r))) : [];
+  const bare = runs.filter(r => !groups.some(x => B.hasNumber(B.groupValues((r.run || {}).metrics, x.name))));
+
+  // columns: primary_metrics if any exist here; ratio parts hidden unless "all columns"
+  const all = g ? g.cols : [], ratio = disp ? disp.ratio : {};
+  const parts = new Set(Object.entries(ratio).filter(([c]) => all.includes(c)).flatMap(([, p]) => p));
+  const primary = disp ? disp.primary.filter(c => all.includes(c)) : [];
+  const brief = primary.length ? primary : all.filter(c => !parts.has(c));
+  const cols = st.all ? all : brief;
+  const cell = (v, c) => {
+    const p = ratio[c];
+    return p && typeof v[p[0]] === 'number' && typeof v[p[1]] === 'number'
+      ? `${B.num(v[c])} <span class="small">(${B.num(v[p[0]])}/${B.num(v[p[1]])})</span>` : B.num(v[c]);
+  };
+
+  const label = x => esc(x.name || '其他指标');
+  const visible = ordered.slice(0, SHOW_GROUPS);
+  if (g && !visible.includes(g)) visible.push(g);
+  const more = ordered.filter(x => !visible.includes(x));
+  const tabs = ordered.length > 1 ? `<div class="tabs"><span class="small">指标分组</span>` +
+    visible.map(x => `<button class="tab${x === g ? ' on' : ''}" data-view="${key}" data-group="${esc(x.name)}">${label(x)} <span class="small">${x.runs}</span></button>`).join('') +
+    (more.length ? `<select data-view="${key}"><option value="">更多分组（${more.length}）</option>` +
+      more.map(x => `<option value="g:${esc(x.name)}">${label(x)}（${x.runs}）</option>`).join('') + '</select>' : '') + '</div>' : '';
+  const missing = runs.length - shownRuns.length - bare.length;
+  const meta = g ? `<div class="tmeta">本组 ${shownRuns.length} 次运行${missing ? `，另有 ${missing} 次没有这组指标` : ''}` +
+    (brief.length < all.length ? ` · <a href="#" data-allcols="${key}">${st.all ? '只显示主要列' : `显示全部列（${all.length}）`}</a>` : '') + '</div>' : '';
+
+  const row = r => {
+    const x = r.run || {}, v = vals(r), open = ui.openRuns.has(r.dir);
     return `<tr class="run${open ? ' open' : ''}" data-dir="${esc(r.dir)}">
       <td><b>${esc(x.id || r.id)}</b> <span class="small">${esc(x.kind || '')}</span></td>
       <td>${B.pill(x.status)} ${B.livePill(r.liveness)}</td>
       <td class="small">${esc(x.attempt || '')}</td>
       <td class="small">${esc(x.server || '')}${Array.isArray(x.gpus) && x.gpus.length ? ' 卡 ' + esc(x.gpus.join(',')) : ''}</td>
-      <td class="small">${esc(B.when(x.started))}</td>
-      ${cols.map(c => `<td class="n">${B.num(flat[c])}</td>`).join('')}</tr>` +
+      <td class="small" title="${esc(B.when(x.started))}">${esc(B.day(x.started))}</td>
+      ${cols.map(c => `<td class="n">${cell(v, c)}</td>`).join('')}</tr>` +
       (open ? `<tr class="detail"><td colspan="${5 + cols.length}">${runDetail(r)}</td></tr>` : '');
-  }).join('');
-  return `<h2>证据 <span class="meta">${runs.length} 次运行 · 点一行展开详情和曲线</span></h2>${tabs}
-    <div class="scroll"><table class="runs"><tr><th>运行</th><th>状态</th><th>尝试</th><th>服务器</th><th>开始</th>` +
-    `${cols.map(c => `<th class="n">${esc(label(c))}</th>`).join('')}</tr>${rows}</table></div>`;
+  };
+  const table = shownRuns.length ? `<div class="scroll"><table class="runs"><tr><th>运行</th><th>状态</th><th>尝试</th><th>服务器</th><th>开始</th>` +
+    cols.map(c => `<th class="n">${esc(c)}</th>`).join('') + `</tr>${shownRuns.map(row).join('')}</table></div>` : '';
+  // runs with no numbers in any group still need a way to their config and logs
+  const bareHtml = bare.length ? `<div class="bare"><span class="small">还没有指标的运行：</span>` +
+    bare.map(r => `<a href="#" data-bare="${esc(r.dir)}">${esc((r.run || {}).id || r.id)}</a>`).join('') + '</div>' +
+    bare.filter(r => ui.openRuns.has(r.dir)).map(r => `<div class="pad" style="background:var(--bg)"><b>${esc((r.run || {}).id || r.id)}</b> ${B.pill((r.run || {}).status)} ${runDetail(r)}</div>`).join('') : '';
+  return tabs + meta + table + bareHtml;
 }
 
 function errors(d) {
@@ -314,6 +401,7 @@ function render(d) {
   $('notice').innerHTML = notices(d);
   $('summary').innerHTML = summary(d);
   $('example').innerHTML = example(d);
+  fitExample();
   $('path').innerHTML = path(d);
   $('evidence').innerHTML = evidence(d);
   $('errors').hidden = !d.errors.length;
@@ -338,28 +426,58 @@ async function load() {
   for (const id of open) { const el = document.getElementById(id); if (el) el.open = true; }
 }
 
+const redrawEvidence = () => { $('evidence').innerHTML = evidence(data); };
+const toggleRun = dir => { ui.openRuns.has(dir) ? ui.openRuns.delete(dir) : ui.openRuns.add(dir); };
+
+// Show the run in its table: switch to a group where it has numbers, then scroll to it.
+function revealRun(r) {
+  const key = (r.run || {}).kind === 'data' ? 'data' : 'main', st = ui.view[key] || (ui.view[key] = {all: false});
+  const m = (r.run || {}).metrics;
+  if (!B.hasNumber(B.groupValues(m, st.group ?? ''))) {
+    const names = B.metricGroups([m]).filter(g => g.runs).map(g => g.name);
+    if (names.length) st.group = names[0];
+  }
+  ui.openRuns.add(r.dir);
+  redrawEvidence();
+  const el = [...document.querySelectorAll('tr.run, a[data-bare]')].find(t => (t.dataset.dir || t.dataset.bare) === r.dir);
+  if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+// A long example without a 完整原文 marker is clipped by CSS; drop the button if it already fits.
+function fitExample() {
+  const body = $('exbody'), more = $('exmore');
+  if (!body || !more || ui.exampleOpen) return;
+  if (body.scrollHeight <= body.clientHeight + 4) { body.classList.remove('clip'); more.hidden = true; }
+}
+
 document.addEventListener('click', e => {
-  const tab = e.target.closest('[data-group]');
-  if (tab) { ui.group = tab.dataset.group; $('evidence').innerHTML = evidence(data); return; }
-  const row = e.target.closest('tr.run');
-  if (row && !e.target.closest('a')) {
-    const dir = row.dataset.dir;
-    ui.openRuns.has(dir) ? ui.openRuns.delete(dir) : ui.openRuns.add(dir);
-    $('evidence').innerHTML = evidence(data);
+  if (e.target.closest('[data-example]')) {
+    ui.exampleOpen = !ui.exampleOpen;
+    $('example').innerHTML = example(data);
+    fitExample();
+    if (!ui.exampleOpen && $('example').getBoundingClientRect().top < 0) $('example').scrollIntoView();
     return;
   }
+  const tab = e.target.closest('button[data-group]');
+  if (tab) { ui.view[tab.dataset.view].group = tab.dataset.group; redrawEvidence(); return; }
+  const allc = e.target.closest('[data-allcols]');
+  if (allc) { e.preventDefault(); const st = ui.view[allc.dataset.allcols]; st.all = !st.all; redrawEvidence(); return; }
+  const bare = e.target.closest('[data-bare]');
+  if (bare) { e.preventDefault(); toggleRun(bare.dataset.bare); redrawEvidence(); return; }
+  const row = e.target.closest('tr.run');
+  if (row && !e.target.closest('a')) { toggleRun(row.dataset.dir); redrawEvidence(); return; }
   const op = e.target.closest('[data-open]');
   if (op) { const el = document.getElementById(op.dataset.open); if (el) el.open = true; return; }
   const rl = e.target.closest('[data-run]');
   if (rl) {  // jump from an attempt to its run in the evidence table
     e.preventDefault();
     const r = data.runs.find(x => ((x.run || {}).id || x.id) === rl.dataset.run);
-    if (!r) return;
-    ui.openRuns.add(r.dir);
-    $('evidence').innerHTML = evidence(data);
-    const tr = [...document.querySelectorAll('tr.run')].find(t => t.dataset.dir === r.dir);
-    if (tr) tr.scrollIntoView({behavior: 'smooth', block: 'start'});
+    if (r) revealRun(r);
   }
+});
+document.addEventListener('change', e => {
+  const sel = e.target.closest('select[data-view]');
+  if (sel && sel.value.startsWith('g:')) { ui.view[sel.dataset.view].group = sel.value.slice(2); redrawEvidence(); }
 });
 $('refresh').onclick = load;
 load();

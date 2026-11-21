@@ -57,7 +57,7 @@ class Scan(FixtureCase):
         self.assertEqual(d["versions"][1]["meta"]["merged_tracks"], ["t-lr"])
         self.assertEqual(d["versions"][1]["meta"]["parent"], "v1")
         self.assertEqual({t["meta"]["id"]: t["meta"]["status"] for t in d["tracks"]},
-                         {"t-aug": "放弃", "t-loss": "进行中", "t-lr": "并入主线"})
+                         {"t-aug": "放弃", "t-loss": "进行中", "t-lr": "并入主线", "t-old": "并入主线"})
         self.assertNotIn("ended", d["tracks"][0]["meta"])  # t-aug: missing field stays missing
         files = [a["file"] for a in d["attempts"]]
         self.assertNotIn("attempts/notes.txt", files)      # only .md
@@ -67,6 +67,9 @@ class Scan(FixtureCase):
         self.assertEqual(a["2026-11-15-focal.md"]["needs_input"], ["预期", "结论和原因", "结论待确认"])
         self.assertEqual(a["2026-11-10-lr-sweep.md"]["needs_input"], [])
         self.assertEqual(a["2026-11-12-aug-mixup.md"]["meta"]["status"], "失败")
+        self.assertEqual(a["2026-11-16-focal-gamma1.md"]["needs_input"], ["结论和原因"])  # 部分成功 carries a conclusion
+        self.assertEqual(a["2026-11-17-odd-status.md"]["meta"]["status"], "搁置中")       # unknown status kept as is
+        self.assertEqual(a["2026-11-17-odd-status.md"]["needs_input"], [])
         self.assertEqual(a["2026-11-18-no-frontmatter.md"]["meta"], {})
         self.assertEqual(a["2026-11-19-unclosed.md"]["meta"], {})
         self.assertIn("字段区没有结束行", a["2026-11-19-unclosed.md"]["body"])
@@ -78,7 +81,8 @@ class Scan(FixtureCase):
     def test_runs(self):
         d = self.demo()
         runs = {r["id"]: r for r in d["runs"]}
-        self.assertEqual(sorted(runs), ["r001", "r002", "r003", "r004"])
+        self.assertEqual(sorted(runs), ["r001", "r002", "r003", "r004", "r005"])
+        self.assertEqual(runs["r005"]["run"]["kind"], "data")
         r1 = runs["r001"]
         self.assertEqual(r1["run"]["metrics"]["测试集"]["acc"], 0.81)
         self.assertEqual(r1["series"]["total"], 50)

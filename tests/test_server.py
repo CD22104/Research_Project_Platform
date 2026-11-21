@@ -132,7 +132,7 @@ class Http(unittest.TestCase):
         runs = {r["id"]: r for r in d["runs"]}
         self.assertEqual(runs["r002"]["liveness"], "unknown")
         self.assertIsNone(runs["r001"]["liveness"])  # finished runs are not checked
-        self.assertEqual(len(d["attempts"]), 5)
+        self.assertEqual(len(d["attempts"]), 7)
         self.assertIn("scan", d)
 
     def test_unknown_or_invalid_project(self):

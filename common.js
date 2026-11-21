@@ -20,18 +20,26 @@ const Board = (() => {
   const day = iso => when(iso).slice(0, 10);
 
   // ---- status labels (record values are Chinese; unknown values still render)
-  const TONE = {'进行中': 'run', '运行中': 'run', '成功': 'ok', '完成': 'ok', '并入主线': 'ok',
+  // values not listed here (the format may add more) get the neutral 'other' style
+  const TONE = {'进行中': 'run', '运行中': 'run', '成功': 'ok', '完成': 'ok', '并入主线': 'ok', '部分成功': 'part',
     '失败': 'bad', '被中断': 'bad', '放弃': 'off', '暂停': 'off', '已归档': 'off', '待确认': 'todo'};
-  const pill = s => s == null || s === '' ? '' : `<span class="pill t-${TONE[s] || 'other'}">${esc(s)}</span>`;
+  const tone = s => TONE[s] || 'other';
+  const pill = s => s == null || s === '' ? '' : `<span class="pill t-${tone(s)}">${esc(s)}</span>`;
   const LIVE = {running: ['确认在跑', 'ok'], maybe_interrupted: ['可能已中断', 'bad'], unknown: ['无法确认是否在跑', 'other']};
   const livePill = l => LIVE[l] ? `<span class="pill t-${LIVE[l][1]}">${LIVE[l][0]}</span>` : '';
 
-  // ---- numbers
+  // ---- numbers: tables show 4 decimals (data keeps full precision); integers as they are
   function num(v) {
     if (typeof v !== 'number' || !isFinite(v)) return v == null ? '' : esc(typeof v === 'object' ? JSON.stringify(v) : v);
     const a = Math.abs(v);
-    if (Number.isInteger(v) && a < 1e7) return String(v);
-    return a !== 0 && (a >= 1e5 || a < 1e-3) ? v.toExponential(2) : String(+v.toPrecision(4));
+    if (Number.isInteger(v)) return a < 1e15 ? String(v) : v.toExponential(3);
+    return a < 1e-4 || a >= 1e6 ? v.toExponential(2) : v.toFixed(4);
+  }
+  // compact form for chart axes
+  function short(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return '';
+    const a = Math.abs(v);
+    return a !== 0 && (a >= 1e5 || a < 1e-3) ? v.toExponential(1) : String(+v.toPrecision(4));
   }
 
   // ---- minimal Markdown: headings, paragraphs, lists, quotes, code, bold, links, tables.
@@ -45,12 +53,13 @@ const Board = (() => {
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
   }
   const FENCE = /^\s*```/, HEADING = /^(#{1,6})\s+(.*)$/, ITEM = /^\s*([-*+]|\d+[.)])\s+/, QUOTE = /^\s*>/;
+  const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;  // ---, ***, ___ (checked before list items: "* * *")
   const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
   const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
   function md(src) {
     const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
     const isTable = i => /^\s*\|/.test(lines[i]) && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]);
-    const startsBlock = i => FENCE.test(lines[i]) || HEADING.test(lines[i]) || ITEM.test(lines[i]) || QUOTE.test(lines[i]) || isTable(i);
+    const startsBlock = i => FENCE.test(lines[i]) || RULE.test(lines[i]) || HEADING.test(lines[i]) || ITEM.test(lines[i]) || QUOTE.test(lines[i]) || isTable(i);
     const out = [];
     let i = 0, m;
     while (i < lines.length) {
@@ -60,6 +69,9 @@ const Board = (() => {
         for (i++; i < lines.length && !FENCE.test(lines[i]); i++) buf.push(lines[i]);
         i++;
         out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+      } else if (RULE.test(l)) {
+        out.push('<hr>');
+        i++;
       } else if ((m = HEADING.exec(l))) {
         const n = Math.min(6, m[1].length + 2);  // page owns h1/h2
         out.push(`<h${n}>${inline(m[2])}</h${n}>`);
@@ -93,6 +105,35 @@ const Board = (() => {
     return out.join('\n');
   }
 
+  // ---- walkthrough: "short version / --- / # 完整原文 / full text". Returns {head, full} or null.
+  // Prefers a --- line whose next non-blank line is a 完整原文 heading; else the first such heading.
+  function splitFull(body) {
+    const lines = String(body ?? '').replace(/\r\n?/g, '\n').split('\n');
+    const isFull = l => /^#{1,6}\s*完整原文\s*$/.test((l || '').trim());
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^\s*-{3,}\s*$/.test(lines[i])) continue;
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      if (isFull(lines[j])) return {head: lines.slice(0, i).join('\n'), full: lines.slice(i).join('\n')};
+    }
+    const k = lines.findIndex(isFull);
+    return k > 0 ? {head: lines.slice(0, k).join('\n'), full: lines.slice(k).join('\n')} : null;
+  }
+
+  // first sentence of a section (e.g. 假设) for one-line summaries
+  function firstSentence(body, title, max = 80) {
+    const lines = String(body ?? '').split('\n');
+    const at = lines.findIndex(l => new RegExp('^##\\s*' + title + '\\s*$').test(l.trim()));
+    let text = '';
+    if (at >= 0) {
+      for (let i = at + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) if (lines[i].trim()) { text = lines[i].trim(); break; }
+    }
+    text = text.replace(new RegExp('^' + title + '[:：]\\s*'), '');
+    const m = /^(.*?[。！？!?；;])/.exec(text);
+    if (m) text = m[1];
+    return text.length > max ? text.slice(0, max) + '…' : text;
+  }
+
   // ---- inline SVG line chart for one metric key of a metrics.jsonl series
   function chart(points, key, w = 520, h = 150) {
     const pts = (points || []).filter(p => typeof p[key] === 'number' && isFinite(p[key]) && typeof p.step === 'number');
@@ -111,10 +152,10 @@ const Board = (() => {
       <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(key)}">
         <line class="ax" x1="${L}" y1="${h - B}" x2="${w - R}" y2="${h - B}"/>
         <line class="ax" x1="${L}" y1="${T}" x2="${L}" y2="${h - B}"/>
-        <text x="${L - 6}" y="${T + 8}" text-anchor="end">${num(y1)}</text>
-        <text x="${L - 6}" y="${h - B}" text-anchor="end">${num(y0)}</text>
-        <text x="${L}" y="${h - 6}">${num(x0)}</text>
-        <text x="${w - R}" y="${h - 6}" text-anchor="end">${num(x1)}</text>
+        <text x="${L - 6}" y="${T + 8}" text-anchor="end">${short(y1)}</text>
+        <text x="${L - 6}" y="${h - B}" text-anchor="end">${short(y0)}</text>
+        <text x="${L}" y="${h - 6}">${short(x0)}</text>
+        <text x="${w - R}" y="${h - 6}" text-anchor="end">${short(x1)}</text>
         ${pts.length > 1 ? `<path class="ln" d="${d}"/>` : `<circle class="pt" cx="${X(last.step)}" cy="${Y(last[key])}" r="3"/>`}
       </svg></figure>`;
   }
@@ -129,19 +170,70 @@ const Board = (() => {
     }
     return out;
   }
-  // -> [{name, cols: [full keys]}]; top-level scalars form the group named ''
+  const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+  // One run's values in group g, keyed by column name relative to the group.
+  // Groups are the first-level keys of metrics whose value is an object; top-level scalars form group ''.
+  function groupValues(metrics, g) {
+    if (!isObj(metrics)) return {};
+    if (g) return isObj(metrics[g]) ? flatten(metrics[g]) : {};
+    const out = {};
+    for (const [k, v] of Object.entries(metrics)) if (!isObj(v)) out[k] = v;
+    return out;
+  }
+  const hasNumber = vals => Object.values(vals).some(v => typeof v === 'number' && isFinite(v));
+  // -> [{name, cols: [relative column names], runs: how many metrics objects have a number in it}]
   function metricGroups(metricsList) {
     const groups = new Map();
     for (const m of metricsList) {
-      if (!m || typeof m !== 'object' || Array.isArray(m)) continue;
-      for (const [k, v] of Object.entries(m)) {
-        const g = v && typeof v === 'object' && !Array.isArray(v) ? k : '';
-        if (!groups.has(g)) groups.set(g, new Set());
-        for (const col of Object.keys(g ? flatten(v, k) : {[k]: v})) groups.get(g).add(col);
+      if (!isObj(m)) continue;
+      const names = new Set(Object.entries(m).map(([k, v]) => isObj(v) ? k : ''));
+      for (const g of names) {
+        const vals = groupValues(m, g);
+        if (!groups.has(g)) groups.set(g, {name: g, cols: new Set(), runs: 0});
+        const e = groups.get(g);
+        Object.keys(vals).forEach(c => e.cols.add(c));
+        if (hasNumber(vals)) e.runs++;
       }
     }
-    const out = [...groups].map(([name, cols]) => ({name, cols: [...cols]}));
-    return out.sort((a, b) => (a.name === '') - (b.name === ''));  // named groups first
+    return [...groups.values()].map(e => ({name: e.name, cols: [...e.cols], runs: e.runs}));
+  }
+
+  // ---- project.json "display": optional presentation preferences of a project.
+  //   default_group: string; group_order: [string]; primary_metrics: [string];
+  //   ratio: {column: [numerator column, denominator column]}. Column names are relative to the group.
+  // Anything unusable is dropped and reported in .problems; the page then falls back to its defaults.
+  function parseDisplay(raw) {
+    const out = {defaultGroup: null, order: [], primary: [], ratio: {}, problems: []};
+    if (raw == null) return out;
+    if (!isObj(raw)) { out.problems.push('display 应为对象'); return out; }
+    const strList = v => Array.isArray(v) && v.every(x => typeof x === 'string');
+    for (const [k, v] of Object.entries(raw)) {
+      if (k === 'default_group') typeof v === 'string' ? out.defaultGroup = v : out.problems.push('default_group 应为字符串');
+      else if (k === 'group_order') strList(v) ? out.order = v : out.problems.push('group_order 应为字符串列表');
+      else if (k === 'primary_metrics') strList(v) ? out.primary = v : out.problems.push('primary_metrics 应为字符串列表');
+      else if (k === 'ratio') {
+        if (!isObj(v)) { out.problems.push('ratio 应为对象'); continue; }
+        for (const [col, pair] of Object.entries(v)) {
+          if (strList(pair) && pair.length === 2) out.ratio[col] = pair;
+          else out.problems.push(`ratio.${col} 应为 [分子列, 分母列]`);
+        }
+      } else out.problems.push(`不认识的字段 ${k}`);
+    }
+    return out;
+  }
+
+  // Groups in display order (group_order first, then by run count) and the default selection.
+  function arrangeGroups(groups, disp) {
+    const order = (disp && disp.order) || [];
+    const listed = order.map(n => groups.find(g => g.name === n)).filter(Boolean);
+    const rest = groups.filter(g => !order.includes(g.name))
+      .sort((a, b) => b.runs - a.runs || (a.name === '') - (b.name === '') || a.name.localeCompare(b.name));
+    const ordered = [...listed, ...rest];
+    const want = disp && disp.defaultGroup;
+    const max = Math.max(0, ...groups.map(g => g.runs));
+    const preferred = want != null && groups.some(g => g.name === want) ? want : null;
+    const fallback = (ordered.find(g => g.runs === max) || ordered[0] || {name: null}).name;
+    return {ordered, defaultName: preferred ?? fallback, missingDefault: want != null && preferred == null ? want : null};
   }
 
   // ---- which recorded runs sit on GPU g of server `server` (match by pid, else by listed GPUs)
@@ -154,5 +246,6 @@ const Board = (() => {
 
   const projectUrl = name => 'project.html?p=' + encodeURIComponent(name);
 
-  return {esc, span, ago, when, day, pill, livePill, num, inline, md, chart, flatten, metricGroups, runsOnGpu, projectUrl};
+  return {esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
+    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl};
 })();

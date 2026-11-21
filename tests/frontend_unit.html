@@ -50,16 +50,45 @@ check('empty input', B.md('') === '' && B.md(null) === '');
 
 // esc / num / time
 check('esc', B.esc('<a href="x">\'&') === '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
-check('num', B.num(0.81) === '0.81' && B.num(1234) === '1234' && B.num(1e-5) === '1.00e-5' && B.num(null) === '' && B.num('<x>') === '&lt;x&gt;', [B.num(0.81), B.num(1e-5)]);
+check('num: 4 decimals, integers as is', B.num(0.81) === '0.8100' && B.num(0.59966777) === '0.5997' && B.num(1234) === '1234' && B.num(1e-5) === '1.00e-5' && B.num(2.5e6) === '2500000' && B.num(2500000.5) === '2.50e+6' && B.num(0) === '0' && B.num(null) === '' && B.num('<x>') === '&lt;x&gt;', [B.num(0.81), B.num(1e-5), B.num(2.5e6)]);
+check('short for axes', B.short(0.123456) === '0.1235' && B.short(250000) === '2.5e+5');
 check('ago', B.ago(100, 160) === '60 秒前' && B.ago(null) === '—');
 check('when invalid passes through', B.when('not a date') === 'not a date');
 check('pill escapes unknown status', B.pill('<x>') === '<span class="pill t-other">&lt;x&gt;</span>');
 
 // metrics
 check('flatten', JSON.stringify(B.flatten({'测试集': {acc: 0.8, sub: {f1: 0.7}}, loss: 1})) === JSON.stringify({'测试集.acc': 0.8, '测试集.sub.f1': 0.7, loss: 1}));
-const groups = B.metricGroups([{'测试集': {acc: 0.81, f1: 0.77}, train_loss: 0.31}, {'测试集': {acc: 0.8}, '少数类召回': 0.55, '对照': {acc: 0.5}}, null, 'bad']);
-check('metric groups', JSON.stringify(groups) === JSON.stringify([
-  {name: '测试集', cols: ['测试集.acc', '测试集.f1']}, {name: '对照', cols: ['对照.acc']}, {name: '', cols: ['train_loss', '少数类召回']}]), JSON.stringify(groups));
+const groups = B.metricGroups([{'测试集': {acc: 0.81, f1: 0.77}, train_loss: 0.31}, {'测试集': {acc: 0.8}, '少数类召回': 0.55, '对照': {acc: 0.5}}, {'对照': {note: 'text only'}}, null, 'bad']);
+check('metric groups with run counts', JSON.stringify(groups) === JSON.stringify([
+  {name: '测试集', cols: ['acc', 'f1'], runs: 2}, {name: '', cols: ['train_loss', '少数类召回'], runs: 2}, {name: '对照', cols: ['acc', 'note'], runs: 1}]), JSON.stringify(groups));
+check('groupValues', JSON.stringify(B.groupValues({'测试集': {acc: 1, sub: {f1: 2}}, x: 3}, '测试集')) === JSON.stringify({acc: 1, 'sub.f1': 2})
+  && JSON.stringify(B.groupValues({'测试集': {acc: 1}, x: 3}, '')) === JSON.stringify({x: 3}) && JSON.stringify(B.groupValues(null, 'a')) === '{}');
+
+// display preferences
+const dp = B.parseDisplay({default_group: 'g', group_order: ['a', 'b'], primary_metrics: ['acc'], ratio: {acc: ['correct', 'n'], bad: ['x']}, colour: 'red'});
+check('parseDisplay keeps valid fields', dp.defaultGroup === 'g' && dp.order.join() === 'a,b' && dp.primary.join() === 'acc' && JSON.stringify(dp.ratio) === JSON.stringify({acc: ['correct', 'n']}), JSON.stringify(dp));
+check('parseDisplay reports problems', dp.problems.length === 2 && dp.problems.some(p => p.includes('colour')) && dp.problems.some(p => p.includes('ratio.bad')), JSON.stringify(dp.problems));
+check('parseDisplay wrong types', B.parseDisplay({default_group: 3, group_order: 'a', primary_metrics: [1]}).problems.length === 3 && B.parseDisplay('x').problems.length === 1 && B.parseDisplay(undefined).problems.length === 0);
+const gs = [{name: 'a', runs: 2}, {name: 'b', runs: 5}, {name: '', runs: 5}, {name: 'c', runs: 5}];
+let ag = B.arrangeGroups(gs, null);
+check('arrange: by run count, named before scalars', ag.ordered.map(g => g.name).join() === 'b,c,,a' && ag.defaultName === 'b', JSON.stringify(ag));
+ag = B.arrangeGroups(gs, B.parseDisplay({group_order: ['a', 'c']}));
+check('arrange: group_order first', ag.ordered.map(g => g.name).join() === 'a,c,b,' && ag.defaultName === 'c', JSON.stringify(ag));
+ag = B.arrangeGroups(gs, B.parseDisplay({default_group: 'a'}));
+check('arrange: default_group wins', ag.defaultName === 'a' && ag.missingDefault === null);
+ag = B.arrangeGroups(gs, B.parseDisplay({default_group: 'zz'}));
+check('arrange: missing default_group reported', ag.defaultName === 'b' && ag.missingDefault === 'zz');
+
+// walkthrough split, rules, gists, statuses
+let sp = B.splitFull('short\n\n---\n\n# 完整原文\nfull');
+check('splitFull at --- before 完整原文', sp && sp.head === 'short\n' && sp.full.startsWith('---'), JSON.stringify(sp));
+sp = B.splitFull('a\n---\nnot full\n## 完整原文\nx');
+check('splitFull falls back to the heading', sp && sp.head === 'a\n---\nnot full' && sp.full.startsWith('## 完整原文'), JSON.stringify(sp));
+check('splitFull without marker', B.splitFull('just text\n---\nmore') === null && B.splitFull('# 完整原文\nall') === null);
+check('horizontal rules', B.md('a\n\n---\n\nb').includes('<hr>') && B.md('* * *').includes('<hr>') && !B.md('* * *').includes('<li>'));
+check('firstSentence', B.firstSentence('x\n## 假设\n假设：第一句。第二句。\n## 现状\ny', '假设') === '第一句。'
+  && B.firstSentence('## 现状\ny', '假设') === '' && B.firstSentence('## 假设\n' + '长'.repeat(100), '假设', 10) === '长'.repeat(10) + '…');
+check('statuses', B.tone('部分成功') === 'part' && B.tone('搁置中') === 'other' && B.pill('部分成功').includes('t-part') && B.tone('成功') !== B.tone('部分成功') && B.tone('失败') !== B.tone('部分成功'));
 
 // chart
 const svg = B.chart([{step: 0, loss: 2}, {step: 10, loss: 1}, {step: 20, loss: '<x>'}], 'loss');
