@@ -6,6 +6,7 @@
 """
 import json
 import os
+import pwd
 import socket
 import socketserver
 import subprocess
@@ -13,9 +14,13 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
+
+import projects
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(HERE, "servers.json"), encoding="utf-8") as f:
+# GPUBOARD_CONFIG lets tests run the server against a throwaway config
+with open(os.environ.get("GPUBOARD_CONFIG") or os.path.join(HERE, "servers.json"), encoding="utf-8") as f:
     CFG = json.load(f)
 
 PORT = int(CFG.get("port", 8765))
@@ -24,6 +29,10 @@ JUMP = CFG.get("jump_host") or None
 SERVERS = CFG["servers"]
 # If set, listen only on this unix socket (no TCP port), so only its owner can connect
 SOCKET = CFG.get("socket") or None
+PROJECTS_ROOT = os.path.expanduser(CFG.get("projects_root") or "/shared/ssd/dchen")
+PROJECTS_INTERVAL = int(CFG.get("projects_interval_seconds", 60))
+ME = pwd.getpwuid(os.getuid()).pw_name  # same login on every server
+project_cache = projects.ProjectCache(PROJECTS_ROOT, PROJECTS_INTERVAL)
 
 # 在远端执行的只读脚本：GPU 列表 / GPU 上的进程 / 这些进程的用户
 REMOTE = r"""
@@ -54,7 +63,7 @@ wake = threading.Event()
 def num(x):
     try:
         return int(float(x))
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -124,18 +133,104 @@ def poll(server):
         wake.wait(INTERVAL)
 
 
+def liveness(run, srv, me):
+    """For a run recorded as 运行中: "running", "maybe_interrupted" or "unknown".
+
+    srv is the latest GPU poll of run["server"] (None if that name is not
+    polled). Polls only see GPU processes, so runs without GPUs are unknown.
+    The recorded pid may be a launcher whose children hold the GPUs, so our
+    own process on one of the run's GPUs also counts as running.
+    """
+    gpus = run.get("gpus")
+    if not isinstance(gpus, list) or not gpus or not srv or srv.get("status") != "ok":
+        return "unknown"
+    want = {num(g) for g in gpus} - {None}
+    pid = num(run.get("pid"))
+    for g in srv.get("gpus") or []:
+        for p in g.get("procs") or []:
+            if (pid is not None and p.get("pid") == pid) or (g.get("index") in want and p.get("user") == me):
+                return "running"
+    return "maybe_interrupted"
+
+
+def run_liveness(run):
+    name = run.get("server")
+    with lock:
+        srv = state.get(name) if isinstance(name, str) else None
+    return liveness(run, srv, ME)
+
+
+def api_projects():
+    snap, status = project_cache.snapshot()
+    rows = []
+    for name in sorted(snap):
+        row = projects.summary(snap[name])
+        row["active_runs"] = [dict(r, liveness=run_liveness(r)) for r in row["active_runs"]]
+        rows.append(row)
+    return {"now": time.time(), "scan": status, "projects": rows}
+
+
+def api_project(name):
+    snap, status = project_cache.snapshot()
+    data = snap.get(name) if projects.valid_name(name) else None
+    if data is None:
+        return None
+    out = dict(data, scan=status)  # shallow copy: cached snapshots are never mutated
+    out["runs"] = [dict(r, liveness=run_liveness(r["run"]) if r["run"].get("status") == "运行中" else None)
+                   for r in data["runs"]]
+    return out
+
+
+# Served board files must never run code, even when opened directly (SVG can carry scripts)
+FILE_HEADERS = {"X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"}
+
+
 class Handler(BaseHTTPRequestHandler):
-    def send(self, code, ctype, body):
+    def send(self, code, ctype, body, headers=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def send_json(self, obj):
+        self.send(200, "application/json; charset=utf-8", json.dumps(obj, ensure_ascii=False).encode())
+
+    def send_board_file(self, rest):
+        name, _, rel = rest.partition("/")
+        path = projects.safe_board_file(PROJECTS_ROOT, name, rel)
+        if path is None:
+            return self.send(404, "text/plain", b"not found")
+        try:
+            if os.stat(path).st_size > projects.MAX_FILE_BYTES:
+                return self.send(413, "text/plain", b"file too large")
+            data = projects._read_bytes(path, projects.MAX_FILE_BYTES + 1)
+        except FileNotFoundError:
+            return self.send(404, "text/plain", b"not found")
+        except OSError as e:  # e.g. EIO on the shared disk
+            return self.send(503, "text/plain", ("read failed: %s" % e).encode())
+        if len(data) > projects.MAX_FILE_BYTES:
+            return self.send(413, "text/plain", b"file too large")
+        ctype = projects.FILE_TYPES[os.path.splitext(path)[1].lower()]
+        self.send(200, ctype, data, FILE_HEADERS)
+
     def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/api/status":
+        path = unquote(self.path.split("?")[0])
+        if path == "/api/projects":
+            self.send_json(api_projects())
+        elif path.startswith("/api/project/"):
+            data = api_project(path[len("/api/project/"):])
+            if data is None:
+                self.send(404, "text/plain", b"no such project")
+            else:
+                self.send_json(data)
+        elif path.startswith("/files/"):
+            self.send_board_file(path[len("/files/"):])
+        elif path == "/api/status":
             with lock:
                 body = json.dumps({"now": time.time(), "interval": INTERVAL,
                                    "servers": [state[s["name"]] for s in SERVERS]}).encode()
@@ -194,5 +289,6 @@ if __name__ == "__main__":
     httpd, where = make_server()
     for s in SERVERS:
         threading.Thread(target=poll, args=(s,), daemon=True).start()
+    project_cache.start()
     print("GPU 看板已启动: %s" % where, flush=True)
     httpd.serve_forever()
