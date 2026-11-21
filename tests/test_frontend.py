@@ -179,20 +179,21 @@ class Pages(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIn('<div id="tab-projects" hidden="">', gpu)       # GPU tab is the default
         self.assertNotIn('<div id="tab-gpu" hidden', gpu)
-        self.assertIn('<a class="brand" href="./#gpu">GPU 看板</a>', gpu)
+        self.assertIn('<a class="brand" href="./#gpu">CD的研究控制台</a>', gpu)
+        self.assertRegex(gpu, r"<title>\(0 空\) CD的研究控制台</title>")       # GPU tab title keeps the free count
         self.assertIn('<a class="navtab on" href="./#gpu">GPU <span class="cnt">0 空闲</span></a>', gpu)
         self.assertNotIn("演示项目", gpu.split('<div id="tab-projects"')[0])  # no project list in the GPU tab
         proj, errors = dump(self.base + "#projects")
         self.assertEqual(errors, [])
         self.assertIn('<div id="tab-gpu" hidden="">', proj)
         self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', proj)
-        self.assertIn("<title>项目 · GPU 看板</title>", proj)
+        self.assertIn("<title>项目 · CD的研究控制台</title>", proj)
 
     def test_project_page_top_bar(self):
         d = self.demo
         self.assertIn('<a class="navtab on" href="./#projects">项目 <span class="cnt">3</span></a>', d)
         self.assertIn('<span class="crumb"><a href="./#projects">项目</a> /</span>', d)
-        self.assertIn("<title>演示项目 · GPU 看板</title>", d)
+        self.assertIn("<title>演示项目 · CD的研究控制台</title>", d)
         self.assertNotIn("← GPU 看板", d)
 
     def test_missing_project(self):

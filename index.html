@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GPU 看板</title>
+<title>CD的研究控制台</title>
 <style>
 :root{
   --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585;
@@ -300,7 +300,7 @@ async function load() {
     render(st);
     renderProjects(pj);
   }
-  catch (e) { $('sub').textContent = '连不上看板：请确认 Mac 能连到 xtraa100（校园网 / VPN）'; }
+  catch (e) { $('sub').textContent = `连不上${Board.APP_NAME}：请确认 Mac 能连到 xtraa100（校园网 / VPN）`; }
 }
 $('refresh').onclick = async () => { await fetch('/api/refresh'); setTimeout(load, 4000); };
 load(); setInterval(load, 5000);

@@ -2,7 +2,7 @@
 // Everything lives under `Board` so page scripts can keep their own short names.
 const Board = (() => {
   // Platform name shown in the top bar and page titles; the only place to rename it.
-  const APP_NAME = 'GPU 看板';
+  const APP_NAME = 'CD的研究控制台';
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 

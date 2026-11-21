@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""GPU 看板：通过 SSH 轮询各服务器的 nvidia-smi，在 http://localhost:8765 展示。
+"""CD的研究控制台：各服务器的 GPU 占用（SSH 轮询 nvidia-smi）和共享盘上各项目的进度记录。
 
 只依赖 Python 标准库和本机的 ssh（使用 ~/.ssh/config 与免密密钥）。
-服务器列表在 servers.json 里改。
+服务器列表、监听方式（unix socket 或本机端口）、项目根目录在 servers.json 里改。
+平台名显示在页面上的那一处在 common.js 的 APP_NAME。
 """
 import json
 import os
@@ -283,7 +284,7 @@ def make_server():
         except OSError:
             os.unlink(path)  # stale socket left by a previous run
         else:
-            sys.exit("已有看板实例在 %s 上运行，退出" % path)
+            sys.exit("已有控制台实例在 %s 上运行，退出" % path)
         finally:
             probe.close()
     return UnixHTTPServer(path, Handler), "unix:" + path
@@ -296,5 +297,5 @@ if __name__ == "__main__":
     for s in SERVERS:
         threading.Thread(target=poll, args=(s,), daemon=True).start()
     project_cache.start()
-    print("GPU 看板已启动: %s" % where, flush=True)
+    print("CD的研究控制台已启动: %s" % where, flush=True)
     httpd.serve_forever()

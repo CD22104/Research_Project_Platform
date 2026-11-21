@@ -431,7 +431,7 @@ async function load() {
   const open = [...document.querySelectorAll('details[open][id]')].map(x => x.id);  // keep what the user expanded
   let r;
   try { r = await fetch('/api/project/' + encodeURIComponent(NAME)); }
-  catch (e) { $('sub').textContent = '连不上看板'; return; }
+  catch (e) { $('sub').textContent = '连不上' + B.APP_NAME; return; }
   if (r.status === 404) {
     $('title').textContent = NAME;
     $('sub').textContent = '没有这个项目（或者它的 board/project.json 还没写好）';
