@@ -5,7 +5,13 @@ deliberately lenient: missing fields, extra fields and missing files must never
 raise; callers get empty values instead.
 """
 import json
+import os
 import re
+import stat
+import sys
+import threading
+import time
+import traceback
 
 MAX_BODY = 200 * 1024  # bytes of a Markdown file kept in the cache
 HEAD_ROWS = 20         # rows kept from samples.jsonl / probe.jsonl
@@ -160,3 +166,305 @@ def read_jsonl_head(path, n=HEAD_ROWS):
         except ValueError:
             rows.append({"_raw": line.decode("utf-8", "replace").rstrip("\n")})
     return rows
+
+
+# ---------------------------------------------------------------- scanning
+
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")  # no leading "_" or "."
+RECORD_DIRS = ("versions", "tracks", "attempts")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg")
+TEXT = "text/plain; charset=utf-8"  # raw records are shown as text, never rendered
+FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".svg": "image/svg+xml", ".json": TEXT, ".jsonl": TEXT, ".md": TEXT}
+MAX_FILE_BYTES = 10 * 1024 * 1024
+MISSING = (FileNotFoundError, NotADirectoryError)
+
+
+def valid_name(name):
+    return isinstance(name, str) and bool(NAME_RE.match(name))
+
+
+def _load_json(path):
+    return json.loads(_read_bytes(path, MAX_BODY * 50).decode("utf-8", "replace"))
+
+
+def _err(e):
+    return "%s: %s" % (type(e).__name__, e)
+
+
+class _Board:
+    """Reads one board/ directory.
+
+    Parse problems are collected in .errors; OSErrors other than "missing"
+    propagate so the caller can keep the previous snapshot of the project.
+    Files that resolve outside board/ (symlinks) are ignored.
+    """
+
+    def __init__(self, board, memo, new_memo):
+        self.board, self.real = board, os.path.realpath(board)
+        self.memo, self.new_memo = memo, new_memo
+        self.errors = []
+
+    def path(self, rel):
+        return os.path.join(self.board, rel)
+
+    def listdir(self, rel):
+        try:
+            return sorted(os.listdir(self.path(rel)))
+        except MISSING:
+            return []
+
+    def stat(self, rel):
+        """stat of a regular file inside board/, else None."""
+        p = self.path(rel)
+        try:
+            st = os.stat(p)
+        except MISSING:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        real = os.path.realpath(p)
+        if not real.startswith(self.real + os.sep):
+            self.errors.append({"file": rel, "error": "指向 board/ 之外的符号链接，已忽略"})
+            return None
+        return st
+
+    def cached(self, rel, st, fn, default=None):
+        """fn(path), reusing the previous scan's result if size and mtime are unchanged."""
+        key, sig = self.path(rel), (st.st_mtime_ns, st.st_size)
+        hit = self.memo.get(key)
+        if hit is not None and hit[0] == sig:
+            self.new_memo[key] = hit
+            if hit[2]:
+                self.errors.append(hit[2])
+            return hit[1]
+        try:
+            val, err = fn(key), None
+        except MISSING:
+            return default
+        except OSError:
+            raise
+        except Exception as e:  # malformed content
+            val, err = default, {"file": rel, "error": _err(e)}
+            self.errors.append(err)
+        self.new_memo[key] = (sig, val, err)
+        return val
+
+    def record(self, rel, st):
+        def load(p):
+            text, cut = read_text(p)
+            meta, body = parse_front_matter(text)
+            return {"meta": meta, "body": body, "truncated": cut}
+        r = self.cached(rel, st, load) or {"meta": {}, "body": "", "truncated": False}
+        return dict(r, file=rel, mtime=st.st_mtime)
+
+    def json_object(self, rel, st):
+        data = self.cached(rel, st, _load_json)
+        if data is not None and not isinstance(data, dict):
+            self.errors.append({"file": rel, "error": "应为 JSON 对象"})
+            return {}
+        return data or {}
+
+
+def scan_project(board, memo=None, new_memo=None):
+    """Parse one project's board/ dir. Raises only OSError (I/O trouble)."""
+    b = _Board(board, memo if memo is not None else {}, new_memo if new_memo is not None else {})
+    updated = {}
+
+    def bump(kind, t):
+        updated[kind] = max(updated.get(kind) or 0, t)
+
+    project, plan = {}, None
+    st = b.stat("project.json")
+    if st:
+        bump("project", st.st_mtime)
+        project = b.json_object("project.json", st)
+    st = b.stat("plan.md")
+    if st:
+        bump("plan", st.st_mtime)
+        plan = b.record("plan.md", st)
+
+    records = {}
+    for kind in RECORD_DIRS:
+        items = []
+        for fn in b.listdir(kind):
+            st = b.stat(kind + "/" + fn) if fn.endswith(".md") and not fn.startswith(".") else None
+            if not st:
+                continue
+            bump(kind, st.st_mtime)
+            r = b.record(kind + "/" + fn, st)
+            if kind == "attempts":
+                r["sections"] = split_sections(r["body"])
+                r["needs_input"] = needs_input(r["meta"], r["sections"])
+            items.append(r)
+        records[kind] = items
+
+    runs = []
+    for rid in b.listdir("runs"):
+        d = "runs/" + rid
+        if rid.startswith("."):
+            continue
+        try:  # not os.path.isdir: it hides I/O errors and the run would silently vanish
+            if not stat.S_ISDIR(os.stat(b.path(d)).st_mode):
+                continue
+        except MISSING:
+            continue
+        run = {"dir": d, "id": rid, "run": {}, "series": None, "samples_head": [], "images": [], "mtime": None}
+        times = []
+        st = b.stat(d + "/run.json")
+        if st:
+            times.append(st.st_mtime)
+            run["run"] = b.json_object(d + "/run.json", st)
+        st = b.stat(d + "/metrics.jsonl")
+        if st:
+            times.append(st.st_mtime)
+            run["series"] = b.cached(d + "/metrics.jsonl", st, read_metrics)
+        st = b.stat(d + "/samples.jsonl")
+        if st:
+            times.append(st.st_mtime)
+            run["samples_head"] = b.cached(d + "/samples.jsonl", st, read_jsonl_head, []) or []
+        for fn in b.listdir(d):
+            if fn.lower().endswith(IMAGE_EXTS) and not fn.startswith("."):
+                st = b.stat(d + "/" + fn)
+                if st:
+                    times.append(st.st_mtime)
+                    run["images"].append(d + "/" + fn)
+        if times:
+            run["mtime"] = max(times)
+            bump("runs", run["mtime"])
+        runs.append(run)
+
+    example = {"walkthrough": None, "probe_head": []}
+    st = b.stat("examples/walkthrough.md")
+    if st:
+        bump("examples", st.st_mtime)
+        example["walkthrough"] = b.record("examples/walkthrough.md", st)
+    st = b.stat("examples/probe.jsonl")
+    if st:
+        bump("examples", st.st_mtime)
+        example["probe_head"] = b.cached("examples/probe.jsonl", st, read_jsonl_head, []) or []
+
+    out = {"project": project, "plan": plan, "runs": runs, "example": example,
+           "updated": updated, "errors": b.errors}
+    out.update(records)
+    return out
+
+
+def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
+    """Scan every project directly under root.
+
+    Raises OSError only if root itself cannot be listed. A project hit by an
+    I/O error keeps its previous snapshot, marked with "stale".
+    """
+    prev = prev or {}
+    out = {}
+    for name in sorted(os.listdir(root)):
+        if not valid_name(name):
+            continue
+        board = os.path.join(root, name, "board")
+        try:
+            os.stat(os.path.join(board, "project.json"))
+            data = scan_project(board, memo, new_memo)
+        except MISSING:
+            continue
+        except OSError as e:
+            stale = {"error": _err(e), "at": time.time()}
+            if log:
+                log("[projects] %s: I/O error, keeping previous data: %s" % (name, stale["error"]))
+            out[name] = dict(prev.get(name) or empty_project(name), stale=stale)
+            continue
+        data.update(name=name, scanned_at=time.time(), stale=None)
+        out[name] = data
+    return out
+
+
+def empty_project(name):
+    return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [],
+            "runs": [], "example": {"walkthrough": None, "probe_head": []}, "updated": {},
+            "errors": [], "scanned_at": None}
+
+
+def summary(data):
+    """One row of the project list."""
+    p = data.get("project") or {}
+    times = [t for t in (data.get("updated") or {}).values() if t]
+    active = []
+    for r in data.get("runs") or []:
+        run = r.get("run") or {}
+        if run.get("status") == "运行中":
+            active.append({"id": run.get("id") or r.get("id"), "server": run.get("server"),
+                           "gpus": run.get("gpus"), "pid": run.get("pid"), "tmux": run.get("tmux"),
+                           "attempt": run.get("attempt")})
+    return {"name": data.get("name"), "title": p.get("title") or data.get("name"),
+            "status": p.get("status"), "conclusion": p.get("conclusion"),
+            "current_version": p.get("current_version"), "updated": p.get("updated"),
+            "mtime": max(times) if times else None, "active_runs": active,
+            "n_errors": len(data.get("errors") or []), "stale": data.get("stale")}
+
+
+class ProjectCache:
+    """Scans projects in a background thread, one scan at a time.
+
+    Readers get the last finished snapshot immediately; a slow or hung shared
+    disk only delays the next snapshot (status.running_since shows it).
+    """
+
+    def __init__(self, root, interval=60, log=None):
+        self.root, self.interval = root, interval
+        self.log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
+        self._lock = threading.Lock()
+        self._projects, self._memo = {}, {}
+        self._status = {"root": root, "started": None, "finished": None, "duration": None,
+                        "running_since": None, "error": None, "error_at": None}
+
+    def scan_once(self):
+        t0 = time.time()
+        with self._lock:
+            self._status["running_since"] = t0
+        new_memo = {}
+        try:
+            projects = scan_root(self.root, self._projects, self._memo, new_memo, self.log)
+        except Exception as e:
+            self.log("[projects] scan of %s failed, keeping previous data:\n%s"
+                     % (self.root, traceback.format_exc()))
+            with self._lock:
+                self._status.update(running_since=None, error=_err(e), error_at=time.time())
+            return False
+        t1 = time.time()
+        with self._lock:
+            self._projects, self._memo = projects, new_memo
+            self._status.update(started=t0, finished=t1, duration=round(t1 - t0, 3),
+                                running_since=None, error=None)
+        return True
+
+    def _loop(self):
+        while True:
+            self.scan_once()
+            time.sleep(self.interval)
+
+    def start(self):
+        threading.Thread(target=self._loop, name="project-scan", daemon=True).start()
+
+    def snapshot(self):
+        """(projects, status). Snapshots are replaced, never mutated: treat as read-only."""
+        with self._lock:
+            return self._projects, dict(self._status)
+
+
+def safe_board_file(root, name, relpath):
+    """Real path of an allowed file under root/name/board/, or None."""
+    if not valid_name(name) or not isinstance(relpath, str) or not relpath:
+        return None
+    if relpath.startswith("/") or "\\" in relpath or "\0" in relpath:
+        return None
+    parts = relpath.split("/")
+    if any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+        return None
+    board = os.path.realpath(os.path.join(root, name, "board"))
+    full = os.path.realpath(os.path.join(board, *parts))
+    if not full.startswith(board + os.sep):
+        return None
+    for p in (relpath, full):
+        if os.path.splitext(p)[1].lower() not in FILE_TYPES:
+            return None
+    return full
