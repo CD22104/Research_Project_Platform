@@ -395,12 +395,30 @@ def summary(data):
             active.append({"id": run.get("id") or r.get("id"), "server": run.get("server"),
                            "gpus": run.get("gpus"), "pid": run.get("pid"), "tmux": run.get("tmux"),
                            "attempt": run.get("attempt")})
+    def count(records):
+        out = {}
+        for r in records:
+            s = r.get("meta", {}).get("status")
+            s = s if isinstance(s, str) and s else "未写"  # a list or number must not break counting
+            out[s] = out.get(s, 0) + 1
+        return out
+
+    attempts = data.get("attempts") or []
+    pending = []  # attempts waiting for the user (an empty 预期 alone is not counted)
+    for a in attempts:
+        needs = [x for x in a.get("needs_input") or [] if x != "预期"]
+        if needs:
+            m = a.get("meta", {})
+            pending.append({"file": a.get("file"), "id": m.get("id"), "status": m.get("status"), "needs": needs})
     return {"name": data.get("name"), "title": p.get("title") or data.get("name"),
             "status": p.get("status"), "conclusion": p.get("conclusion"),
             "current_version": p.get("current_version"), "updated": p.get("updated"),
             "mtime": max(times) if times else None, "active_runs": active,
             "n_errors": len(data.get("errors") or []), "stale": data.get("stale"),
-            "scanned_at": data.get("scanned_at")}
+            "scanned_at": data.get("scanned_at"),
+            "n_tracks": len(data.get("tracks") or []), "track_status": count(data.get("tracks") or []),
+            "n_attempts": len(attempts), "attempt_status": count(attempts),
+            "n_runs": len(data.get("runs") or []), "pending": pending}
 
 
 class ProjectCache:

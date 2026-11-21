@@ -106,6 +106,19 @@ class Scan(FixtureCase):
         self.assertEqual([r["id"] for r in s["active_runs"]], ["r002"])
         self.assertEqual(s["active_runs"][0]["gpus"], [2, 3])
         self.assertEqual(s["n_errors"], 3)
+        self.assertEqual((s["n_tracks"], s["n_attempts"], s["n_runs"]), (4, 8, 5))  # 8: setUp adds inside-link.md
+        self.assertEqual(s["track_status"], {"并入主线": 2, "放弃": 1, "进行中": 1})
+        self.assertEqual(s["attempt_status"], {"成功": 1, "失败": 1, "待确认": 1, "部分成功": 1, "搁置中": 1, "未写": 3})
+        self.assertEqual([(x["id"], x["needs"]) for x in s["pending"]],
+                         [("2026-11-15-focal", ["结论和原因", "结论待确认"]), ("2026-11-16-focal-gamma1", ["结论和原因"])])
+
+    def test_summary_tolerates_odd_status_values(self):
+        d = self.demo()
+        d["attempts"][0]["meta"]["status"] = ["a", "b"]
+        d["tracks"][0]["meta"]["status"] = 3
+        s = P.summary(d)
+        self.assertEqual(s["attempt_status"]["未写"], 4)
+        self.assertEqual(s["track_status"]["未写"], 1)
 
 
 class IOFailures(FixtureCase):
