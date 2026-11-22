@@ -36,6 +36,19 @@ board/
   docs/*.md                   其他说明文档
 ```
 
+项目目录本身（`board/` 旁边）固定这样分：
+
+```
+<项目>/
+  CLAUDE.md  NOTES.md  REPORT.md（可选）  pyproject.toml  uv.lock
+  src/  scripts/  configs/        代码
+  data/                           自建数据
+  results/<运行编号>/              大输出：完整预测、日志、中间文件（控制台不显示，只给路径；boardrun 的 output_dir()）
+  ckpt/<运行编号>/                 checkpoint
+  board/                          控制台显示的一切：小而整理过的记录
+```
+放进 `board/` 的文件一分钟内出现在控制台上，不需要别的「上传」步骤；不想给控制台看的东西不要放进 `board/`。
+
 另外，项目根目录（`board/` 旁边）的 `NOTES.md`（进度笔记）和 `REPORT.md`（总报告）会显示在「文档」页。控制台只读这两个固定文件名，不读根目录的其他文件。
 
 控制台忽略 `board/` 里本文件没有提到的内容（例如 `FORMAT.md`、`legacy-site/`）。
@@ -59,11 +72,12 @@ board/
 
 开头是一段字段区：第一行 `---`，若干行 `key: value`，再一行 `---`，之后是正文。值只有三种写法：纯文本、`[a, b]` 形式的列表、`null`。没有嵌套；行内「空格 + `#`」之后是注释。
 
-- **versions**：`id`, `date`, `title`, `parent`（上一个版本或 `null`）, `merged_tracks`（列表）。正文是这个版本的方案：和上一版相比改了什么、为什么。
+- **versions**：`id`, `date`, `title`, `parent`（上一个版本或 `null`）, `merged_tracks`（列表）。正文是这个版本的方案：和上一版相比改了什么、为什么。可以有一节「## 结论」：这个版本得出的结论；控制台用当前版本的这一节作为项目的当前结论（没有时才用 `project.json` 的 `conclusion`）。
 - **tracks**：`id`, `title`, `status`（进行中 / 暂停 / 并入主线 / 放弃）, `from_version`, `started`, `ended`。正文二级标题：假设、现状、结局和原因。
-- **attempts**：`id`, `track`, `date`, `status`, `runs`（列表），`status` 为「待确认」时可加 `proposed`（建议的结论：成功 / 部分成功 / 失败 / 放弃，控制台标成「建议」）。正文二级标题依次为：假设、预期、改了什么、结果、例子、结论和原因。
+- **attempts**：`id`, `track`, `date`, `status`, `runs`（列表）, `after`（可选，列表：这次尝试接在哪几次尝试之后，例如在它们的结果上改进；不写就按同一支线里的日期先后），`status` 为「待确认」时可加 `proposed`（建议的结论：成功 / 部分成功 / 失败 / 放弃，控制台标成「建议」）。正文二级标题依次为：假设、预期、改了什么、结果、例子、结论和原因。
 
 attempts 的 `status`：
+- 计划中：讨论方案时定下要做、还没开始。写好假设和预期，`date` 写计划日期或留空。控制台在流程图上画成虚线节点。
 - 进行中：还在做，结果没出来。
 - 成功：假设成立。
 - 部分成功：假设在某些条件下成立、某些条件下不成立；「结论和原因」里分开写成立的条件和不成立的条件。
@@ -80,7 +94,7 @@ attempts 的 `status`：
 所以「结果」一节：
 - 先一两句话说发生了什么，例如「新策略条款上准确率明显下降，其余三个测试集持平」。
 - 再写运行记录里没有的东西：和预期的对照、观察到的现象、跨运行的比较结论。
-- 不要手抄指标表。正文里需要引用某个数时，它必须也在关联运行的 `metrics` 里。
+- 不要手抄指标表。正文里需要引用某个数时，写成引用：`{{run:<运行编号>/<分组>/<指标>}}`，例如 `{{run:eval-kev_fixed/authz_test_iid/accuracy}}`。控制台显示运行记录里的值并链接到这次运行；运行重跑或改了，正文不用改。
 - 指标的定义写在 `setup.json` 的 `metrics` 里，不在每篇尝试里重复。
 
 同样的规则适用于支线和版本的正文：控制台会在支线页和版本页自动给出「各次运行 × 各测试集」的主指标表，正文只写解读。
@@ -132,11 +146,27 @@ attempts 的 `status`：
 
 ## run.json
 
+**由运行自己写，不手写。** 训练、评测、数据处理脚本用记录模块 `boardrun`（共享盘 `/shared/ssd/dchen/_shared/tools/boardrun`，项目里 `uv add --editable /shared/ssd/dchen/_shared/tools/boardrun`）：
+
+```python
+import boardrun
+with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
+    run.log(step, loss=loss)                  # 曲线 -> metrics.jsonl
+    run.result("<分组>", accuracy=acc, n=n)   # 最终指标 -> metrics[分组]
+    run.sample(id=..., output=..., score=...) # 样例 -> samples.jsonl
+    run.artifact("curve.png")                 # 小图复制到运行目录
+    out = run.output_dir()                    # results/<运行编号>/：大输出，控制台不显示
+```
+正常结束记「完成」，抛异常记「失败」并写明错误，Ctrl-C 或 SIGTERM 记「被中断」。服务器、卡号、进程号、tmux 会话名、commit（有未提交改动时带 `-dirty`）自动填。不是 Python 的命令：`python -m boardrun run --attempt <尝试 id> --kind eval -- <命令>`，按退出码记状态。续跑用 `resumed_from=<上一次的运行编号>`，会得到新编号。
+
+运行记录了 `attempt`，尝试的 `runs` 列表就可以不写（控制台两边都认）。下面是字段说明；没接入模块的旧运行照这个格式手写。
+
 ```
 {"id", "kind", "attempt", "status", "server", "gpus", "pid", "tmux", "started", "ended", "commit", "resumed_from", "config", "metrics", "artifacts"}
 ```
 - `kind`：train / eval / data / smoke / 其他。`kind` 为 data 的运行在运行页单独成表。
-- `status`：运行中 / 完成 / 失败 / 被中断。记录写着运行中、但目标机器上查不到进程时，控制台会标「可能已中断」。
+- `status`：运行中 / 完成 / 失败 / 被中断。记录写着运行中、但目标机器上查不到进程时，控制台会标「可能已中断」。失败和被中断时可以有 `error`（一句话的原因）。
+- `commit`：代码的提交号；末尾 `-dirty` 表示运行时有未提交的改动。
 - `metrics` 按「分组 → 指标」组织，分组通常是测试集，例如 `{"authz_test_iid": {"accuracy": 0.6, "correct": 361, "n": 602}}`。分组名和指标名要在 `setup.json` 里有定义。
 - `config`、`artifacts` 是对象，控制台显示成两列的键值表。
 - `metrics.jsonl`（可选）：每行一个 JSON，含 `step` 和若干数值；只追加写，最后一行没写完的会被跳过。
