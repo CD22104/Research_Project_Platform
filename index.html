@@ -6,17 +6,18 @@
 <title>CD的研究控制台</title>
 <style>
 :root{
-  --bg:#f5f6f8; --card:#fff; --line:#e3e6eb; --text:#1c2330; --muted:#6b7585; --side:#fbfbfc;
-  --free:#1a9d5b; --free-bg:#e5f6ec; --busy:#c7791a; --busy-bg:#fdf1dc;
-  --full:#cf3f3f; --full-bg:#fbe6e6; --accent:#3566d6; --accent-bg:#e8eefb; --track:#e9ecf1;
-  --part:#0f8a8a; --part-bg:#dff3f2; --hover:#f0f2f5;
+  /* green theme: deep green for the interface, bright green for "free / success", warm grey-greens for neutrals */
+  --bg:#f3f6f3; --card:#fff; --line:#dfe6e0; --text:#1b2620; --muted:#64736a; --side:#f8faf8;
+  --free:#2a9d4b; --free-bg:#e3f4e6; --busy:#c47a17; --busy-bg:#fbf0dc;
+  --full:#cc3f3f; --full-bg:#fae6e4; --accent:#11695a; --accent-bg:#e0efe9; --track:#e6ebe6;
+  --part:#857a12; --part-bg:#f3efd2; --hover:#edf2ee; --bar:#8db9a6;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --bg:#12151b; --card:#1b2029; --line:#2b323e; --text:#e6e9ef; --muted:#8e98a8; --side:#171b22;
-    --free:#4ccb85; --free-bg:#16321f; --busy:#e3a548; --busy-bg:#3a2c12;
-    --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#7ba0f5; --accent-bg:#1e2a45; --track:#2a303b;
-    --part:#4fc7c3; --part-bg:#123331; --hover:#222834;
+    --bg:#101512; --card:#18201b; --line:#29332c; --text:#e3ebe5; --muted:#8c9a91; --side:#141a16;
+    --free:#5acb7c; --free-bg:#16311f; --busy:#e3a548; --busy-bg:#3a2c12;
+    --full:#ef6b6b; --full-bg:#3d1c1c; --accent:#4fbf9f; --accent-bg:#15302a; --track:#252e28;
+    --part:#cdbd4c; --part-bg:#33301a; --hover:#1f2822; --bar:#4d7a68;
   }
 }
 *{box-sizing:border-box}
@@ -196,7 +197,7 @@ a.brow:hover{background:var(--hover);text-decoration:none}
 .brow.on{background:var(--accent-bg)}
 .bl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt{height:12px;background:var(--track);border-radius:3px;overflow:hidden;display:flex}
-.bt i{display:block;height:100%;background:var(--accent);opacity:.7;border-radius:3px}
+.bt i{display:block;height:100%;background:var(--bar);border-radius:3px}
 .brow.best .bt i{background:var(--free);opacity:1}
 .brow.dim .bt i{background:repeating-linear-gradient(45deg,var(--muted) 0 3px,transparent 3px 6px);opacity:.7}
 .brow.dim .bl,.brow.dim .bv{color:var(--muted)}
@@ -301,14 +302,14 @@ details.ovarch[open]>summary{border-bottom:0;margin-bottom:8px}
 .reply{margin:8px 0 4px;display:flex;flex-direction:column;gap:6px}
 .opts{display:flex;gap:6px;flex-wrap:wrap}
 .opt{padding:4px 12px;font-size:13px}
-.opt.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.opt.on{background:var(--accent);border-color:var(--accent);color:var(--card)}
 .opt .rec{font-size:11px;margin-left:6px;padding:0 5px;border-radius:4px;background:var(--free-bg);color:var(--free);font-weight:600}
 .opt.on .rec{background:rgba(255,255,255,.25);color:#fff}
 .reply textarea{font:inherit;font-size:13px;width:100%;max-width:720px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
   background:var(--card);color:var(--text);resize:vertical}
 .reply textarea:focus{outline:2px solid var(--accent-bg);border-color:var(--accent)}
 .ract{display:flex;gap:10px;align-items:center}
-.send{background:var(--accent);border-color:var(--accent);color:#fff;font-size:13px}
+.send{background:var(--accent);border-color:var(--accent);color:var(--card);font-size:13px}
 .send:disabled{opacity:.6}
 .rerr{color:var(--full);font-size:12px}
 .ans{margin:8px 0 4px;padding:6px 10px;border-left:3px solid var(--accent);background:var(--accent-bg);border-radius:0 6px 6px 0}
