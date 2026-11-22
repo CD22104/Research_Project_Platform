@@ -171,7 +171,7 @@ def read_jsonl_head(path, n=HEAD_ROWS):
 # ---------------------------------------------------------------- scanning
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")  # no leading "_" or "."
-RECORD_DIRS = ("versions", "tracks", "attempts")
+RECORD_DIRS = ("versions", "tracks", "attempts", "method")  # method/: one file per step of how the method works
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg")
 TEXT = "text/plain; charset=utf-8"  # raw records are shown as text, never rendered
 FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -526,6 +526,32 @@ def check_project(d, limit=200):
         at = r["run"].get("attempt")
         if at and at not in att_ids:
             add(r["dir"] + "/run.json", "attempt「%s」不存在" % at)
+    steps = d.get("method") or []
+    step_ids = _ids(steps)
+    setup_methods = {x.get("id") for x in _list((d.get("setup") or {}).get("methods")) if isinstance(x, dict)}
+    for st in steps:
+        m = st["meta"]
+        if not isinstance(m.get("id"), str):
+            add(st["file"], "没有 id，方法图上画不出这一步")
+            continue
+        for key in ("parent", "variant_of"):
+            if m.get(key) and m[key] not in step_ids:
+                add(st["file"], "%s「%s」不是方法里的步骤" % (key, m[key]))
+        if m.get("parent") and m.get("variant_of"):
+            add(st["file"], "parent 和 variant_of 只写一个：变体和它的原步骤在同一层")
+        for x in _list(m.get("next")):
+            if x not in step_ids:
+                add(st["file"], "next 里的「%s」不是方法里的步骤" % x)
+        for t in _list(m.get("tracks")):
+            if t not in track_ids:
+                add(st["file"], "tracks 里的支线「%s」不存在" % t)
+        for x in _list(m.get("methods")):
+            if setup_methods and x not in setup_methods:
+                add(st["file"], "methods 里的「%s」不在 setup.json 的 methods 里" % x)
+    for a in d["attempts"]:
+        for x in _list(a["meta"].get("method")):
+            if x not in step_ids:
+                add(a["file"], "method 里的「%s」不是方法里的步骤" % x)
 
     s = d.get("setup")
     if s:
@@ -594,7 +620,7 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 
 
 def empty_project(name):
-    return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [],
+    return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [], "method": [],
             "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
             "todos": [], "answers": {}, "marks": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 

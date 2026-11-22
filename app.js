@@ -13,7 +13,7 @@ const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-T
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
-const TABS = [['flow', '流程'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
+const TABS = [['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
 const PAGES = ['overview', 'gpu', 'todo', 'guide', 'new'];
 
 function route() {
@@ -482,7 +482,7 @@ function pageProject(r) {
     : `<div class="empty">正在读取 ${esc(r.name)}…</div>`;
   const p = d.project || {};
   const unread = docItems(d).filter(x => x.state === 'unread' || x.state === 'changed').length;
-  const counts = {flow: d.attempts.length || null, setup: null, runs: d.runs.length, examples: (d.example.probe_head || []).length || null,
+  const counts = {method: methodIndex(d).steps.length || null, flow: d.attempts.length || null, setup: null, runs: d.runs.length, examples: (d.example.probe_head || []).length || null,
     docs: docItems(d).length ? (unread ? `${unread} 未看 / ${docItems(d).length}` : docItems(d).length) : null};
   const nameHtml = ui.renaming
     ? `<span class="rename"><input id="rename-input" data-p="${esc(d.name)}" maxlength="24" value="${esc(p.title || d.name)}" placeholder="控制台里显示的名字">
@@ -496,7 +496,7 @@ function pageProject(r) {
     ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
     <nav class="ptabs">${TABS.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')}</nav>`;
-  const body = {flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
+  const body = {method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
   return head + notices(d) + body;
 }
 
@@ -613,7 +613,7 @@ function methodFlow(d) {
 }
 function setupCard(d) {  // the 实验设置 tab
   const c = ctx(d), s = c.setup, name = d.name;
-  if (!s.present) return `<div class="card"><h2>实验设置</h2>${methodFlow(d) ? `<div class="pad">${methodFlow(d)}</div>` : ''}<div class="empty">还没有实验设置（board/setup.json）。
+  if (!s.present) return `<div class="card"><h2>实验设置</h2>${methodFlow(d) ? `<div class="pad">${methodIndex(d).steps.length ? '' : methodFlow(d)}</div>` : ''}<div class="empty">还没有实验设置（board/setup.json）。
     在这个项目的会话里说「补实验设置」，会话会按整体方案写好目标、数据集、模型、指标和方法的定义；之后更新方案或定新版本时会同步更新。
     写好后这里会像论文的「实验设置」一节那样列出来，运行页的分组和指标也会链接到这里。</div></div>`;
   const row = (anchor, cells) => `<tr data-anchor="${esc(anchor)}">${cells.map(x => `<td>${x}</td>`).join('')}</tr>`;
@@ -632,7 +632,7 @@ function setupCard(d) {  // the 实验设置 tab
     ${table('指标', mt.length, ['名称', '方向', '说明'], mt.map(x => row('mt:' + x.id, [
       `<b>${esc(x.name || x.id)}</b><div class="small">${esc(x.id)}</div>`, esc(BETTER[x.better] || '—'), esc(x.about || '')])))}
     ${table('方法', s.methods.length, ['名称', '支线', '运行', '说明'], s.methods.map(x => row('method:' + x.id, [
-      `<b>${esc(x.name || x.id)}</b>`, x.track && c.trackById.get(x.track) ? `<a href="${plink(name, 'flow', 't:' + x.track)}">${esc(c.trackById.get(x.track).meta.title || x.track)}</a>` : '',
+      `<b>${esc(x.name || x.id)}</b>${methodIndex(d).stepsOfSetupMethod(x.id).map(st => `<div class="small"><a href="${plink(name, 'method', st.meta.id)}">怎么做 →</a></div>`).join('')}`, x.track && c.trackById.get(x.track) ? `<a href="${plink(name, 'flow', 't:' + x.track)}">${esc(c.trackById.get(x.track).meta.title || x.track)}</a>` : '',
       runsOfMethod(x).map(r => c.runById.get(r) ? `<a href="${plink(name, 'runs', r)}">${esc(r)}</a>` : `<span class="faint">${esc(r)}</span>`).join('<br>'),
       esc(x.about || '')])))}
     </div></div></div>`;
@@ -788,6 +788,108 @@ function tabFlow(d, r) {
       `<div class="flow" style="--fw:${W}px">${flowSvg(L, sel)}${rows}</div>`}</div></div><div>${refs(detail, d)}</div></div>`;
 }
 
+// ------------------------------------------------------------ 方法: how the method works, step by step; a step can open into its own sub-flow
+// board/method/<id>.md: parent (the step it is part of), next (arrows on the same level), variant_of (another way to do
+// that step), tracks (tracks trying it), methods (setup.json method ids)
+function methodIndex(d) {
+  if (d._method) return d._method;
+  const c = ctx(d), steps = (d.method || []).filter(x => typeof x.meta.id === 'string');
+  const byId = new Map(steps.map(x => [x.meta.id, x])), valid = id => typeof id === 'string' && byId.has(id);
+  const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String);
+  const slot = x => valid(x.meta.variant_of) && x.meta.variant_of !== x.meta.id ? byId.get(x.meta.variant_of) : x;
+  const parentOf = x => { const p = slot(x).meta.parent; return valid(p) && p !== x.meta.id ? p : null; };
+  const kids = new Map();
+  for (const x of steps) if (slot(x) === x) { const k = parentOf(x) || ''; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(x); }
+  // a level in the order of its arrows (next), then file order
+  const level = k => {
+    const xs = kids.get(k) || [], ids = new Set(xs.map(x => x.meta.id)), indeg = new Map(xs.map(x => [x.meta.id, 0]));
+    for (const x of xs) for (const nx of list(x.meta.next)) if (ids.has(nx)) indeg.set(nx, indeg.get(nx) + 1);
+    const out = [], seen = new Set(), queue = xs.filter(x => !indeg.get(x.meta.id));
+    while (queue.length) {
+      const x = queue.shift();
+      if (seen.has(x.meta.id)) continue;
+      seen.add(x.meta.id); out.push(x);
+      for (const nx of list(x.meta.next)) if (ids.has(nx)) { indeg.set(nx, indeg.get(nx) - 1); if (!indeg.get(nx)) queue.push(byId.get(nx)); }
+    }
+    return out.concat(xs.filter(x => !seen.has(x.meta.id)));
+  };
+  const variants = x => steps.filter(y => y !== x && y.meta.variant_of === x.meta.id);
+  const path = x => { const out = []; let cur = x; while (cur && out.length < 12 && !out.includes(cur)) { out.unshift(cur); const p = parentOf(cur); cur = p ? byId.get(p) : null; } return out; };
+  const hasInside = x => (kids.get(x.meta.id) || []).length > 0;
+  // experiments on a step: its tracks' attempts, plus attempts that name the step in their method field
+  const tracksOf = x => list(x.meta.tracks).map(t => c.trackById.get(t)).filter(Boolean);
+  const attemptsOf = x => d.attempts.filter(a => list(x.meta.tracks).includes(a.meta.track) || list(a.meta.method).includes(x.meta.id));
+  const stepsOfAttempt = a => steps.filter(x => list(x.meta.tracks).includes(a.meta.track) || list(a.meta.method).includes(x.meta.id));
+  const stepsOfTrack = tid => steps.filter(x => list(x.meta.tracks).includes(tid));
+  const stepsOfSetupMethod = mid => steps.filter(x => list(x.meta.methods).includes(mid));
+  const title = x => x.meta.title || x.meta.id;
+  return d._method = {steps, byId, slot, level, variants, path, hasInside, tracksOf, attemptsOf, stepsOfAttempt, stepsOfTrack, stepsOfSetupMethod, title, list};
+}
+const stepLink = (d, x) => `<a class="chip" href="${plink(d.name, 'method', x.meta.id)}">${esc(methodIndex(d).title(x))}</a>`;
+function methodTab(d, x, hl) {  // one step as a box on its level
+  const M = methodIndex(d), sec = Object.fromEntries(sectionsOf(x.body).list), vs = M.variants(x);
+  const atts = [x, ...vs].flatMap(M.attemptsOf), inside = M.hasInside(x) || vs.some(M.hasInside);
+  const dots = [...new Set(atts)].slice(0, 12).map(a => { const t = a.meta.status === '计划中' ? 'plan' : B.tone(a.meta.status);
+    return `<span class="sym s-${t}" title="${esc(attName(a))}：${esc(a.meta.status || '')}">${t === 'plan' ? '○' : FSYM[t] || '○'}</span>`; }).join('');
+  return `<a class="mstep${hl ? ' on' : ''}" href="${plink(d.name, 'method', x.meta.id)}"><b>${esc(M.title(x))}</b>
+    ${gist(sec['一句话']) ? `<span class="ms1">${esc(gist(sec['一句话']))}</span>` : ''}
+    <span class="ms2">${vs.length ? `<span class="tag2">${vs.length + 1} 种做法</span>` : ''}${inside ? '<span class="tag2">可展开</span>' : ''}${dots}</span></a>`;
+}
+function tabMethod(d, r) {
+  const M = methodIndex(d), name = d.name;
+  if (!M.steps.length) {
+    return `<div class="card"><h2>方法</h2><div class="pad">${methodFlow(d)}
+      <div class="empty">还没有把方法拆成步骤（board/method/&lt;步骤&gt;.md）。在项目会话里说「把方法写成步骤」，会话会按整体方案写出每一步怎么做、输入输出和关键设置；
+      某一步还可以有不同做法和自己的子流程。写好后这里能一层层点开，并和实验互相链接。</div></div></div>`;
+  }
+  const sel = r.item != null ? M.byId.get(r.item) : null;
+  const path = sel ? M.path(sel) : [];
+  const rows = [];
+  let key = '', label = '方法';
+  for (let i = 0; i <= path.length; i++) {
+    const lv = M.level(key);
+    if (!lv.length) break;
+    const p = path[i], hl = p ? M.slot(p) : null;
+    rows.push(`<div class="mrow"><div class="mlab">${label}</div><div class="mline">${lv.map(x => methodTab(d, x, x === hl)).join('<span class="marr">→</span>')}</div></div>`);
+    if (!p) break;
+    const vs = M.variants(hl);
+    if (vs.length) rows.push(`<div class="mrow"><div class="mlab">「${esc(M.title(hl))}」的做法</div><div class="mline chips">${[hl, ...vs].map(x =>
+      `<a class="chip${x === p ? ' on' : ''}" href="${plink(name, 'method', x.meta.id)}">${esc(M.title(x))}${x === hl ? '<span class="faint">（原做法）</span>' : ''}</a>`).join('')}</div></div>`);
+    key = p.meta.id;
+    label = i === path.length - 1 ? `「${esc(M.title(p))}」的子流程` : `「${esc(M.title(p))}」里面`;
+  }
+  if (r.item != null && !sel) rows.push(`<div class="notice">找不到步骤「${esc(r.item)}」，可能已经改名或删除。</div>`);
+  return `<div class="card mcard">${rows.join('')}</div>` + (sel ? refs(methodDetail(d, sel, path), d) :
+    `<div class="detail"><h2>方法</h2><div class="md"><p>上面是方法从输入到输出的流程，点任一步看它怎么做：输入和输出、具体做法、关键设置、一个例子，以及试过它的实验。
+      标着「N 种做法」的步骤有不同做法可以比较，「可展开」的步骤里面还有自己的子流程。</p></div>
+      ${M.level('').map(x => { const g = gist(Object.fromEntries(sectionsOf(x.body).list)['一句话']); return `<div class="kv2"><span>${esc(M.title(x))}</span><div>${esc(g)}</div></div>`; }).join('')}
+      ${docsOfStep(d, 'm:')}</div>`);
+}
+function methodDetail(d, x, path) {
+  const M = methodIndex(d), c = ctx(d), name = d.name, sec = Object.fromEntries(sectionsOf(x.body).list), base = M.slot(x);
+  const crumb = `<div class="crumbs"><a href="${plink(name, 'method')}">方法</a>${path.slice(0, -1).map(p => ` <span class="small">›</span> <a href="${plink(name, 'method', p.meta.id)}">${esc(M.title(p))}</a>`).join('')}</div>`;
+  const box = (t, text) => (text || '').trim() ? `<div class="sec"><h3>${t}</h3><div class="md">${B.md(text)}</div></div>` : '';
+  const known = ['一句话', '输入和输出', '怎么做', '关键设置', '例子'];
+  const extra = Object.keys(sec).filter(k => !known.includes(k)).map(k => box(esc(k), sec[k])).join('');
+  const tracks = M.tracksOf(x), atts = M.attemptsOf(x);
+  const exp = tracks.length || atts.length ? `<div class="sec"><h3>试过它的实验</h3>
+    ${tracks.length ? `<div class="chips">${tracks.map(t => `<a class="chip" href="${plink(name, 'flow', 't:' + idOf(t))}">支线 · ${esc(t.meta.title || idOf(t))} · ${esc(statusOf(t))}</a>`).join('')}</div>` : ''}
+    <ul class="gists">${atts.map(a => { const t = a.meta.status === '计划中' ? 'plan' : B.tone(a.meta.status);
+      return `<li><span class="sym s-${t}">${t === 'plan' ? '○' : FSYM[t] || '○'}</span> <a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>
+        <span class="small">${esc(a.meta.status || '')}</span>${gistOf(d, a) ? '：' + esc(gistOf(d, a)) : ''}</li>`; }).join('')}</ul></div>`
+    : '<div class="sec"><h3>试过它的实验</h3><div class="none">还没有支线或尝试关联到这一步（在步骤里写 tracks，或在尝试里写 method）。</div></div>';
+  const smeth = id => (c.setup.methods || []).find(m => m.id === id);
+  const setupIds = M.list(x.meta.methods).filter(smeth);
+  const setup = setupIds.length ? `<div class="sec"><h3>实验设置里对应的方法</h3><div class="chips">${setupIds.map(id =>
+    `<a class="chip" href="${plink(name, 'setup', 'method:' + id)}">${esc(smeth(id).name || id)}</a>`).join('')}</div></div>` : '';
+  const others = x === base ? M.variants(x) : [base, ...M.variants(base).filter(v => v !== x)];
+  return `<div class="detail">${crumb}<h2>${esc(M.title(x))}${x !== base ? ` <span class="tag2">「${esc(M.title(base))}」的一种做法</span>` : ''}</h2>
+    <div class="dmeta"><span>${esc(x.file)}</span>${others.length ? `<span>同一步的其他做法：${others.map(o => `<a href="${plink(name, 'method', o.meta.id)}">${esc(M.title(o))}</a>`).join('、')}</span>` : ''}</div>
+    ${gist(sec['一句话']) ? `<div class="oneline">${esc(plain(sec['一句话']).split('\n').filter(Boolean).join(' '))}</div>` : ''}
+    ${box('输入和输出', sec['输入和输出'])}${box('怎么做', sec['怎么做'])}${box('关键设置', sec['关键设置'])}${box('例子', sec['例子'])}${extra}
+    ${exp}${setup}${docsOfStep(d, 'm:' + x.meta.id)}</div>`;
+}
+
 // the headline metric across some runs, as bars (names from setup.json)
 function headlineBars(d, runs, title) {
   const c = ctx(d), h = c.disp.headline;
@@ -857,7 +959,9 @@ function trackDetail(d, t) {
       ${gist ? `<div class="small">${esc(gist)}</div>` : ''}</div></li>`;
   }).join('');
   const runs = [...new Set(atts.flatMap(a => c.runsOf(a).filter(r => !r.missing)))];
+  const msteps = methodIndex(d).stepsOfTrack(tid);
   return `<div class="detail">${crumbs(d, {version: ver})}<h2>${esc(t.meta.title || tid)} ${B.pill(t.meta.status)}</h2>
+    ${msteps.length ? `<div class="chips mstepsof"><span class="small">试的是方法里的：</span>${msteps.map(x => stepLink(d, x)).join('')}</div>` : ''}
     <div class="dmeta">${placement ? `<span>${placement}</span>` : ''}<span>${esc(B.day(t.meta.started))}${t.meta.ended ? ' → ' + esc(B.day(t.meta.ended)) : ''}</span><span>${esc(t.file)}</span></div>
     <div class="sec first"><h3>尝试的先后（${atts.length}）</h3>${steps ? `<ol class="steps">${steps}</ol>` : '<div class="none">还没有尝试</div>'}</div>
     ${runsMatrix(d, runs, '这条支线的各次运行')}
@@ -904,6 +1008,7 @@ function attemptDetail(d, a, L) {
   return `<div class="detail">${crumbs(d, {version: ver, track: t})}
     <h2>${esc(attName(a))} ${m.status === '计划中' ? '<span class="pill t-other">计划中</span>' : B.pill(m.status)}${pend.length ? ` <span class="todo">${needsLabel(pend)}</span>` : ''}</h2>
     <div class="dmeta"><span>${esc(attDate(a)) || '没有日期'}</span>${k >= 0 ? `<span>这条支线的第 ${k + 1} / ${siblings.length} 次尝试</span>` : '<span>没有归属支线</span>'}<span>${esc(a.file)}</span></div>
+    ${methodIndex(d).stepsOfAttempt(a).length ? `<div class="chips mstepsof"><span class="small">改的是方法里的：</span>${methodIndex(d).stepsOfAttempt(a).map(x => stepLink(d, x)).join('')}</div>` : ''}
     <div class="oneline s-${tone}">${line}</div>${confirm}${happened}${example}${data}${conclusion}${docsOfStep(d, 'a:' + attKey(a))}${rest}${nav}</div>`;
 }
 
@@ -1109,7 +1214,7 @@ function docItems(d) {
     const m = x.meta || {}, mark = marks[x.file] || null;
     const changed = !!(mark && typeof mark.mtime === 'number' && x.mtime > mark.mtime + 1);
     out.push(Object.assign({file: x.file, body: x.body, mtime: x.mtime, title: m.title || base(x),
-      about: typeof m.about === 'string' && /^[vta]:/.test(m.about) ? m.about : null,
+      about: typeof m.about === 'string' && /^[vtam]:/.test(m.about) ? m.about : null,
       kind: typeof m.kind === 'string' ? m.kind : null, replaces: (Array.isArray(m.replaces) ? m.replaces : m.replaces ? [m.replaces] : []).map(String),
       mark, state: !mark ? 'unread' : changed ? 'changed' : mark.mark === '确认' ? 'ok' : 'seen'}, extra));
   };
@@ -1135,6 +1240,7 @@ function placeLabel(d, key) {
   const c = ctx(d);
   if (!key) return '整个项目';
   const id = key.slice(2);
+  if (key.startsWith('m:')) { const M = methodIndex(d), x = M.byId.get(id); return x ? '方法 · ' + M.path(x).map(M.title).join(' › ') : null; }
   if (key.startsWith('v:')) { const v = c.verById.get(id); return v ? `版本 ${id}${v.meta.title ? ' · ' + v.meta.title : ''}` : null; }
   if (key.startsWith('t:')) { const t = c.trackById.get(id); return t ? '支线 · ' + (t.meta.title || id) : null; }
   const a = c.attById.get(id);
@@ -1158,7 +1264,8 @@ function tabDocs(d, r) {
   // groups follow the flow: the whole project first, then the steps in the flow's order, then unknown places
   const L = d._flow || (d._flow = B.flowLayout(d)), order = new Map(L.nodes.map(n => [n.key, n.row]));
   const groupKey = x => x.about && placeLabel(d, x.about) ? x.about : x.about ? '?' + x.about : '';
-  const rank = g => g === '' ? -1 : g.startsWith('?') ? 1e9 : order.get(g) ?? 1e8;
+  const mOrder = new Map(methodIndex(d).steps.map((x, i) => [ 'm:' + x.meta.id, i]));
+  const rank = g => g === '' ? -1 : g.startsWith('?') ? 1e9 : g.startsWith('m:') ? -1 + (mOrder.get(g) + 1) / 1e4 : order.get(g) ?? 1e8;
   const groups = [...new Set(docs.map(groupKey))].sort((a, b) => rank(a) - rank(b));
   const sel = all.find(x => x.id === r.item) || docs[0] || all[0];
   const qs = {f, k};
@@ -1166,7 +1273,7 @@ function tabDocs(d, r) {
       <div class="row1">${docBadge(x)}<span class="name">${esc(x.title)}</span>${x.kind ? `<span class="tag2">${esc(x.kind)}</span>` : ''}</div>
       <div class="row2"><span>${esc(x.file)}</span><span>${B.ago(x.mtime, d.now)}更新</span>${x.replacedBy ? `<span>已被「${esc(x.replacedBy.title)}」取代</span>` : ''}</div></a>`;
   const items = groups.map(g => `<div class="tgroup">${g === '' ? '整个项目' : g.startsWith('?') ? '找不到的位置：' + esc(g.slice(1)) :
-      `<a href="${plink(name, 'flow', g)}">${esc(placeLabel(d, g))}</a>`}</div>` + docs.filter(x => groupKey(x) === g).map(item).join('')).join('');
+      `<a href="${g.startsWith('m:') ? plink(name, 'method', g.slice(2)) : plink(name, 'flow', g)}">${esc(placeLabel(d, g))}</a>`}</div>` + docs.filter(x => groupKey(x) === g).map(item).join('')).join('');
   const count = st => all.filter(x => x.state === st).length;
   const chip = (label, nf, nk, n) => `<a class="chip${f === nf && k === nk ? ' on' : ''}" href="${plink(name, 'docs', r.item, {f: nf, k: nk})}">${label}${n != null ? ' ' + n : ''}</a>`;
   const kinds = DOC_KINDS.filter(x => all.some(y => y.kind === x));
@@ -1183,7 +1290,7 @@ function tabDocs(d, r) {
   return `<div class="md2"><div class="list">${filters}<div class="items">${items || '<div class="empty">没有符合条件的文档。</div>'}</div>
       <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），这里就按流程归类，格式见 BOARD_FORMAT.md。</div></div>
     <div class="detail"><h2>${esc(sel.title)} ${sel.kind ? `<span class="tag2">${esc(sel.kind)}</span>` : ''}${docBadge(sel)}</h2>
-      <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${plink(name, 'flow', sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
+      <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${sel.about.startsWith('m:') ? plink(name, 'method', sel.about.slice(2)) : plink(name, 'flow', sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
         <span>${esc(sel.file)}</span><span>${B.ago(sel.mtime, d.now)}更新</span>${rel.map(x => `<span>${x}</span>`).join('')}</div>
       <div class="marks">${mk('看过', '看过')}${mk('确认', '确认内容')}${sel.mark ? '<button class="mk" data-mark="" data-file="' + esc(sel.file) + '">清除标记</button>' : ''}
         <span class="small">「确认」表示你认可这篇的内容，会话改它之前会先问你</span></div>${markNote}

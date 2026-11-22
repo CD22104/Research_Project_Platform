@@ -87,7 +87,8 @@ ROUTES = {
     "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
-    "p_doc_review": "#/p/demo/docs/focal-review.md",
+    "p_doc_review": "#/p/demo/docs/focal-review.md", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
+    "p_method_ramp": "#/p/demo/method/warmup-ramp",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
@@ -136,7 +137,7 @@ class Pages(unittest.TestCase):
 
     def test_tabs_follow_the_hierarchy(self):
         tabs = re.findall(r'<a class="ptab[^"]*" href="#/p/demo/(\w+)">([^<]+)', self.m("p_overview"))
-        self.assertEqual(tabs, [("flow", "流程"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"), ("docs", "文档")])
+        self.assertEqual(tabs, [("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"), ("docs", "文档")])
         for k in ["p_old_overview", "p_road"]:                                       # old addresses land on the flow
             self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m(k), k)
 
@@ -216,6 +217,27 @@ class Pages(unittest.TestCase):
         self.assertRegex(run, r'<table class="kv">.*<th>warmup</th><td class="num">500</td>')
         self.assertNotIn('{"lr"', run)
         self.assertIn("<b>r005</b>", self.m("p_runs_data"))
+
+    def test_method_levels_and_links(self):
+        top = self.m("p_method")
+        line = re.findall(r'<a class="mstep[^"]*" href="#/p/demo/method/([\w-]+)"', top)
+        self.assertEqual([x for x in line if x != "broken"], ["data", "train", "eval"])   # the top level follows its arrows
+        self.assertIn("broken", line)                                                     # a step with a wrong parent still shows
+        self.assertIn('<span class="tag2">2 种做法</span>', top)                          # train has a variant
+        w = self.m("p_method_warmup")
+        self.assertIn('<a class="mstep on" href="#/p/demo/method/train"', w)              # the variant's place is highlighted
+        self.assertRegex(w, r'<a class="chip on" href="#/p/demo/method/warmup">线性预热</a>')
+        self.assertIn("「线性预热」的子流程", w)
+        self.assertEqual(re.findall(r'<a class="mstep[^"]*" href="#/p/demo/method/(warmup-[\w]+)"', w), ["warmup-ramp", "warmup-hold"])
+        self.assertIn("「训练」的一种做法", w)
+        self.assertIn('href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">lr-sweep</a>', w)    # experiments on this step
+        self.assertIn('href="#/p/demo/setup/method%3Awarmup"', w)                         # its setup.json method
+        self.assertIn('<a class="ref" href="#/p/demo/runs/r001"', w)                       # numbers come from the run
+        ramp = self.m("p_method_ramp")
+        self.assertIn('<a href="#/p/demo/method/warmup">线性预热</a>', ramp)               # breadcrumbs up the levels
+        self.assertIn('<a class="mstep on" href="#/p/demo/method/warmup-ramp"', ramp)
+        self.assertIn('改的是方法里的：</span><a class="chip" href="#/p/demo/method/warmup">线性预热</a>', self.m("p_road_a"))
+        self.assertIn('href="#/p/demo/method/warmup">怎么做 →</a>', self.m("p_setup"))
 
     def test_examples_and_docs(self):
         ex = self.m("p_examples")

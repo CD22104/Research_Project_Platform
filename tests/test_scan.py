@@ -76,7 +76,7 @@ class Scan(FixtureCase):
         self.assertIn("<script>", d["plan"]["body"])       # backend returns raw text; frontend escapes
         self.assertIn("<script>", d["example"]["walkthrough"]["body"])
         self.assertEqual(len(d["example"]["probe_head"]), 2)
-        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs"})
+        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method"})
 
     def test_runs(self):
         d = self.demo()
@@ -247,6 +247,10 @@ class Extras(FixtureCase):
                      ("attempts/2026-11-15-focal.md", "没有「例子」小节"),
                      ("attempts/2026-11-18-no-frontmatter.md", "没有字段区（开头的 --- 块），读不到 id、支线和状态")]:
             self.assertIn(want, checks)
+        for want in [("method/broken.md", "parent「nope」不是方法里的步骤"),             # method steps link to real steps and tracks
+                     ("method/broken.md", "tracks 里的支线「t-missing」不存在")]:
+            self.assertIn(want, checks)
+        self.assertFalse([c for c in checks if c[0].startswith("method/") and c[0] != "method/broken.md"])
         self.assertNotIn(("attempts/2026-11-10-lr-sweep.md", "没有「例子」小节"), checks)
         self.assertFalse([c for c in checks if c[0] == "tracks/t-old.md"])   # attached through v1.merged_tracks
 
