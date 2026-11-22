@@ -81,9 +81,10 @@ class CommonJs(unittest.TestCase):
 
 ROUTES = {
     "overview": "#/overview", "gpu": "#/gpu", "todo": "#/todo", "new": "#/new", "missing": "#/p/nope/overview",
-    "p_overview": "#/p/demo/overview", "p_setup": "#/p/demo/setup", "p_setup_anchor": "#/p/demo/setup/ds:测试集",
-    "p_road": "#/p/demo/roadmap", "p_road_t": "#/p/demo/roadmap/t:t-loss", "p_road_a": "#/p/demo/roadmap/a:2026-11-10-lr-sweep",
-    "p_road_todo": "#/p/demo/roadmap?todo=1", "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
+    "p_overview": "#/p/demo/flow", "p_setup": "#/p/demo/setup", "p_setup_anchor": "#/p/demo/setup/ds:测试集",
+    "p_road": "#/p/demo/roadmap", "p_road_t": "#/p/demo/flow/t:t-loss", "p_road_a": "#/p/demo/flow/a:2026-11-10-lr-sweep",
+    "p_old_overview": "#/p/demo/overview", "p_road_v": "#/p/demo/roadmap/v:v2", "p_failed": "#/p/demo/flow/a:2026-11-12-aug-mixup",
+    "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
@@ -125,7 +126,7 @@ class Pages(unittest.TestCase):
         d = self.pages["p_overview"][0]
         self.assertIn('<a class="brand" href="#/overview">CD的研究控制台</a>', d)
         self.assertIn('<span class="lbl">待办</span><span class="cnt">5</span>', d)   # 2 pending attempts + 2 open project to-dos + 1 global
-        self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/overview"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
+        self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/flow"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
         self.assertEqual(title(self.pages["gpu"][0]), "(0 空) CD的研究控制台")
         for k in ["p_overview", "legacy_project"]:
             self.assertEqual(title(self.pages[k][0]), "演示项目 · CD的研究控制台", k)
@@ -134,10 +135,14 @@ class Pages(unittest.TestCase):
 
     def test_tabs_follow_the_hierarchy(self):
         tabs = re.findall(r'<a class="ptab[^"]*" href="#/p/demo/(\w+)">([^<]+)', self.m("p_overview"))
-        self.assertEqual(tabs, [("overview", "概览"), ("setup", "实验设置"), ("roadmap", "路线"), ("runs", "运行"), ("examples", "样例"), ("docs", "文档")])
+        self.assertEqual(tabs, [("flow", "流程"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"), ("docs", "文档")])
+        for k in ["p_old_overview", "p_road"]:                                       # old addresses land on the flow
+            self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m(k), k)
 
-    def test_overview(self):
+    def test_overview(self):                                    # the flow with nothing selected shows the project summary
         d = self.m("p_overview")
+        self.assertIn("<h2>项目概况</h2>", d)
+        self.assertIn("来自 project.json", d)
         self.assertIn('<p class="concl">预热 500 步后验证集准确率稳定提升约 2 个点。</p>', d)
         self.assertRegex(d, r'最好的准确率 · 同分布测试集</div>\s*<div class="v">0.8100</div><div class="s">来自 <b>线性预热 500 步</b>（488/602）')
         self.assertIn('href="#/p/demo/setup/ds%3A%E6%B5%8B%E8%AF%95%E9%9B%86"', d)          # summary links to the definition
@@ -156,36 +161,47 @@ class Pages(unittest.TestCase):
         self.assertIn("越高越好", d)
         self.assertIn('<tr data-anchor="ds:测试集" class="flash">', self.m("p_setup_anchor"))
 
-    def test_roadmap_tree_and_version(self):
-        d = self.m("p_road")
-        tree = re.findall(r'<a class="tn (tv|tt|ta)[^"]*" href="#/p/demo/roadmap/([^"?]+)', d)
-        self.assertEqual([(k, unquote(i)) for k, i in tree], [
-            ("tv", "v:v1"), ("tt", "t:t-old"), ("tt", "t:t-lr"), ("ta", "a:2026-11-10-lr-sweep"), ("tt", "t:t-aug"), ("ta", "a:2026-11-12-aug-mixup"),
-            ("tv", "v:v2"), ("tt", "t:t-loss"), ("ta", "a:2026-11-15-focal"), ("ta", "a:2026-11-16-focal-gamma1"), ("ta", "a:2026-11-17-odd-status"),
-            ("ta", "a:2026-11-18-no-frontmatter"), ("ta", "a:2026-11-19-unclosed")])
+    def test_flow_graph_and_version(self):
+        d = self.m("p_road_v")
+        rows = re.findall(r'<a class="frow k-(\w+)[^"]*" href="#/p/demo/flow(?:/([^"?]+))?"', d)
+        self.assertEqual([(k, unquote(i)) for k, i in rows], [
+            ("start", ""), ("track", "t:t-old"), ("version", "v:v1"), ("track", "t:t-lr"), ("attempt", "a:2026-11-10-lr-sweep"),
+            ("track", "t:t-aug"), ("attempt", "a:2026-11-12-aug-mixup"), ("version", "v:v2"), ("track", "t:t-loss"),
+            ("attempt", "a:2026-11-15-focal"), ("attempt", "a:2026-11-16-focal-gamma1"), ("attempt", "a:2026-11-17-odd-status"),
+            ("track", ""), ("attempt", "a:2026-11-18-no-frontmatter"), ("attempt", "a:2026-11-19-unclosed")])   # merged steps above their version
         self.assertIn("没有归属支线的尝试", d)
-        self.assertRegex(d, r'<a class="tn tv on" href="#/p/demo/roadmap/v%3Av2">')               # current version by default
+        self.assertRegex(d, r'<a class="frow k-version on" href="#/p/demo/flow/v%3Av2"')
         self.assertIn("版本 v2 · 加入学习率预热", d)
+        self.assertIn('<path class="fe merge', d)                                      # t-lr merges into v2
+        self.assertIn('<path class="fe fork', d)
+        self.assertIn('<path class="fend bad"', d)                                     # the abandoned track ends with a cross
+        self.assertIn('class="fg a-todo"', d)                                          # the 待确认 step
+        self.assertIn('<span class="ff todo">等你确认</span>', d)
 
-    def test_roadmap_track(self):
+    def test_flow_track(self):
         d = self.m("p_road_t")
-        self.assertIn('<a href="#/p/demo/roadmap/v%3Av2">版本 v2</a>', d)
+        self.assertIn('<a href="#/p/demo/flow/v%3Av2">版本 v2</a>', d)
         self.assertEqual(len(re.findall(r'<span class="stepn">', d)), 3)
         self.assertIn("这条支线的各次运行 · 准确率（数字来自运行记录）", d)
         self.assertIn('title="r002">Focal loss</a>', d)
 
-    def test_roadmap_attempt(self):
+    def test_flow_attempt_reads_as_a_story(self):
         d = self.m("p_road_a")
-        self.assertIn('版本 v1</a> <span class="small">›</span> <a href="#/p/demo/roadmap/t%3At-lr">学习率调度</a>', d)
+        self.assertIn('版本 v1</a> <span class="small">›</span> <a href="#/p/demo/flow/t%3At-lr">学习率调度</a>', d)
         heads = re.findall(r'<div class="sec[^"]*"><h3>(.*?)</h3>', d)
-        self.assertEqual(heads[:6], ["假设", "预期", "改了什么", "结果", "例子", "结论和原因"])
-        self.assertIn("数字来自运行记录", d)
+        self.assertEqual([re.sub(r"<.*", "", h).strip() for h in heads[:4]], ["发生了什么", "一个例子", "数据", "结论和原因"])
+        self.assertIn('<div class="oneline s-ok">', d)                                 # one line first
+        self.assertIn('<div class="vsh">预期</div>', d)                                 # expected next to observed
         self.assertRegex(d, r'<th>测试集</th><th class="num" title="[^"]*">准确率 ↑</th><th class="num" title="[^"]*">F1 ↑</th>')
         self.assertIn('<td class="num">0.8100 <span class="small">(488/602)</span></td>', d)
         self.assertIn(">线性预热 500 步</a>", d)
-        self.assertEqual(len(re.findall(r'<a class="tn ta', self.m("p_road_todo"))), 2)
-        self.assertRegex(self.m("legacy_exp"), r'<a class="tn ta on" href="#/p/demo/roadmap/a%3A2026-11-15-focal">')
-        self.assertRegex(self.m("legacy_track"), r'<a class="tn tt on" href="#/p/demo/roadmap/t%3At-lr">')
+        self.assertIn("下一步：", d)                                                   # steps follow the flow
+        failed = self.m("p_failed")
+        self.assertIn('<a class="frow k-attempt s-bad on"', failed)                    # failures are marked on the graph
+        self.assertIn('<div class="oneline s-bad">', failed)
+        self.assertRegex(self.m("legacy_exp"), r'<a class="frow k-attempt s-todo on" href="#/p/demo/flow/a%3A2026-11-15-focal"')
+        self.assertRegex(self.m("legacy_track"), r'<a class="frow k-track on" href="#/p/demo/flow/t%3At-lr"')
+        self.assertIn('data-key="demo|a:2026-11-15-focal"', self.m("legacy_exp"))     # confirm right on the step
 
     def test_runs(self):
         d = self.m("p_runs")
@@ -195,7 +211,7 @@ class Pages(unittest.TestCase):
         self.assertIn(">数据 1</a>", d)
         run = self.m("p_run")
         self.assertIn('class="md2 wide"', run)
-        self.assertIn('学习率调度</a> <span class="small">›</span> <a href="#/p/demo/roadmap/a%3A2026-11-10-lr-sweep">lr-sweep</a>', run)
+        self.assertIn('学习率调度</a> <span class="small">›</span> <a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">lr-sweep</a>', run)
         self.assertRegex(run, r'<table class="kv">.*<th>warmup</th><td class="num">500</td>')
         self.assertNotIn('{"lr"', run)
         self.assertIn("<b>r005</b>", self.m("p_runs_data"))
@@ -236,7 +252,7 @@ class Pages(unittest.TestCase):
         self.assertIn("只有标题的项目", arch)
         self.assertNotIn("只有标题的项目", live)
         side = self.pages["overview"][0]
-        self.assertRegex(side, r'<details class="sarch" id="side-arch"><summary class="shead">已归档 1</summary><a class="sitem" href="#/p/minimal/overview"')
+        self.assertRegex(side, r'<details class="sarch" id="side-arch"><summary class="shead">已归档 1</summary><a class="sitem" href="#/p/minimal/flow"')
         self.assertIn('<details class="sarch" id="side-arch"><summary', self.pages["p_overview"][0])  # folded unless you are in one
         todo = self.m("todo")
         demo, _, shared = todo.partition("跨项目")                                    # grouped by project, shared last
@@ -280,8 +296,8 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   location.hash = '#/p/demo/runs'; await wait(300);
   const sel = document.querySelector('select[data-rtrack]'); sel.value = 't-loss'; sel.dispatchEvent(new Event('change', {bubbles: true})); await wait(300);
   out.track_hash = location.hash;
-  location.hash = '#/p/demo/roadmap'; await wait(300);
-  [...document.querySelectorAll('#main a.tn.ta')].find(a => a.textContent.includes('focal-gamma1')).click(); await wait(300);
+  location.hash = '#/p/demo/flow'; await wait(300);
+  [...document.querySelectorAll('#main a.frow')].find(a => a.textContent.includes('focal-gamma1')).click(); await wait(300);
   out.selected = document.querySelector('#main .detail h2').textContent.trim().slice(0, 12);
   location.hash = '#/todo'; await wait(300);
   const box = document.querySelector('.reply[data-id="t3"]');

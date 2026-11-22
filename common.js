@@ -368,6 +368,81 @@ const Board = (() => {
     };
   }
 
+  // ---- the experiment flow as a branch graph: the start and the versions on the main line (lane 0), one lane per
+  // track from where it forks to where it merges or ends, the track's attempts down its lane. One node per row;
+  // rows follow the dependencies (fork, chain, merge, version parent, after) and then the dates.
+  function flowLayout(d) {
+    const sid = x => typeof x.meta.id === 'string' ? x.meta.id : null;
+    const akey = a => String(a.meta.id || a.file.split('/').pop().replace(/\.md$/, ''));
+    const day10 = x => (typeof x === 'string' ? x : '').slice(0, 10);
+    const adate = a => day10(a.meta.date) || (akey(a).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0] || '9999';
+    const versions = (d.versions || []).filter(sid), tracks = (d.tracks || []).filter(sid), attempts = d.attempts || [];
+    const vids = new Set(versions.map(sid)), tids = new Set(tracks.map(sid));
+    const nodes = new Map(), deps = new Map(), edges = [];
+    const add = (key, type, ref, date) => { if (!nodes.has(key)) { nodes.set(key, {key, type, ref, date, lane: 0}); deps.set(key, new Set()); } };
+    const link = (from, to, kind) => {
+      if (!nodes.has(from) || !nodes.has(to) || from === to || deps.get(to).has(from)) return;
+      deps.get(to).add(from); edges.push({from, to, kind});
+    };
+    add('start', 'start', null, '');
+    for (const v of versions) add('v:' + sid(v), 'version', v, day10(v.meta.date) || '9999');
+    const mergedInto = new Map();
+    for (const v of versions) for (const t of Array.isArray(v.meta.merged_tracks) ? v.meta.merged_tracks : []) if (!mergedInto.has(String(t))) mergedInto.set(String(t), sid(v));
+    const attsOf = new Map();
+    for (const a of attempts) { const t = tids.has(a.meta.track) ? a.meta.track : null; if (!attsOf.has(t)) attsOf.set(t, []); attsOf.get(t).push(a); }
+    for (const list of attsOf.values()) list.sort((x, y) => adate(x).localeCompare(adate(y)) || akey(x).localeCompare(akey(y)));
+    const chains = tracks.map(t => ({key: 't:' + sid(t), track: t, list: attsOf.get(sid(t)) || []}));
+    if ((attsOf.get(null) || []).length) chains.push({key: 't:', track: null, list: attsOf.get(null)});  // attempts without a track share a lane
+    for (const ch of chains) add(ch.key, 'track', ch.track, day10(ch.track && ch.track.meta.started) || (ch.list[0] ? adate(ch.list[0]) : '9999'));
+    for (const a of attempts) add('a:' + akey(a), 'attempt', a, adate(a));
+    for (const v of versions) link(vids.has(v.meta.parent) ? 'v:' + v.meta.parent : 'start', 'v:' + sid(v), 'main');
+    for (const ch of chains) {
+      const t = ch.track;
+      ch.from = t && vids.has(t.meta.from_version) ? 'v:' + t.meta.from_version : 'start';
+      link(ch.from, ch.key, 'fork');
+      let prev = ch.key;
+      for (const a of ch.list) { link(prev, 'a:' + akey(a), 'lane'); prev = 'a:' + akey(a); }
+      ch.last = prev;
+      ch.into = t && mergedInto.get(sid(t)) ? 'v:' + mergedInto.get(sid(t)) : null;
+      if (ch.into) link(prev, ch.into, 'merge');
+    }
+    for (const a of attempts) for (const p of Array.isArray(a.meta.after) ? a.meta.after : []) link('a:' + p, 'a:' + akey(a), 'after');
+    // rows: dependencies first, then dates; on the same date attempts come before the version that merges them
+    const TYPE = {start: 0, track: 1, attempt: 2, version: 3};
+    const cmp = (x, y) => x.date.localeCompare(y.date) || TYPE[x.type] - TYPE[y.type] || x.key.localeCompare(y.key);
+    const indeg = new Map([...deps].map(([k, s]) => [k, s.size])), out = new Map([...nodes.keys()].map(k => [k, []]));
+    for (const [k, s] of deps) for (const f of s) out.get(f).push(k);
+    // keep a track's steps together: after a node, its own next step (same lane) goes first if it is ready
+    const next = new Map();
+    for (const ch of chains) { let prev = ch.key; for (const a of ch.list) { next.set(prev, 'a:' + akey(a)); prev = 'a:' + akey(a); } }
+    const order = [];
+    let ready = [...nodes.values()].filter(n => !indeg.get(n.key));
+    while (ready.length) {
+      ready.sort(cmp);
+      const last = order[order.length - 1], cont = last && ready.findIndex(r => r.key === next.get(last.key));
+      if (cont > 0) ready.unshift(ready.splice(cont, 1)[0]);
+      const n = ready.shift();
+      order.push(n);
+      for (const k of out.get(n.key)) { indeg.set(k, indeg.get(k) - 1); if (!indeg.get(k)) ready.push(nodes.get(k)); }
+    }
+    if (order.length < nodes.size) order.push(...[...nodes.values()].filter(n => !order.includes(n)).sort(cmp));  // a cycle in the records
+    order.forEach((n, i) => { n.row = i; });
+    // lanes: a track holds its lane from the row it forks at to the row it merges or ends; a free lane is reused
+    const busy = [Infinity];
+    const startRow = ch => nodes.get(ch.from).row;
+    for (const ch of [...chains].sort((x, y) => startRow(x) - startRow(y) || nodes.get(x.key).row - nodes.get(y.key).row)) {
+      const end = Math.max(nodes.get(ch.last).row, ch.into ? nodes.get(ch.into).row : 0);
+      // a lane that merges into the very node this track forks from is free again there (merge comes in above, fork leaves below)
+      let lane = busy.findIndex((b, i) => i > 0 && b <= startRow(ch));
+      if (lane < 0) { lane = busy.length; busy.push(end); } else busy[lane] = end;
+      ch.lane = lane;
+      nodes.get(ch.key).lane = lane;
+      for (const a of ch.list) nodes.get('a:' + akey(a)).lane = lane;
+    }
+    return {nodes: order, edges, lanes: busy.length,
+      chains: chains.map(ch => ({key: ch.key, lane: ch.lane, last: ch.last, into: ch.into, status: ch.track ? ch.track.meta.status : null}))};
+  }
+
   const projectUrl = (name, tab = 'overview', item = null) => '#/p/' + encodeURIComponent(name) + '/' + tab + (item != null ? '/' + encodeURIComponent(item) : '');
 
   // ---- GPUs: a card is free when no process is on it and almost no memory is used
@@ -382,5 +457,5 @@ const Board = (() => {
   const sortServers = list => [...(list || [])].sort((a, b) => serverRank(a.name) - serverRank(b.name) || String(a.name).localeCompare(String(b.name)));
 
   return {APP_NAME, FREE_MB, isFree, freeCount, serverRank, sortServers, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
-    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree};
+    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree, flowLayout};
 })();

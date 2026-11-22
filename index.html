@@ -148,6 +148,84 @@ a.stat:hover{border-color:var(--accent);text-decoration:none}
 .sec>h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 6px;letter-spacing:.02em}
 .sec .none{color:var(--muted);font-size:13px}
 
+/* ---------- flow: the branch graph on the left, the selected step on the right */
+.flowwrap{display:grid;grid-template-columns:minmax(380px,520px) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:1000px){.flowwrap{grid-template-columns:1fr}}
+.flegend{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.flegend .sym{margin-right:3px}
+.flow{position:relative;min-width:calc(var(--fw) + 220px)}
+.flowsvg{position:absolute;left:0;top:0;pointer-events:none}
+.frow{display:flex;flex-direction:column;justify-content:center;padding:0 10px 0 calc(var(--fw) + 4px);color:var(--text);text-decoration:none;min-width:0;overflow:hidden}
+.frow:hover{background:var(--hover);text-decoration:none}
+.frow.on{background:var(--accent-bg);box-shadow:inset 3px 0 0 var(--accent)}
+.frow .f1{display:flex;gap:6px;align-items:center;white-space:nowrap;min-width:0;font-size:13px;line-height:1.35}
+.frow .nm{overflow:hidden;text-overflow:ellipsis;font-weight:600;min-width:0}
+.frow .dt{margin-left:auto;padding-left:6px;font-size:11px;color:var(--muted);flex:none}
+.frow .st{font-size:11px;color:var(--muted);flex:none}
+.frow .f2{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+.frow.k-version .nm{font-size:14px;color:var(--accent)}
+.frow.k-start .nm{color:var(--muted)}
+.frow.k-track .nm{font-weight:500}
+.tag2{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px;flex:none}
+.frow.k-attempt.s-bad .nm{text-decoration:line-through;text-decoration-color:var(--full);color:var(--muted)}
+.frow.k-attempt.s-bad .f2{color:var(--full)}
+.frow.k-attempt.s-off .nm,.frow.k-attempt.s-plan .nm{color:var(--muted)}
+.frow.k-attempt.s-plan .nm{font-style:italic}
+.sym{font-weight:700;flex:none;width:1em;text-align:center}
+.sym.s-ok{color:var(--free)} .sym.s-part{color:var(--part)} .sym.s-bad{color:var(--full)} .sym.s-off{color:var(--muted)}
+.sym.s-run{color:var(--accent)} .sym.s-todo{color:var(--busy)} .sym.s-plan,.sym.s-other{color:var(--muted)} .sym.version{color:var(--accent)}
+.ff{font-size:11px;border-radius:4px;padding:0 5px;flex:none;font-weight:600}
+.ff.run{color:var(--accent);background:var(--accent-bg)} .ff.todo{color:var(--busy);background:var(--busy-bg)} .ff.bad{color:var(--full);background:var(--full-bg)}
+.fe{fill:none;stroke:var(--muted);stroke-opacity:.45;stroke-width:2}
+.fe.main{stroke:var(--accent);stroke-opacity:.55;stroke-width:3}
+.fe.after{stroke-dasharray:4 3;stroke-opacity:.6}
+.fe.open{stroke-dasharray:3 3}
+.fe.hl{stroke:var(--accent);stroke-opacity:1}
+.fend{fill:none;stroke:var(--muted);stroke-width:2}
+.fend.bad{stroke:var(--full)}
+.fg{stroke:var(--card);stroke-width:2}
+.fg.start{fill:var(--card);stroke:var(--muted)}
+.fg.version{fill:var(--accent)}
+.fg.ftrack{fill:var(--card);stroke:var(--muted);stroke-width:1.5}
+.fg.a-ok{fill:var(--free)} .fg.a-bad{fill:var(--full)} .fg.a-todo{fill:var(--busy)}
+.fg.a-part{fill:var(--card);stroke:var(--part);stroke-width:2}
+.fg.a-run{fill:var(--card);stroke:var(--accent);stroke-width:2.5}
+.fg.a-off{fill:var(--card);stroke:var(--muted);stroke-dasharray:2 2}
+.fg.a-plan{fill:var(--card);stroke:var(--muted);stroke-dasharray:3 2;stroke-width:1.5}
+.fg.a-other{fill:var(--card);stroke:var(--muted);stroke-width:1.5}
+.fg.on{stroke:var(--accent);stroke-width:3}
+.fmark{fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.fhalf{fill:var(--part)} .fdot{fill:var(--accent)}
+.fq{fill:#fff;font-size:10px;font-weight:700;text-anchor:middle}
+/* the step on the right */
+.oneline{margin:4px 0 6px;padding:8px 12px;border-left:4px solid var(--muted);background:var(--bg);border-radius:0 8px 8px 0;font-size:14px;line-height:1.6}
+.oneline.s-ok{border-color:var(--free)} .oneline.s-part{border-color:var(--part)} .oneline.s-bad{border-color:var(--full)}
+.oneline.s-run{border-color:var(--accent)} .oneline.s-todo{border-color:var(--busy)}
+.kv2{display:grid;grid-template-columns:5em 1fr;gap:8px;margin:2px 0 8px}
+.kv2>span{color:var(--muted);font-size:12px;padding-top:3px}
+.kv2 .md p:first-child{margin-top:0}
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:700px){.vs{grid-template-columns:1fr}}
+.vs>div{background:var(--bg);border-radius:8px;padding:8px 12px;min-width:0}
+.vsh{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:2px}
+.more2{margin-top:4px}
+h3.inl{display:inline;font-size:13px;color:var(--muted)}
+details.sec>summary{cursor:pointer}
+ul.gists{margin:4px 0;padding-left:18px;font-size:13px}
+ul.gists li{margin:3px 0}
+a.ref{font-variant-numeric:tabular-nums;font-weight:600;border-bottom:1px dotted var(--accent);text-decoration:none}
+.ref.bad{color:var(--full);font-weight:700;cursor:help}
+
+.mflow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:6px 0}
+.mbox{display:flex;flex-direction:column;justify-content:center;min-width:110px;max-width:180px;padding:8px 12px;border-radius:8px;
+  border:1px solid var(--line);background:var(--bg);color:var(--text);text-decoration:none;font-size:13px}
+a.mbox:hover{border-color:var(--accent);text-decoration:none}
+.mbox span{font-size:12px;color:var(--muted)}
+.mbox.g0{border-left:4px solid var(--accent)} .mbox.g1{border-left:4px solid var(--busy)} .mbox.g2{border-left:4px solid var(--part)} .mbox.g3{border-left:4px solid var(--free)}
+.marr{align-self:center;color:var(--muted);font-size:18px}
+.mleg{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.mbox.sw{display:inline-block;min-width:0;width:14px;height:10px;padding:0;border-radius:2px}
+
 /* ---------- roadmap tree, breadcrumbs, steps */
 .tree2 .tn{display:flex;align-items:center;gap:6px;padding:6px 12px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--line);min-width:0}
 .tree2 .tn:hover{background:var(--hover);text-decoration:none}

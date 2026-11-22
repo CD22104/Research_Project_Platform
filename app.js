@@ -13,7 +13,7 @@ const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-T
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
-const TABS = [['overview', '概览'], ['setup', '实验设置'], ['roadmap', '路线'], ['runs', '运行'], ['examples', '样例'], ['docs', '文档']];
+const TABS = [['flow', '流程'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
 const PAGES = ['overview', 'gpu', 'todo', 'guide', 'new'];
 
 function route() {
@@ -23,16 +23,17 @@ function route() {
   const query = Object.fromEntries(new URLSearchParams(q));
   if (parts[0] === 'p' && parts[1]) {
     let tab = parts[2], item = parts[3] ?? null;
-    if (tab === 'experiments') {  // the experiments tab was merged into the roadmap
-      tab = 'roadmap';
+    if (tab === 'experiments') {  // old addresses: the experiments tab became the roadmap, the roadmap became the flow
+      tab = 'flow';
       if (item != null) item = 'a:' + item;
       else if (query.track) { item = 't:' + query.track; delete query.track; }
     }
-    return {page: 'project', name: parts[1], tab: TABS.some(t => t[0] === tab) ? tab : 'overview', item, query};
+    if (tab === 'roadmap' || tab === 'overview') tab = 'flow';
+    return {page: 'project', name: parts[1], tab: TABS.some(t => t[0] === tab) ? tab : 'flow', item, query};
   }
   return {page: PAGES.includes(parts[0]) ? parts[0] : 'overview', query};
 }
-const plink = (name, tab = 'overview', item = null, query = null) => {
+const plink = (name, tab = 'flow', item = null, query = null) => {
   const q = query && Object.entries(query).filter(([, v]) => v != null && v !== '');
   return B.projectUrl(name, tab, item) + (q && q.length ? '?' + new URLSearchParams(q) : '');
 };
@@ -104,9 +105,9 @@ function ctx(d) {
 // "版本 v1 › 支线 X › 尝试 Y" with links; any part may be missing
 function crumbs(d, {version, track, attempt}) {
   const n = d.name, out = [];
-  if (version) out.push(`<a href="${plink(n, 'roadmap', 'v:' + idOf(version))}">版本 ${esc(idOf(version))}</a>`);
-  if (track) out.push(`<a href="${plink(n, 'roadmap', 't:' + idOf(track))}">${esc(track.meta.title || idOf(track))}</a>`);
-  if (attempt) out.push(`<a href="${plink(n, 'roadmap', 'a:' + attKey(attempt))}">${esc(attName(attempt))}</a>`);
+  if (version) out.push(`<a href="${plink(n, 'flow', 'v:' + idOf(version))}">版本 ${esc(idOf(version))}</a>`);
+  if (track) out.push(`<a href="${plink(n, 'flow', 't:' + idOf(track))}">${esc(track.meta.title || idOf(track))}</a>`);
+  if (attempt) out.push(`<a href="${plink(n, 'flow', 'a:' + attKey(attempt))}">${esc(attName(attempt))}</a>`);
   return out.length ? `<div class="crumbs">${out.join(' <span class="small">›</span> ')}</div>` : '';
 }
 // labels for a list of runs: the method name, with the run id added where two runs would read the same
@@ -281,7 +282,7 @@ function todoItem(t, project, now) {
 // an attempt whose conclusion waits for the user: the drafted conclusion and the four choices
 function confirmItem(p, a, now) {
   return `<li><div><span class="pill t-todo">确认结论</span> <span class="ttext">尝试「${esc(a.title || a.id)}」</span>
-      <a class="more" href="${plink(p.name, 'roadmap', 'a:' + a.id)}">看这次尝试 →</a></div>
+      <a class="more" href="${plink(p.name, 'flow', 'a:' + a.id)}">看这次尝试 →</a></div>
     ${a.conclusion ? `<div class="ctx md">${B.md(a.conclusion)}</div>` : ''}
     ${replyBox(p.name, 'a:' + a.id, ['成功', '部分成功', '失败', '放弃'], a.proposed, a.answer, now)}</li>`;
 }
@@ -303,7 +304,7 @@ function pageTodo() {
     const missing = (p.pending || []).length - confirm.length;
     tally.decision += confirm.length;
     const items = todos.map(t => todoItem(t, p, now)).concat(confirm.map(a => confirmItem(p, a, now)));
-    if (missing) items.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'roadmap', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
+    if (missing) items.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'flow', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
       <div class="where2">这要由会话补写，在项目会话里说「补写结论」</div></li>`);
     const n = items.length;
     return {p, items, n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, confirm.length ? 1 : 9), done: doneItems(p.todos_done, now)};
@@ -480,7 +481,7 @@ function pageProject(r) {
     ? `<h1 class="pt">${esc(r.name)}</h1><div class="card"><div class="empty">没有这个项目（或者它的 board/project.json 还没写好）。</div></div>`
     : `<div class="empty">正在读取 ${esc(r.name)}…</div>`;
   const p = d.project || {};
-  const counts = {setup: null, roadmap: d.attempts.length, runs: d.runs.length, examples: (d.example.probe_head || []).length || null, docs: docItems(d).length};
+  const counts = {flow: d.attempts.length || null, setup: null, runs: d.runs.length, examples: (d.example.probe_head || []).length || null, docs: docItems(d).length};
   const nameHtml = ui.renaming
     ? `<span class="rename"><input id="rename-input" data-p="${esc(d.name)}" maxlength="24" value="${esc(p.title || d.name)}" placeholder="控制台里显示的名字">
         <button id="rename-save">保存</button>${p.full_title ? '<button id="rename-reset">恢复原名</button>' : ''}<button id="rename-cancel">取消</button>
@@ -493,7 +494,7 @@ function pageProject(r) {
     ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
     <nav class="ptabs">${TABS.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')}</nav>`;
-  const body = {overview: tabOverview, setup: setupCard, roadmap: tabRoadmap, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
+  const body = {flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
   return head + notices(d) + body;
 }
 
@@ -506,8 +507,8 @@ function notices(d) {
   return out.map(t => `<div class="notice">${t}</div>`).join('');
 }
 
-// ------------------------------------------------------------ 概览: conclusion, numbers, setup, what needs you, activity, checks
-function tabOverview(d) {
+// the right side of the flow when nothing is selected: conclusion, numbers, what needs you, activity, checks
+function flowSummary(d) {
   const p = d.project || {}, c = ctx(d), name = d.name;
   const tracks = statusCounts(d.tracks), atts = statusCounts(d.attempts);
   const running = (tracks.find(([s]) => s === '进行中') || [0, 0])[1];
@@ -531,24 +532,30 @@ function tabOverview(d) {
     ...pending.map(a => typeof a.meta.id === 'string' && pendingOf(a).includes('结论待确认')
       ? confirmItem(proj, {id: a.meta.id, title: a.meta.title || attName(a), proposed: a.meta.proposed,
           conclusion: ((a.sections || {})['结论和原因'] || '').slice(0, 600), answer: answers['a:' + a.meta.id] || null}, d.now)
-      : `<li><span class="pill t-other">缺结论</span> <a href="${plink(name, 'roadmap', 'a:' + attKey(a))}">${esc(attName(a))}</a>
+      : `<li><span class="pill t-other">缺结论</span> <a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>
           <span class="small">${needsLabel(pendingOf(a))}</span></li>`)];
   const ev = B.foldEvents(B.events(d)).slice(0, 14);
-  const evHref = e => e.tab === 'experiments' ? plink(name, 'roadmap', e.item != null ? 'a:' + e.item : null)
-    : e.tab === 'roadmap' && e.item != null ? plink(name, 'roadmap', (e.text.startsWith('定版') ? 'v:' : 't:') + e.item) : plink(name, e.tab, e.item);
-  return `${p.conclusion ? `<p class="concl">${esc(p.conclusion)}</p>` : '<p class="concl faint">还没有结论</p>'}
+  const evHref = e => e.tab === 'experiments' ? plink(name, 'flow', e.item != null ? 'a:' + e.item : null)
+    : e.tab === 'roadmap' && e.item != null ? plink(name, 'flow', (e.text.startsWith('定版') ? 'v:' : 't:') + e.item) : plink(name, e.tab, e.item);
+  const concl = currentConclusion(d);
+  const recent = d.attempts.filter(a => ['成功', '部分成功', '失败', '放弃'].includes(a.meta.status) && (a.sections || {})['结论和原因'])
+    .sort((a, b) => dateKey(b).localeCompare(dateKey(a))).slice(0, 4);
+  return `<div class="detail"><h2>项目概况</h2>
+    ${concl.text ? `<p class="concl">${esc(concl.text)}</p><div class="small">${concl.from}</div>` : '<p class="concl faint">还没有结论</p>'}
     ${p.question ? `<p class="question">研究问题：${esc(p.question)}</p>` : ''}
     <div class="stats">
-      <a class="stat" href="${plink(name, 'roadmap')}"><div class="k">支线</div><div class="v">${d.tracks.length}</div>
+      <a class="stat" href="${plink(name, 'flow')}"><div class="k">支线</div><div class="v">${d.tracks.length}</div>
         <div class="s">${running ? `<b>${running}</b> 条进行中 · ` : ''}${countLine(tracks.filter(([s]) => s !== '进行中')) || '还没有支线'}</div></a>
-      <a class="stat" href="${plink(name, 'roadmap')}"><div class="k">尝试</div><div class="v">${d.attempts.length}</div>
+      <a class="stat" href="${plink(name, 'flow')}"><div class="k">尝试</div><div class="v">${d.attempts.length}</div>
         <div class="s">${countLine(atts) || '还没有尝试'}</div></a>
       ${bestCard}
       <a class="stat" href="${plink(name, 'runs')}"><div class="k">正在跑</div><div class="v">${active.length}</div>
         <div class="s">${active.length ? active.map(x => `${esc(c.label(x))} · ${esc((x.run || {}).server || '?')}${esc(gpusText(x.run || {}))} ${B.livePill(x.liveness)}`).join('<br>') : '没有正在跑的任务'}</div></a>
     </div>
-    ${setupSummary(d)}
-    <div class="cols2">
+    ${recent.length ? `<div class="sec"><h3>最近定下的结论</h3><ul class="gists">${recent.map(a => `<li>${B.pill(a.meta.status)}
+      <a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>：${esc(gistOf(d, a))}</li>`).join('')}</ul></div>` : ''}
+    <details class="sec" id="sum-setup"><summary><h3 class="inl">实验设置摘要</h3></summary>${setupSummary(d)}</details>
+    <div>
       <div class="card"><h2>等你处理 <span class="meta">${waitItems.length} 条</span></h2>
         ${waitItems.length ? `<ul class="tlist">${waitItems.slice(0, 14).join('')}</ul>` +
           (waitItems.length > 14 ? `<div class="pad small"><a href="#/todo">全部 ${waitItems.length} 条 →</a></div>` : '') : '<div class="empty">没有等你处理的事。</div>'}</div>
@@ -556,7 +563,7 @@ function tabOverview(d) {
         ${ev.length ? `<ul class="feed">${ev.map(e => `<li><span class="when">${B.ago(e.t, d.now)}</span><a href="${evHref(e)}">${esc(e.text)}</a></li>`).join('')}</ul>`
           : '<div class="empty">还没有记录。</div>'}</div>
     </div>
-    ${checksCard(d)}`;
+    ${checksCard(d)}</div>`;
 }
 
 // one line per kind on the overview; every name links to its definition on the setup tab
@@ -578,9 +585,33 @@ function setupSummary(d) {
 }
 
 // the paper-style "experimental setup" from board/setup.json; entries carry anchors that other pages link to
+// board/flow.json: how the method works, as boxes and arrows from left to right
+function methodFlow(d) {
+  const f = d.flow;
+  if (!f || !Array.isArray(f.nodes) || !f.nodes.length) return '';
+  const nodes = f.nodes.filter(n => n && typeof n.id === 'string'), byId = new Map(nodes.map(n => [n.id, n]));
+  const edges = (Array.isArray(f.edges) ? f.edges : []).filter(e => Array.isArray(e) && byId.has(e[0]) && byId.has(e[1]));
+  const indeg = new Map(nodes.map(n => [n.id, 0]));
+  for (const [, b] of edges) indeg.set(b, indeg.get(b) + 1);
+  const order = [], seen = new Set();
+  let queue = nodes.filter(n => !indeg.get(n.id));
+  while (queue.length) {
+    const n = queue.shift();
+    if (seen.has(n.id)) continue;
+    seen.add(n.id); order.push(n);
+    for (const [a, b] of edges) if (a === n.id) { indeg.set(b, indeg.get(b) - 1); if (!indeg.get(b)) queue.push(byId.get(b)); }
+  }
+  order.push(...nodes.filter(n => !seen.has(n.id)));
+  const groups = f.groups && typeof f.groups === 'object' ? Object.keys(f.groups) : [];
+  const gi = g => Math.max(0, groups.indexOf(g)) % 4;
+  const box = n => { const href = linkFor(d.name, n.link), tag = href ? 'a' : 'div';
+    return `<${tag} class="mbox g${gi(n.group)}"${href ? ` href="${href}"` : ''}><b>${esc(n.title || n.id)}</b>${n.subtitle ? `<span>${esc(n.subtitle)}</span>` : ''}</${tag}>`; };
+  return `<div class="setblk"><h3>方法流程 <span class="faint">board/flow.json</span></h3><div class="mflow">${order.map(box).join('<span class="marr">→</span>')}</div>
+    ${groups.length ? `<div class="mleg">${groups.map(g => `<span class="mbox g${gi(g)} sw"></span>${esc(f.groups[g])}`).join('　')}</div>` : ''}</div>`;
+}
 function setupCard(d) {  // the 实验设置 tab
   const c = ctx(d), s = c.setup, name = d.name;
-  if (!s.present) return `<div class="card"><h2>实验设置</h2><div class="empty">还没有实验设置（board/setup.json）。
+  if (!s.present) return `<div class="card"><h2>实验设置</h2>${methodFlow(d) ? `<div class="pad">${methodFlow(d)}</div>` : ''}<div class="empty">还没有实验设置（board/setup.json）。
     在这个项目的会话里说「补实验设置」，会话会按整体方案写好目标、数据集、模型、指标和方法的定义；之后更新方案或定新版本时会同步更新。
     写好后这里会像论文的「实验设置」一节那样列出来，运行页的分组和指标也会链接到这里。</div></div>`;
   const row = (anchor, cells) => `<tr data-anchor="${esc(anchor)}">${cells.map(x => `<td>${x}</td>`).join('')}</tr>`;
@@ -588,7 +619,7 @@ function setupCard(d) {  // the 实验设置 tab
     <div class="scroll"><table class="mt setup"><tr>${heads.map(h => `<th>${h}</th>`).join('')}</tr>${rows.join('')}</table></div></div>` : '';
   const ds = [...s.datasets.values()], mt = [...s.metrics.values()];
   const runsOfMethod = m => (Array.isArray(m.runs) ? m.runs : []).map(String);
-  return `<div class="card"><h2>实验设置 <span class="meta">board/setup.json</span></h2><div class="pad">
+  return `<div class="card"><h2>实验设置 <span class="meta">board/setup.json</span></h2><div class="pad">${methodFlow(d)}
     ${s.goal ? `<p class="goal">${esc(s.goal)}</p>` : ''}
     <div class="setgrid">
     ${table('数据集', ds.length, ['名称', '用途', '规模', '说明'], ds.map(x => row('ds:' + x.id, [
@@ -599,7 +630,7 @@ function setupCard(d) {  // the 实验设置 tab
     ${table('指标', mt.length, ['名称', '方向', '说明'], mt.map(x => row('mt:' + x.id, [
       `<b>${esc(x.name || x.id)}</b><div class="small">${esc(x.id)}</div>`, esc(BETTER[x.better] || '—'), esc(x.about || '')])))}
     ${table('方法', s.methods.length, ['名称', '支线', '运行', '说明'], s.methods.map(x => row('method:' + x.id, [
-      `<b>${esc(x.name || x.id)}</b>`, x.track && c.trackById.get(x.track) ? `<a href="${plink(name, 'roadmap', 't:' + x.track)}">${esc(c.trackById.get(x.track).meta.title || x.track)}</a>` : '',
+      `<b>${esc(x.name || x.id)}</b>`, x.track && c.trackById.get(x.track) ? `<a href="${plink(name, 'flow', 't:' + x.track)}">${esc(c.trackById.get(x.track).meta.title || x.track)}</a>` : '',
       runsOfMethod(x).map(r => c.runById.get(r) ? `<a href="${plink(name, 'runs', r)}">${esc(r)}</a>` : `<span class="faint">${esc(r)}</span>`).join('<br>'),
       esc(x.about || '')])))}
     </div></div></div>`;
@@ -612,47 +643,145 @@ function checksCard(d) {
     <div class="scroll"><table class="mt" style="margin:4px 8px 8px">${items.map(([w, t]) => `<tr><td><code>${esc(w)}</code></td><td style="white-space:normal">${esc(t)}</td></tr>`).join('')}</table></div></div>`;
 }
 
-// ------------------------------------------------------------ 路线: versions > tracks > attempts on the left, the selected node on the right
-function tabRoadmap(d, r) {
-  const c = ctx(d), name = d.name, q = r.query || {}, tree = c.tree;
-  const onlyTodo = !!q.todo, keep = a => !onlyTodo || pendingOf(a).length;
-  let sel = r.item;
-  if (sel == null) {  // default: the current version, else the first node
-    const cur = (d.project || {}).current_version;
-    sel = cur && c.verById.has(cur) ? 'v:' + cur : tree.versions[0] ? 'v:' + idOf(tree.versions[0].version)
-      : tree.loose[0] ? 't:' + idOf(tree.loose[0].track) : d.attempts[0] ? 'a:' + attKey(d.attempts[0]) : null;
+// ------------------------------------------------------------ 流程: the experiment flow on the left, the selected step on the right
+const plain = t => String(t || '').replace(/[*`#>]/g, '').replace(/\{\{run:[^}]*\}\}/g, '…').trim();
+const sentence = (title, text) => B.firstSentence('## ' + title + '\n' + plain(text), title);
+// the project's current conclusion: the current version's 结论 section, else project.json's conclusion
+function currentConclusion(d) {
+  const p = d.project || {}, v = ctx(d).verById.get(p.current_version);
+  const sec = v && new Map(sectionsOf(v.body).list).get('结论');
+  if (sec && sec.trim()) return {text: plain(sec).split('\n').filter(Boolean).join(' '), from: `来自版本 ${esc(p.current_version)} 的「结论」`};
+  return {text: p.conclusion || '', from: p.conclusion ? '来自 project.json（当前版本还没有「结论」一节）' : ''};
+}
+// one line about an attempt: its conclusion once there is one, else its results, else what it set out to test
+function gistOf(d, a) {
+  const sec = a.sections || {};
+  return gist(sec['结论和原因']) || gist(sec['结果']) || gist(sec['假设']) || '';
+}
+// the first sentence that says something: skips a bare status line such as "部分成功(用户于 11-21 确认)。"
+function gist(text) {
+  const parts = plain(text).split(/(?<=[。；;！!？?])|\n+/).map(x => x.trim().replace(/^([-+]|\d+[.、)])\s*/, '')).filter(Boolean);
+  const said = parts.find(x => !/^(部分成功|成功|失败|放弃|待确认)\s*([(（][^)）]*[)）])?\s*[。;；]?$/.test(x));
+  const out = said || parts[0] || '';
+  return out.length > 140 ? out.slice(0, 139) + '…' : out;
+}
+// {{run:<id>/<group>/<metric>}} in the records -> the number from that run
+function refValue(d, spec) {
+  const parts = spec.split('/'), id = parts[0], metric = parts[parts.length - 1], group = parts.length > 2 ? parts.slice(1, -1).join('/') : null;
+  const r = ctx(d).runById.get(id), m = r && (r.run || {}).metrics;
+  const v = !m ? undefined : group ? (m[group] || {})[metric] : m[metric];
+  return {r, v, id, group, metric};
+}
+function refs(html, d) {
+  return html.replace(/\{\{run:([^}\s]+)\}\}/g, (all, spec) => {
+    const x = refValue(d, spec.replace(/&amp;/g, '&'));
+    if (typeof x.v !== 'number') return `<span class="ref bad" title="找不到运行记录里的这个数：${esc(spec)}">?</span>`;
+    return `<a class="ref" href="${plink(d.name, 'runs', x.id)}" title="运行 ${esc(x.id)}${x.group ? ' · ' + esc(ctx(d).groupName(x.group)) : ''} · ${esc(ctx(d).metricName(x.metric))}">${B.num(x.v)}</a>`;
+  });
+}
+
+const FROW = 46, FLANE = 18, FPAD = 14;
+const FSYM = {ok: '✔', part: '◐', bad: '✗', off: '⊘', run: '▶', todo: '?', other: '○'};
+const nodeTone = n => n.type === 'attempt' ? (n.ref.meta.status === '计划中' ? 'plan' : B.tone(n.ref.meta.status)) : n.type;
+// what the runs of an attempt say right now (from the run records, no one has to write it)
+function runState(d, a) {
+  const runs = ctx(d).runsOf(a).filter(r => !r.missing), st = r => (r.run || {}).status;
+  const running = runs.filter(r => st(r) === '运行中'), lost = running.filter(r => r.liveness === 'maybe_interrupted');
+  return {runs, running, lost, waiting: a.meta.status === '进行中' && runs.length > 0 && !running.length};
+}
+function flowFlags(d, a) {
+  const rs = runState(d, a), out = [], ans = (d.answers || {})['a:' + attKey(a)];
+  if (rs.running.length) out.push(`<span class="ff run">▶ ${rs.running.length}/${rs.runs.length} 在跑</span>`);
+  if (rs.lost.length) out.push(`<span class="ff bad">${rs.lost.length} 个可能已中断</span>`);
+  if (rs.waiting) out.push('<span class="ff todo">结果已出 · 待写结论</span>');
+  if (a.meta.status === '待确认') out.push(ans ? '<span class="ff run">已回复</span>' : '<span class="ff todo">等你确认</span>');
+  else if (pendingOf(a).includes('结论和原因')) out.push('<span class="ff todo">缺结论</span>');
+  return out.join('');
+}
+function flowRow(d, n, sel) {
+  const name = d.name, p = d.project || {};
+  let key, cls = n.type, f1, f2 = '';
+  if (n.type === 'start') {
+    key = null;
+    f1 = '<span class="nm">开始</span>';
+    f2 = p.question ? '研究问题：' + esc(p.question) : '';
+  } else if (n.type === 'version') {
+    const v = n.ref, vid = idOf(v), cur = p.current_version === vid;
+    const merged = Array.isArray(v.meta.merged_tracks) ? v.meta.merged_tracks.length : 0;
+    key = 'v:' + vid;
+    f1 = `<span class="nm">版本 ${esc(vid)}${v.meta.title ? ' · ' + esc(v.meta.title) : ''}</span>${cur ? '<span class="pill t-run">当前</span>' : ''}<span class="dt">${esc(B.day(v.meta.date))}</span>`;
+    f2 = [merged ? `并入 ${merged} 条支线` : '', sentence('结论', new Map(sectionsOf(v.body).list).get('结论'))].filter(Boolean).map(esc).join(' · ');
+  } else if (n.type === 'track') {
+    const t = n.ref;
+    key = t ? 't:' + idOf(t) : null;
+    f1 = `<span class="tag2">支线</span><span class="nm">${t ? esc(t.meta.title || idOf(t)) : '没有归属支线的尝试'}</span>${t ? B.pill(t.meta.status) : ''}`;
+    const ts = t ? Object.fromEntries(sectionsOf(t.body).list) : {};
+    f2 = esc(sentence('结局和原因', ts['结局和原因']) || sentence('现状', ts['现状']) || sentence('假设', ts['假设']));
+  } else {
+    const a = n.ref, st = a.meta.status, tone = nodeTone(n);
+    key = 'a:' + attKey(a);
+    cls += ' s-' + tone;
+    const lead = tone === 'bad' ? '失败原因：' : tone === 'off' ? '放弃原因：' : tone === 'plan' ? '计划：' : '';
+    f1 = `<span class="sym s-${tone}">${tone === 'plan' ? '○' : FSYM[tone] || '○'}</span><span class="nm">${esc(attName(a))}</span>` +
+      `<span class="st">${esc(st || '无状态')}</span>${flowFlags(d, a)}<span class="dt">${esc(attDate(a).slice(5))}</span>`;
+    const g = gistOf(d, a);
+    f2 = g ? esc(lead + g) : '';
   }
-  const qs = onlyTodo ? {todo: 1} : null;
-  const aRow = a => keep(a) ? `<a class="tn ta${sel === 'a:' + attKey(a) ? ' on' : ''}" href="${plink(name, 'roadmap', 'a:' + attKey(a), qs)}">
-      ${B.pill(a.meta.status) || '<span class="pill t-other">无状态</span>'}<span class="nm">${esc(attName(a))}</span><span class="small">${esc(attDate(a).slice(5))}</span>
-      ${pendingOf(a).length ? '<span class="tflag">待你</span>' : ''}</a>` : '';
-  const tRow = n => {
-    const t = n.track, atts = n.attempts.map(aRow).join('');
-    if (onlyTodo && !atts) return '';
-    return `<a class="tn tt${sel === 't:' + idOf(t) ? ' on' : ''}" href="${plink(name, 'roadmap', 't:' + idOf(t), qs)}"><span class="dot d-${B.tone(t.meta.status)}"></span>
-        <span class="nm">${esc(t.meta.title || idOf(t))}</span><span class="cnt">${n.attempts.length}</span></a>${atts}`;
+  const href = key ? plink(name, 'flow', key) : plink(name, 'flow');
+  const on = key ? sel === key : sel == null;
+  return `<a class="frow k-${cls}${on ? ' on' : ''}" href="${href}" style="height:${FROW}px"><div class="f1">${f1}</div>${f2 ? `<div class="f2">${f2}</div>` : ''}</a>`;
+}
+function flowSvg(L, sel) {
+  const X = lane => FPAD + lane * FLANE, Y = row => row * FROW + FROW / 2;
+  const W = FPAD * 2 + (L.lanes - 1) * FLANE, H = L.nodes.length * FROW, byKey = new Map(L.nodes.map(n => [n.key, n]));
+  const edge = e => {
+    const a = byKey.get(e.from), b = byKey.get(e.to), x1 = X(a.lane), y1 = Y(a.row), x2 = X(b.lane), y2 = Y(b.row);
+    const hl = sel && (e.from === sel || e.to === sel) ? ' hl' : '';
+    let dd;
+    if (e.kind === 'after') dd = `M${x1} ${y1} C${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}`;
+    else if (x1 === x2) dd = `M${x1} ${y1} L${x2} ${y2}`;
+    else if (e.kind === 'merge') dd = `M${x1} ${y1} L${x1} ${y2 - FROW / 2} Q${x1} ${y2} ${x2} ${y2}`;
+    else dd = `M${x1} ${y1} Q${x2} ${y1} ${x2} ${y1 + FROW / 2} L${x2} ${y2}`;
+    return `<path class="fe ${e.kind}${hl}" d="${dd}"/>`;
   };
-  const cur = (d.project || {}).current_version;
-  let items = tree.versions.map(v => {
-    const inner = v.tracks.map(tRow).join('');
-    if (onlyTodo && !inner) return '';
-    return `<a class="tn tv${sel === 'v:' + idOf(v.version) ? ' on' : ''}" href="${plink(name, 'roadmap', 'v:' + idOf(v.version), qs)}">
-      <span class="vmark${idOf(v.version) === cur ? ' cur' : ''}"></span><b>${esc(idOf(v.version))}</b><span class="nm">${esc(v.version.meta.title || '')}</span></a>${inner}`;
+  // how a lane ends when it does not merge: abandoned, paused, or still open below its last step
+  const ends = L.chains.filter(ch => !ch.into && byKey.get(ch.last)).map(ch => {
+    const n = byKey.get(ch.last), x = X(n.lane), y = Y(n.row) + 9;
+    if (ch.status === '放弃') return `<path class="fend bad" d="M${x - 5} ${y + 8} L${x + 5} ${y + 18} M${x + 5} ${y + 8} L${x - 5} ${y + 18}"/>`;
+    if (ch.status === '暂停') return `<path class="fend" d="M${x - 3} ${y + 8} L${x - 3} ${y + 18} M${x + 3} ${y + 8} L${x + 3} ${y + 18}"/>`;
+    return `<path class="fe open" d="M${x} ${y} L${x} ${y + FROW / 2}"/>`;
   }).join('');
-  const loose = tree.loose.map(tRow).join(''), orphans = tree.orphans.map(aRow).join('');
-  if (loose) items += `<div class="tgroup">没有挂到版本上的支线</div>${loose}`;
-  if (orphans) items += `<div class="tgroup">没有归属支线的尝试</div>${orphans}`;
-  const nTodo = d.attempts.filter(a => pendingOf(a).length).length;
-  const filters = `<div class="filters"><div class="chips">
-      <a class="chip${!onlyTodo ? ' on' : ''}" href="${plink(name, 'roadmap', r.item)}">全部 ${d.attempts.length} 次尝试</a>
-      ${nTodo ? `<a class="chip${onlyTodo ? ' on' : ''}" href="${plink(name, 'roadmap', r.item, {todo: 1})}">等你处理 ${nTodo}</a>` : ''}</div>
-      <span class="small">按时间先后排列</span></div>`;
-  let detail = '<div class="detail empty">还没有版本、支线或尝试的记录。</div>';
-  if (sel && sel.startsWith('v:') && c.verById.get(sel.slice(2))) detail = versionDetail(d, c.verById.get(sel.slice(2)));
-  else if (sel && sel.startsWith('t:') && c.trackById.get(sel.slice(2))) detail = trackDetail(d, c.trackById.get(sel.slice(2)));
-  else if (sel && sel.startsWith('a:') && c.attById.get(sel.slice(2))) detail = attemptDetail(d, c.attById.get(sel.slice(2)));
-  else if (sel) detail = `<div class="detail empty">找不到「${esc(sel)}」，可能已经改名或删除。</div>`;
-  return `<div class="md2"><div class="list">${filters}<div class="items tree2">${items || '<div class="empty">没有符合条件的记录。</div>'}</div></div><div>${detail}</div></div>`;
+  const glyph = n => {
+    const x = X(n.lane), y = Y(n.row), t = nodeTone(n), on = n.key === sel ? ' on' : '';
+    if (n.type === 'start') return `<circle class="fg start${on}" cx="${x}" cy="${y}" r="6"/>`;
+    if (n.type === 'version') return `<rect class="fg version${on}" x="${x - 7}" y="${y - 7}" width="14" height="14" rx="2" transform="rotate(45 ${x} ${y})"/>`;
+    if (n.type === 'track') return `<rect class="fg ftrack${on}" x="${x - 5}" y="${y - 5}" width="10" height="10" rx="3"/>`;
+    const c = `<circle class="fg a-${t}${on}" cx="${x}" cy="${y}" r="7"/>`;
+    if (t === 'ok') return c + `<path class="fmark" d="M${x - 3.5} ${y} L${x - 1} ${y + 3} L${x + 4} ${y - 3}"/>`;
+    if (t === 'bad') return c + `<path class="fmark" d="M${x - 3} ${y - 3} L${x + 3} ${y + 3} M${x + 3} ${y - 3} L${x - 3} ${y + 3}"/>`;
+    if (t === 'part') return c + `<path class="fhalf" d="M${x} ${y - 7} A7 7 0 0 1 ${x} ${y + 7} Z"/>`;
+    if (t === 'run') return c + `<circle class="fdot" cx="${x}" cy="${y}" r="3"/>`;
+    if (t === 'todo') return c + `<text class="fq" x="${x}" y="${y + 4}">?</text>`;
+    return c;
+  };
+  return `<svg class="flowsvg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
+    L.edges.map(edge).join('') + ends + L.nodes.map(glyph).join('') + '</svg>';
+}
+function tabFlow(d, r) {
+  const c = ctx(d), L = d._flow || (d._flow = B.flowLayout(d)), sel = r.item;
+  const W = FPAD * 2 + (L.lanes - 1) * FLANE;
+  const rows = L.nodes.map(n => flowRow(d, n, sel)).join('');
+  const legend = `<div class="flegend">${[['ok', '成功'], ['part', '部分成功'], ['bad', '失败'], ['off', '放弃'], ['run', '进行中'], ['todo', '待确认'], ['plan', '计划中']]
+    .map(([t, l]) => `<span><span class="sym s-${t}">${t === 'plan' ? '○' : FSYM[t]}</span>${l}</span>`).join('')}<span><span class="sym version">◆</span>版本</span></div>`;
+  let detail;
+  if (sel == null) detail = flowSummary(d);
+  else if (sel.startsWith('v:') && c.verById.get(sel.slice(2))) detail = versionDetail(d, c.verById.get(sel.slice(2)));
+  else if (sel.startsWith('t:') && c.trackById.get(sel.slice(2))) detail = trackDetail(d, c.trackById.get(sel.slice(2)));
+  else if (sel.startsWith('a:') && c.attById.get(sel.slice(2))) detail = attemptDetail(d, c.attById.get(sel.slice(2)), L);
+  else detail = `<div class="detail empty">找不到「${esc(sel)}」，可能已经改名或删除。<a href="${plink(d.name, 'flow')}">回到项目概况</a></div>`;
+  const empty = L.nodes.length <= 1 ? '<div class="empty">还没有版本、支线或尝试。讨论方案时让会话把计划的尝试写成「计划中」，这里就会画出来。</div>' : '';
+  return `<div class="flowwrap"><div class="list flowbox">${legend}<div class="items">${empty ||
+      `<div class="flow" style="--fw:${W}px">${flowSvg(L, sel)}${rows}</div>`}</div></div><div>${refs(detail, d)}</div></div>`;
 }
 
 // the headline metric across some runs, as bars (names from setup.json)
@@ -697,11 +826,11 @@ function bodySections(body, order = []) {
 function versionDetail(d, v) {
   const c = ctx(d), name = d.name, vid = idOf(v), node = c.tree.versions.find(x => idOf(x.version) === vid);
   const merged = (node ? node.tracks : []).filter(n => n.merged === vid), branched = (node ? node.tracks : []).filter(n => n.merged !== vid);
-  const chip = n => `<a class="chip" href="${plink(name, 'roadmap', 't:' + idOf(n.track))}">${esc(n.track.meta.title || idOf(n.track))} · ${esc(statusOf(n.track))} · ${n.attempts.length} 次尝试</a>`;
+  const chip = n => `<a class="chip" href="${plink(name, 'flow', 't:' + idOf(n.track))}">${esc(n.track.meta.title || idOf(n.track))} · ${esc(statusOf(n.track))} · ${n.attempts.length} 次尝试</a>`;
   const runs = [...new Set((node ? node.tracks : []).flatMap(n => n.attempts.flatMap(a => c.runsOf(a).filter(r => !r.missing))))];
   const cur = (d.project || {}).current_version === vid;
   return `<div class="detail"><h2>版本 ${esc(vid)}${v.meta.title ? ' · ' + esc(v.meta.title) : ''}${cur ? ' <span class="pill t-run">当前版本</span>' : ''}</h2>
-    <div class="dmeta"><span>${esc(B.day(v.meta.date)) || '没有日期'}</span>${v.meta.parent ? `<span>来自 <a href="${plink(name, 'roadmap', 'v:' + v.meta.parent)}">${esc(v.meta.parent)}</a></span>` : ''}<span>${esc(v.file)}</span></div>
+    <div class="dmeta"><span>${esc(B.day(v.meta.date)) || '没有日期'}</span>${v.meta.parent ? `<span>来自 <a href="${plink(name, 'flow', 'v:' + v.meta.parent)}">${esc(v.meta.parent)}</a></span>` : ''}<span>${esc(v.file)}</span></div>
     ${merged.length ? `<div class="sec first"><h3>并入这个版本的支线</h3><div class="chips">${merged.map(chip).join('')}</div></div>` : ''}
     ${branched.length ? `<div class="sec${merged.length ? '' : ' first'}"><h3>从这个版本分出的支线</h3><div class="chips">${branched.map(chip).join('')}</div></div>` : ''}
     <div class="sec"><h3>这个版本的方案</h3>${v.body.trim() ? `<div class="md">${B.md(v.body)}</div>` : '<div class="none">版本正文是空的</div>'}</div>
@@ -714,12 +843,12 @@ function trackDetail(d, t) {
   const atts = node ? node.attempts : [];
   const ver = c.verById.get(c.homeOf.get(tid)), merged = node && node.merged;
   const placement = [
-    t.meta.from_version ? `从 <a href="${plink(name, 'roadmap', 'v:' + t.meta.from_version)}">${esc(t.meta.from_version)}</a> 分出` : '',
-    merged ? `并入 <a href="${plink(name, 'roadmap', 'v:' + merged)}">${esc(merged)}</a>` : ''].filter(Boolean).join('，');
+    t.meta.from_version ? `从 <a href="${plink(name, 'flow', 'v:' + t.meta.from_version)}">${esc(t.meta.from_version)}</a> 分出` : '',
+    merged ? `并入 <a href="${plink(name, 'flow', 'v:' + merged)}">${esc(merged)}</a>` : ''].filter(Boolean).join('，');
   const steps = atts.map((a, i) => {
     const sec = a.sections || {}, plain = t => String(t || '').replace(/[*`]/g, '');
     const gist = B.firstSentence('## 结果\n' + plain(sec['结果']), '结果') || B.firstSentence('## 结论和原因\n' + plain(sec['结论和原因']), '结论和原因');
-    return `<li><span class="stepn">${i + 1}</span><div><a href="${plink(name, 'roadmap', 'a:' + attKey(a))}"><b>${esc(attName(a))}</b></a> ${B.pill(a.meta.status)}
+    return `<li><span class="stepn">${i + 1}</span><div><a href="${plink(name, 'flow', 'a:' + attKey(a))}"><b>${esc(attName(a))}</b></a> ${B.pill(a.meta.status)}
       <span class="small">${esc(attDate(a))}</span>${pendingOf(a).length ? ` <span class="todo">${needsLabel(pendingOf(a))}</span>` : ''}
       ${gist ? `<div class="small">${esc(gist)}</div>` : ''}</div></li>`;
   }).join('');
@@ -733,33 +862,45 @@ function trackDetail(d, t) {
 }
 
 const SECTION_ORDER = ['假设', '预期', '改了什么', '结果', '例子', '结论和原因'];
-function attemptDetail(d, a) {
-  const c = ctx(d), m = a.meta, name = d.name, pend = pendingOf(a), sections = a.sections || {};
+function attemptDetail(d, a, L) {
+  const c = ctx(d), m = a.meta, name = d.name, pend = pendingOf(a), sec = a.sections || {};
   const t = c.trackById.get(m.track), ver = t && c.verById.get(c.homeOf.get(idOf(t)));
-  const siblings = t ? c.tree.versions.flatMap(v => v.tracks).concat(c.tree.loose).find(n => idOf(n.track) === idOf(t)).attempts : [];
-  const i = siblings.indexOf(a), prev = i > 0 ? siblings[i - 1] : null, next = i >= 0 && i < siblings.length - 1 ? siblings[i + 1] : null;
+  const lane = L ? L.nodes.filter(n => n.type === 'attempt') : [];  // steps in the order of the flow
+  const i = lane.findIndex(n => n.ref === a), prev = i > 0 ? lane[i - 1].ref : null, next = i >= 0 && i < lane.length - 1 ? lane[i + 1].ref : null;
+  const siblings = d.attempts.filter(x => x.meta.track === m.track && t), k = siblings.indexOf(a);
+  const rs = runState(d, a), tone = m.status === '计划中' ? 'plan' : B.tone(m.status);
+  const box = (title, text, none) => `<div class="sec"><h3>${title}</h3>${(text || '').trim() ? `<div class="md">${B.md(text)}</div>` : `<div class="none">${none}</div>`}</div>`;
+  // 1. one line
+  const concl = gist(sec['结论和原因']);
+  const line = concl ? esc(concl)
+    : m.status === '计划中' ? '还没开始：' + esc(sentence('假设', sec['假设']) || '计划中的尝试')
+    : rs.running.length ? `正在跑：${rs.running.length} / ${rs.runs.length} 个运行还没结束`
+    : rs.waiting ? '运行都结束了，结果已出，等会话写结论' : esc(sentence('结果', sec['结果']) || '还没有结论');
+  const answer = (d.answers || {})['a:' + attKey(a)];
+  const confirm = m.status === '待确认' && typeof m.id === 'string'
+    ? `<div class="sec"><h3>等你确认结论</h3>${replyBox(name, 'a:' + m.id, ['成功', '部分成功', '失败', '放弃'], m.proposed, answer || null, d.now)}</div>` : '';
+  // 2. what happened: the hypothesis, what was changed, expected against observed
+  const happened = `<div class="sec"><h3>发生了什么</h3>
+    ${(sec['假设'] || '').trim() ? `<div class="kv2"><span>假设</span><div class="md">${B.md(sec['假设'])}</div></div>` : ''}
+    ${(sec['改了什么'] || '').trim() ? `<div class="kv2"><span>改了什么</span><div class="md">${B.md(sec['改了什么'])}</div></div>` : ''}
+    <div class="vs"><div><div class="vsh">预期</div>${(sec['预期'] || '').trim() ? `<div class="md">${B.md(sec['预期'])}</div>` : '<div class="none">没写预期</div>'}</div>
+      <div><div class="vsh">实际</div>${(sec['结果'] || '').trim() ? `<div class="md">${B.md(sec['结果'])}</div>` : `<div class="none">${m.status === '计划中' ? '还没开始' : '还没写结果'}</div>`}</div></div></div>`;
+  // 3. one example, 4. the numbers (from the run records), 5. the conclusion and the rest of the record
+  const example = box('一个例子', sec['例子'], m.status === '计划中' ? '还没开始' : '这次尝试没有写例子') +
+    `<div class="small more2"><a href="${plink(name, 'examples')}">看项目的全部样例 →</a></div>`;
+  const data = `<div class="sec"><h3>数据 <span class="faint">来自运行记录</span></h3>${rs.runs.length ? linkedRuns(d, a, c.runsOf(a)) : '<div class="none">还没有关联的运行</div>'}</div>`;
+  const conclusion = ['成功', '部分成功', '失败', '放弃', '待确认'].includes(m.status) || (sec['结论和原因'] || '').trim()
+    ? box('结论和原因', sec['结论和原因'], m.status === '待确认' ? '待你确认结论' : '待写结论和原因') : '';
+  const extra = Object.keys(sec).filter(x => !SECTION_ORDER.includes(x));
   const pre = (a.body.split(/^## /m)[0] || '').trim();
-  const order = [...SECTION_ORDER, ...Object.keys(sections).filter(k => !SECTION_ORDER.includes(k))];
-  const concluded = ['成功', '部分成功', '失败', '放弃', '待确认'].includes(m.status);
-  const runs = c.runsOf(a);
-  const secs = order.filter(k => k in sections || k === '预期' || k === '结果' || (k === '结论和原因' && concluded)).map(k => {
-    const text = (sections[k] || '').trim();
-    let body;
-    if (text) body = `<div class="md">${B.md(text)}</div>`;
-    else if (k === '预期') body = '<div class="none">没写预期</div>';
-    else if (k === '结论和原因') body = `<span class="todo">${m.status === '待确认' ? '待你确认结论' : '待你填写结论和原因'}</span>`;
-    else if (k === '结果') body = '';
-    else body = '<div class="none">（空）</div>';
-    // the numbers come from the run records, right under the reading of the results
-    if (k === '结果') body += runs.length ? `<div class="auto"><div class="small">数字来自运行记录</div>${linkedRuns(d, a, runs)}</div>` : (text ? '' : '<div class="none">（空）</div>');
-    return `<div class="sec"><h3>${esc(k)}</h3>${body}</div>`;
-  }).join('').replace('<div class="sec">', pre ? '<div class="sec">' : '<div class="sec first">');
-  const nav = (prev || next) ? `<div class="stepnav">${prev ? `<a href="${plink(name, 'roadmap', 'a:' + attKey(prev))}">← 上一次：${esc(attName(prev))}</a>` : '<span></span>'}
-    ${next ? `<a href="${plink(name, 'roadmap', 'a:' + attKey(next))}">下一次：${esc(attName(next))} →</a>` : ''}</div>` : '';
+  const rest = pre || extra.length ? `<details class="sec" id="rest-${esc(attKey(a))}"><summary><h3 class="inl">其他记录</h3></summary>
+    ${pre ? `<div class="md">${B.md(pre)}</div>` : ''}${extra.map(x => box(esc(x), sec[x], '（空）')).join('')}</details>` : '';
+  const nav = (prev || next) ? `<div class="stepnav">${prev ? `<a href="${plink(name, 'flow', 'a:' + attKey(prev))}">← 上一步：${esc(attName(prev))}</a>` : '<span></span>'}
+    ${next ? `<a href="${plink(name, 'flow', 'a:' + attKey(next))}">下一步：${esc(attName(next))} →</a>` : ''}</div>` : '';
   return `<div class="detail">${crumbs(d, {version: ver, track: t})}
-    <h2>${esc(attName(a))} ${B.pill(m.status)}${pend.length ? ` <span class="todo">${needsLabel(pend)}</span>` : ''}</h2>
-    <div class="dmeta"><span>${esc(attDate(a)) || '没有日期'}</span>${i >= 0 ? `<span>这条支线的第 ${i + 1} / ${siblings.length} 次尝试</span>` : '<span>没有归属支线</span>'}<span>${esc(a.file)}</span></div>
-    ${pre ? `<div class="sec first"><div class="md">${B.md(pre)}</div></div>` : ''}${secs}${nav}</div>`;
+    <h2>${esc(attName(a))} ${m.status === '计划中' ? '<span class="pill t-other">计划中</span>' : B.pill(m.status)}${pend.length ? ` <span class="todo">${needsLabel(pend)}</span>` : ''}</h2>
+    <div class="dmeta"><span>${esc(attDate(a)) || '没有日期'}</span>${k >= 0 ? `<span>这条支线的第 ${k + 1} / ${siblings.length} 次尝试</span>` : '<span>没有归属支线</span>'}<span>${esc(a.file)}</span></div>
+    <div class="oneline s-${tone}">${line}</div>${confirm}${happened}${example}${data}${conclusion}${rest}${nav}</div>`;
 }
 
 // numbers of an attempt's runs, following display (primary columns, numerator/denominator in one cell) and setup names
@@ -965,7 +1106,7 @@ function docItems(d) {
 }
 function tabDocs(d, r) {
   const docs = docItems(d), name = d.name;
-  if (!docs.length) return '<div class="card"><div class="empty">还没有文档（board/plan.md、board/docs/*.md、项目根目录的 NOTES.md 和 REPORT.md）。各版本的方案在「路线」里。</div></div>';
+  if (!docs.length) return '<div class="card"><div class="empty">还没有文档（board/plan.md、board/docs/*.md、项目根目录的 NOTES.md 和 REPORT.md）。各版本的方案在「流程」里，点版本节点就能看到。</div></div>';
   const sel = docs.find(x => x.id === r.item) || docs[0];
   let last = null;
   const items = docs.map(x => {
@@ -974,7 +1115,7 @@ function tabDocs(d, r) {
     return head + `<a class="li${x === sel ? ' on' : ''}" href="${plink(name, 'docs', x.id)}"><div class="row1"><span class="name">${esc(x.title)}</span></div>
       <div class="row2"><span>${esc(x.sub)}</span><span>${B.ago(x.mtime, d.now)}更新</span></div></a>`;
   }).join('');
-  return `<div class="md2"><div class="list"><div class="items">${items}</div><div class="pad small">各版本的方案和支线说明在「路线」里。</div></div>
+  return `<div class="md2"><div class="list"><div class="items">${items}</div><div class="pad small">各版本的方案和支线说明在「流程」里。</div></div>
     <div class="detail"><h2>${esc(sel.title)}</h2><div class="dmeta"><span>${esc(sel.sub)}</span><span>${B.ago(sel.mtime, d.now)}更新</span></div>
       <div class="md">${B.md(sel.body)}</div></div></div>`;
 }

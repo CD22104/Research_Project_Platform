@@ -97,6 +97,29 @@ check('chart ignores bad points', B.chart([{step: 0, loss: 'x'}], 'loss') === ''
 check('chart escapes key', !B.chart([{step: 0, '<k>': 1}], '<k>').includes('<k>'));
 
 // free cards
+{
+  const md = (id, extra) => ({meta: Object.assign({id}, extra), file: 'x/' + id + '.md'});
+  const L = B.flowLayout({
+    versions: [md('v1', {date: '2026-11-11', parent: null, merged_tracks: ['base', 'ft']}), md('v2', {date: '2026-11-25', parent: 'v1', merged_tracks: []})],
+    tracks: [md('base', {status: '并入主线'}), md('ft', {status: '并入主线'}), md('harness', {status: '进行中', from_version: 'v1'}), md('dead', {status: '放弃', from_version: 'v1'})],
+    attempts: [md('2026-11-10-a', {track: 'base', date: '2026-11-10', status: '成功'}), md('2026-11-11-b', {track: 'ft', date: '2026-11-11', status: '失败'}),
+               md('2026-11-12-c', {track: 'base', date: '2026-11-12', status: '成功'}),
+               md('2026-11-20-d', {track: 'harness', date: '2026-11-20', status: '进行中', after: ['2026-11-11-b']}),
+               md('2026-11-21-e', {track: 'dead', date: '2026-11-21', status: '放弃'}), md('plan-f', {track: 'harness', status: '计划中'}),
+               md('2026-11-13-g', {track: 'nope', date: '2026-11-13', status: '成功'})]});
+  const row = k => L.nodes.find(n => n.key === k).row, lane = k => L.nodes.find(n => n.key === k).lane;
+  check('flowLayout: merged attempts above their version, forks below it',
+    row('a:2026-11-12-c') < row('v:v1') && row('a:2026-11-11-b') < row('v:v1') && row('v:v1') < row('t:harness') && row('t:harness') < row('a:2026-11-20-d'));
+  check('flowLayout: versions on the main line, tracks on their own lanes', lane('v:v1') === 0 && lane('v:v2') === 0 && lane('start') === 0
+    && lane('a:2026-11-10-a') === lane('a:2026-11-12-c') && lane('a:2026-11-10-a') !== lane('a:2026-11-11-b') && lane('a:2026-11-10-a') > 0);
+  check('flowLayout: a lane freed by a merge is reused', [lane('t:harness'), lane('t:dead')].includes(lane('t:base')) || [lane('t:harness'), lane('t:dead')].includes(lane('t:ft')));
+  check('flowLayout: planned attempts last in their lane; after links across lanes', row('a:plan-f') > row('a:2026-11-20-d')
+    && L.edges.some(e => e.kind === 'after' && e.from === 'a:2026-11-11-b' && e.to === 'a:2026-11-20-d')
+    && L.edges.some(e => e.kind === 'merge' && e.from === 'a:2026-11-12-c' && e.to === 'v:v1'));
+  check('flowLayout: attempts of unknown tracks get a lane; every node has a row', lane('a:2026-11-13-g') > 0 && new Set(L.nodes.map(n => n.row)).size === L.nodes.length);
+  const C = B.flowLayout({versions: [md('v1', {parent: 'v2'}), md('v2', {parent: 'v1'})], tracks: [], attempts: []});
+  check('flowLayout: a cycle in the records still lays out every node', C.nodes.length === 3);
+}
 check('sortServers: h200, h100, a100, then 6k', B.sortServers([{name: 'xtraa6k04'}, {name: 'xtraa100'}, {name: 'xtraa6k01'}, {name: 'xtrah100'}, {name: 'xtrah200'}])
   .map(s => s.name).join() === 'xtrah200,xtrah100,xtraa100,xtraa6k01,xtraa6k04');
 check('isFree / freeCount', B.isFree({procs: [], mem_used: 100}) && !B.isFree({procs: [{pid: 1}], mem_used: 0}) && !B.isFree({procs: [], mem_used: 600})
