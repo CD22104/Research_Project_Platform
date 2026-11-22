@@ -14,7 +14,9 @@
 1. `board/project.json`（标题、问题、状态）
 2. `board/attempts/` 里的尝试记录
 
-其余文件都是可选的，有了就显示，没有就不显示，不会报错。建议在项目推进中逐步补上，大致顺序：`setup.json`（数据集、模型、指标的定义）→ `tracks/` 和 `versions/` → `runs/` → `examples/` → `flow.json`、`todos.jsonl`。
+`setup.json`（实验设置：目标、数据集、模型、指标、方法的定义）在建项目时就写，之后每次更新整体方案（`plan.md`）或定新版本时同步更新，不要等到有结果再补。
+
+其余文件都是可选的，有了就显示，没有就不显示，不会报错。建议在项目推进中逐步补上，大致顺序：`tracks/` 和 `versions/` → `runs/` → `examples/` → `flow.json`、`todos.jsonl`。
 
 ## 目录
 

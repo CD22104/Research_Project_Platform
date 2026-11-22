@@ -580,7 +580,9 @@ function setupSummary(d) {
 // the paper-style "experimental setup" from board/setup.json; entries carry anchors that other pages link to
 function setupCard(d) {  // the 实验设置 tab
   const c = ctx(d), s = c.setup, name = d.name;
-  if (!s.present) return `<div class="card"><h2>实验设置</h2><div class="empty">还没有 board/setup.json。写上数据集、模型、指标和方法的定义后，这里会像论文的「实验设置」一节那样列出来，运行页的分组和指标也会链接到这里。</div></div>`;
+  if (!s.present) return `<div class="card"><h2>实验设置</h2><div class="empty">还没有实验设置（board/setup.json）。
+    在这个项目的会话里说「补实验设置」，会话会按整体方案写好目标、数据集、模型、指标和方法的定义；之后更新方案或定新版本时会同步更新。
+    写好后这里会像论文的「实验设置」一节那样列出来，运行页的分组和指标也会链接到这里。</div></div>`;
   const row = (anchor, cells) => `<tr data-anchor="${esc(anchor)}">${cells.map(x => `<td>${x}</td>`).join('')}</tr>`;
   const table = (title, n, heads, rows) => n ? `<div class="setblk"><h3>${title} <span class="faint">${n}</span></h3>
     <div class="scroll"><table class="mt setup"><tr>${heads.map(h => `<th>${h}</th>`).join('')}</tr>${rows.join('')}</table></div></div>` : '';
