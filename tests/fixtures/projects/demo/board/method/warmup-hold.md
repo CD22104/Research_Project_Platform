@@ -2,6 +2,8 @@
 id: warmup-hold
 title: 恒定
 parent: warmup
+back: warmup-ramp
+loop: 每个 epoch
 ---
 
 ## 一句话

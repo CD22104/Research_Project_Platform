@@ -823,15 +823,18 @@ function methodIndex(d) {
   const stepsOfTrack = tid => steps.filter(x => list(x.meta.tracks).includes(tid));
   const stepsOfSetupMethod = mid => steps.filter(x => list(x.meta.methods).includes(mid));
   const title = x => x.meta.title || x.meta.id;
-  return d._method = {steps, byId, slot, level, variants, path, hasInside, tracksOf, attemptsOf, stepsOfAttempt, stepsOfTrack, stepsOfSetupMethod, title, list};
+  // loops on a level: a step with back: <earlier step on the same level> repeats that stretch (loop: "30 轮")
+  const loopsOf = lv => lv.map((x, j) => { const i = lv.findIndex(y => y.meta.id === x.meta.back);
+    return i >= 0 && i <= j ? {from: i, to: j, label: typeof x.meta.loop === 'string' || typeof x.meta.loop === 'number' ? String(x.meta.loop) : ''} : null; }).filter(Boolean);
+  return d._method = {steps, byId, slot, level, variants, path, hasInside, tracksOf, attemptsOf, stepsOfAttempt, stepsOfTrack, stepsOfSetupMethod, title, list, loopsOf};
 }
 const stepLink = (d, x) => `<a class="chip" href="${plink(d.name, 'method', x.meta.id)}">${esc(methodIndex(d).title(x))}</a>`;
-function methodTab(d, x, hl) {  // one step as a box on its level
+function methodTab(d, x, hl, loop) {  // one step as a box on its level; loop: 'in' inside a loop, 'end' where it goes back
   const M = methodIndex(d), sec = Object.fromEntries(sectionsOf(x.body).list), vs = M.variants(x);
   const atts = [x, ...vs].flatMap(M.attemptsOf), inside = M.hasInside(x) || vs.some(M.hasInside);
   const dots = [...new Set(atts)].slice(0, 12).map(a => { const t = a.meta.status === '计划中' ? 'plan' : B.tone(a.meta.status);
     return `<span class="sym s-${t}" title="${esc(attName(a))}：${esc(a.meta.status || '')}">${t === 'plan' ? '○' : FSYM[t] || '○'}</span>`; }).join('');
-  return `<a class="mstep${hl ? ' on' : ''}" href="${plink(d.name, 'method', x.meta.id)}"><b>${esc(M.title(x))}</b>
+  return `<a class="mstep${hl ? ' on' : ''}${loop ? ' inloop' : ''}" href="${plink(d.name, 'method', x.meta.id)}"><b>${loop === 'start' ? '<span class="lpn">↻</span>' : ''}${esc(M.title(x))}${loop === 'end' ? '<span class="lpn">↺</span>' : ''}</b>
     ${gist(sec['一句话']) ? `<span class="ms1">${esc(gist(sec['一句话']))}</span>` : ''}
     <span class="ms2">${vs.length ? `<span class="tag2">${vs.length + 1} 种做法</span>` : ''}${inside ? '<span class="tag2">可展开</span>' : ''}${dots}</span></a>`;
 }
@@ -849,8 +852,10 @@ function tabMethod(d, r) {
   for (let i = 0; i <= path.length; i++) {
     const lv = M.level(key);
     if (!lv.length) break;
-    const p = path[i], hl = p ? M.slot(p) : null;
-    rows.push(`<div class="mrow"><div class="mlab">${label}</div><div class="mline">${lv.map(x => methodTab(d, x, x === hl)).join('<span class="marr">→</span>')}</div></div>`);
+    const p = path[i], hl = p ? M.slot(p) : null, loops = M.loopsOf(lv);
+    const loopAt = j => { const l = loops.find(l => j >= l.from && j <= l.to); return !l ? null : j === l.to ? 'end' : j === l.from ? 'start' : 'in'; };
+    const notes = loops.map(l => `<div class="mloop">↺ 第 ${l.from + 1}–${l.to + 1} 步（「${esc(M.title(lv[l.from]))}」到「${esc(M.title(lv[l.to]))}」）循环${l.label ? '，' + esc(l.label) : ''}</div>`).join('');
+    rows.push(`<div class="mrow"><div class="mlab">${label}</div><div><div class="mline">${lv.map((x, j) => methodTab(d, x, x === hl, loopAt(j))).join('<span class="marr">→</span>')}</div>${notes}</div></div>`);
     if (!p) break;
     const vs = M.variants(hl);
     if (vs.length) rows.push(`<div class="mrow"><div class="mlab">「${esc(M.title(hl))}」的做法</div><div class="mline chips">${[hl, ...vs].map(x =>

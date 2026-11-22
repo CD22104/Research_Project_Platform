@@ -230,12 +230,13 @@ class Pages(unittest.TestCase):
         self.assertIn("「线性预热」的子流程", w)
         self.assertEqual(re.findall(r'<a class="mstep[^"]*" href="#/p/demo/method/(warmup-[\w]+)"', w), ["warmup-ramp", "warmup-hold"])
         self.assertIn("「训练」的一种做法", w)
+        self.assertIn("↺ 第 1–2 步（「升温」到「恒定」）循环，每个 epoch", w)            # a loop back on the same level
         self.assertIn('href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">lr-sweep</a>', w)    # experiments on this step
         self.assertIn('href="#/p/demo/setup/method%3Awarmup"', w)                         # its setup.json method
         self.assertIn('<a class="ref" href="#/p/demo/runs/r001"', w)                       # numbers come from the run
         ramp = self.m("p_method_ramp")
         self.assertIn('<a href="#/p/demo/method/warmup">线性预热</a>', ramp)               # breadcrumbs up the levels
-        self.assertIn('<a class="mstep on" href="#/p/demo/method/warmup-ramp"', ramp)
+        self.assertIn('<a class="mstep on inloop" href="#/p/demo/method/warmup-ramp"', ramp)   # selected, and inside the loop
         self.assertIn('改的是方法里的：</span><a class="chip" href="#/p/demo/method/warmup">线性预热</a>', self.m("p_road_a"))
         self.assertIn('href="#/p/demo/method/warmup">怎么做 →</a>', self.m("p_setup"))
 

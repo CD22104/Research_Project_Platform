@@ -542,6 +542,12 @@ def check_project(d, limit=200):
         for x in _list(m.get("next")):
             if x not in step_ids:
                 add(st["file"], "next 里的「%s」不是方法里的步骤" % x)
+        if m.get("back"):
+            target = next((y for y in steps if y["meta"].get("id") == m["back"]), None)
+            if target is None:
+                add(st["file"], "back「%s」不是方法里的步骤" % m["back"])
+            elif target["meta"].get("parent") != m.get("parent"):
+                add(st["file"], "back「%s」不在同一层：循环只能回到同一层里前面的步骤" % m["back"])
         for t in _list(m.get("tracks")):
             if t not in track_ids:
                 add(st["file"], "tracks 里的支线「%s」不存在" % t)
