@@ -30,7 +30,7 @@ def write_config(tmp, root, servers=()):
     cfg = os.path.join(tmp, "servers.json")
     with open(cfg, "w") as f:
         json.dump({"socket": os.path.join(tmp, "run", "t.sock"), "servers": list(servers),
-                   "projects_root": root, "projects_interval_seconds": 3600}, f)
+                   "projects_root": root, "projects_interval_seconds": 3600, "state_dir": os.path.join(tmp, "state")}, f)
     return cfg
 
 
@@ -114,6 +114,25 @@ class Http(unittest.TestCase):
             c.close()
 
     @classmethod
+    def post(cls, path, body, headers=None):
+        h = {"Host": "localhost:8765", "Content-Type": "application/json", "X-Board-Write": "1",
+             "Origin": "http://localhost:8765"}
+        h.update(headers or {})
+        h = {k: v for k, v in h.items() if v is not None}
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        c = UnixHTTP(cls.sock)
+        try:
+            c.putrequest("POST", path, skip_host=True)
+            for k, v in h.items():
+                c.putheader(k, v)
+            c.putheader("Content-Length", str(len(data)))
+            c.endheaders(data)
+            r = c.getresponse()
+            return r.status, r.read()
+        finally:
+            c.close()
+
+    @classmethod
     def get_json(cls, path):
         status, _, body = cls.get(path)
         assert status == 200, (path, status)
@@ -170,6 +189,66 @@ class Http(unittest.TestCase):
         self.assertEqual((status, h["Content-Type"]), (200, "text/plain; charset=utf-8"))
         self.assertIn("rc-start", body.decode())
         self.assertIsInstance(self.get_json("/api/projects")["entries"], list)
+
+    def demo_summary(self):
+        return next(p for p in self.get_json("/api/projects")["projects"] if p["name"] == "demo")
+
+    def test_reply_to_todo(self):
+        status, body = self.post("/api/answer", {"project": "demo", "id": "t3", "answer": "现在补", "text": "用 h200\x07"})
+        self.assertEqual(status, 200, body)
+        t3 = next(t for t in self.demo_summary()["todos"] if t["id"] == "t3")
+        self.assertEqual((t3["answer"]["answer"], t3["answer"]["text"]), ("现在补", "用 h200"))   # visible at once, control chars dropped
+        self.assertEqual(t3["options"], ["现在补", "先不补"])
+        with open(os.path.join(self.root, "demo", "board", "answers.jsonl"), encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f]
+        self.assertEqual(rows[-1]["id"], "t3")
+        self.assertEqual(rows[-1]["by"], "console")
+        self.post("/api/answer", {"project": "demo", "id": "t3", "answer": "先不补"})          # changing a reply: last row wins
+        t3 = next(t for t in self.demo_summary()["todos"] if t["id"] == "t3")
+        self.assertEqual(t3["answer"]["answer"], "先不补")
+
+    def test_confirm_attempt(self):
+        status, body = self.post("/api/answer", {"project": "demo", "id": "a:2026-11-15-focal", "answer": "失败", "text": ""})
+        self.assertEqual(status, 200, body)
+        focal = next(a for a in self.demo_summary()["pending"] if a["id"] == "2026-11-15-focal")
+        self.assertEqual((focal["answer"]["answer"], focal["proposed"]), ("失败", "失败"))
+        self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "a:2026-11-15-focal", "answer": "大成功"})[0], 400)
+        self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "a:2026-11-10-lr-sweep", "answer": "成功"})[0], 404)
+
+    def test_reply_rejected(self):
+        ok = {"project": "demo", "id": "t2", "answer": None, "text": "好"}
+        cases = [
+            ({}, {"X-Board-Write": None}, 403),                       # plain cross-site form posts lack the header
+            ({}, {"Host": "evil.example:8765"}, 403),                 # DNS rebinding
+            ({}, {"Origin": "http://evil.example"}, 403),             # another site's page
+            ({}, {"Sec-Fetch-Site": "cross-site"}, 403),
+            ({}, {"Content-Type": "text/plain"}, 403),
+            ({"id": "t1"}, {}, 404),                                  # already done
+            ({"project": "nope"}, {}, 404),
+            ({"project": "../demo"}, {}, 404),
+            ({"text": "", "answer": None}, {}, 400),                  # empty
+            ({"answer": "随便"}, {}, 400),                            # t2 has no options
+            ({"text": "x" * 2001}, {}, 400),
+        ]
+        for change, headers, code in cases:
+            with self.subTest(change=change, headers=headers):
+                self.assertEqual(self.post("/api/answer", dict(ok, **change), headers)[0], code)
+        self.assertEqual(self.post("/api/answer", b"x" * 20000)[0], 413)
+        self.assertEqual(self.post("/api/answer", b"[1]")[0], 400)
+        self.assertEqual(self.post("/api/other", ok)[0], 404)
+        self.assertEqual(self.post("/api/answer", ok, {"Origin": None})[0], 200)  # no Origin (same-origin GET-like) is fine
+
+    def test_rename(self):
+        self.assertEqual(self.post("/api/name", {"project": "demo", "name": "演示"})[0], 200)
+        row = self.demo_summary()
+        self.assertEqual((row["title"], row["full_title"]), ("演示", "演示项目"))
+        p = self.get_json("/api/project/demo")["project"]
+        self.assertEqual((p["title"], p["full_title"]), ("演示", "演示项目"))
+        self.assertEqual(self.post("/api/name", {"project": "demo", "name": "x" * 25})[0], 400)
+        self.assertEqual(self.post("/api/name", {"project": "nope", "name": "x"})[0], 404)
+        self.assertEqual(self.post("/api/name", {"project": "demo", "name": ""})[0], 200)  # back to the original
+        self.assertEqual(self.demo_summary()["title"], "演示项目")
+        self.assertNotIn("full_title", self.demo_summary())
 
     def test_gpu_api_unchanged(self):
         d = self.get_json("/api/status")

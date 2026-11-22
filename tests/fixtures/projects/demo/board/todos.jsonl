@@ -1,4 +1,4 @@
 {"id": "t1", "text": "确认 focal 的结论", "kind": "decision", "where": "demo 会话里说「确认 focal」", "created": "2026-11-20T00:00:00Z", "done": null, "by": "h100", "link": "roadmap/a:2026-11-15-focal"}
 {"id": "t2", "text": "决定要不要补跑 gamma=1", "kind": "whenever", "created": "2026-11-20T01:00:00Z", "done": null}
 {"id": "t1", "text": "确认 focal 的结论", "kind": "decision", "created": "2026-11-20T00:00:00Z", "done": "2026-11-21T00:00:00Z", "by": "h100"}
-{"id": "t3", "text": "补 dev 集评测", "kind": "blocking", "where": "h100 会话", "created": "2026-11-21T00:00:00Z", "done": null}
+{"id": "t3", "text": "补 dev 集评测", "kind": "blocking", "where": "h100 会话", "created": "2026-11-21T00:00:00Z", "done": null, "context": "dev 集还没评测；补的话要 1 张卡约 20 分钟。", "options": ["现在补", "先不补"], "recommend": "现在补"}

@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import projects
 
@@ -179,12 +179,133 @@ def rc_entries():
     return _rc["names"]
 
 
+# ---------------------------------------------------------------- what the console writes
+# Only two things, both from the console page itself (see write_refused):
+#   replies to to-dos -> <project>/board/answers.jsonl (append only; sessions act on them when told to)
+#   display names     -> state/names.json here on a100 (console-only setting, not in the project)
+STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(HERE, "state"))
+NAMES_FILE = os.path.join(STATE_DIR, "names.json")
+MAX_POST = 16 * 1024
+MAX_REPLY = 2000
+MAX_NAME = 24
+write_lock = threading.Lock()
+
+
+def _load_names():
+    try:
+        with open(NAMES_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+names = _load_names()
+
+
+def _clean(text, keep_newlines):
+    """Drop control characters (keep newlines and tabs in replies)."""
+    ok = "\n\t" if keep_newlines else ""
+    return "".join(c for c in text if c in ok or (ord(c) >= 32 and ord(c) != 127)).strip()
+
+
+def _utc_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def post_answer(body):
+    """Append one reply to a to-do or to a 待确认 attempt. -> (http code, response object)"""
+    name, tid, answer, text = body.get("project"), body.get("id"), body.get("answer"), body.get("text") or ""
+    if not (isinstance(name, str) and isinstance(tid, str) and 0 < len(tid) <= 200 and isinstance(text, str)
+            and (answer is None or isinstance(answer, str))):
+        return 400, {"error": "请求格式不对"}
+    text = _clean(text, True)
+    if len(text) > MAX_REPLY:
+        return 400, {"error": "补充说明太长（最多 %d 字）" % MAX_REPLY}
+    if not answer and not text:
+        return 400, {"error": "回复是空的"}
+    snap, _ = project_cache.snapshot()
+    if name == projects.SHARED:
+        choices = next((projects.todo_options(t) for t in project_cache.global_todos()
+                        if str(t.get("id")) == tid and not t.get("done")), None)
+    elif projects.valid_name(name) and name in snap:
+        if tid.startswith("a:"):
+            choices = next((list(projects.ATTEMPT_CHOICES) for a in snap[name].get("attempts") or []
+                            if a.get("meta", {}).get("id") == tid[2:] and "结论待确认" in (a.get("needs_input") or [])), None)
+        else:
+            choices = next((projects.todo_options(t) for t in snap[name].get("todos") or []
+                            if str(t.get("id")) == tid and not t.get("done")), None)
+    else:
+        return 404, {"error": "没有这个项目"}
+    if choices is None:
+        return 404, {"error": "这条已经办完或不存在，刷新看看"}
+    if answer is not None and answer not in choices:
+        return 400, {"error": "选项不在这条待办的选项里"}
+    row = {"id": tid, "answer": answer, "text": text, "at": _utc_now(), "by": "console"}
+    line = (json.dumps(row, ensure_ascii=False) + "\n").encode()
+    path = project_cache.answers_path(name)
+    with write_lock:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            return 503, {"error": "写入失败：%s" % projects._err(e)}
+        try:
+            project_cache.reload_answers(name)
+        except OSError:
+            pass  # written; the next scan picks it up
+    return 200, {"ok": True, "row": row}
+
+
+def post_name(body):
+    """Set (or clear, with an empty name) the name the console shows for a project."""
+    name, label = body.get("project"), body.get("name")
+    if not (isinstance(name, str) and isinstance(label, str)):
+        return 400, {"error": "请求格式不对"}
+    snap, _ = project_cache.snapshot()
+    if not (projects.valid_name(name) and name in snap):
+        return 404, {"error": "没有这个项目"}
+    label = _clean(label, False)
+    if len(label) > MAX_NAME:
+        return 400, {"error": "名字最多 %d 个字" % MAX_NAME}
+    with write_lock:
+        new = dict(names)
+        if label:
+            new[name] = label
+        else:
+            new.pop(name, None)
+        try:
+            os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+            tmp = NAMES_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(new, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, NAMES_FILE)
+        except OSError as e:
+            return 503, {"error": "保存失败：%s" % projects._err(e)}
+        names.clear()
+        names.update(new)
+    return 200, {"ok": True, "name": label}
+
+
+def renamed(project, name):
+    """project.json fields with the console name applied: title becomes the user's name, full_title keeps the original."""
+    label = names.get(name)
+    if not label:
+        return project
+    return dict(project, title=label, full_title=project.get("title") or name)
+
+
 def api_projects():
     snap, status = project_cache.snapshot()
     rows = []
     for name in sorted(snap):
         row = projects.summary(snap[name])
         row["active_runs"] = [dict(r, liveness=run_liveness(r)) for r in row["active_runs"]]
+        if names.get(name):
+            row["full_title"], row["title"] = row["title"], names[name]
         rows.append(row)
     return {"now": time.time(), "scan": status, "projects": rows, "todos": project_cache.global_todos(),
             "entries": rc_entries()}
@@ -196,6 +317,7 @@ def api_project(name):
     if data is None:
         return None
     out = dict(data, scan=status, now=time.time())  # shallow copy: cached snapshots are never mutated
+    out["project"] = renamed(data.get("project") or {}, name)
     out["runs"] = [dict(r, liveness=run_liveness(r["run"]) if r["run"].get("status") == "运行中" else None)
                    for r in data["runs"]]
     return out
@@ -271,6 +393,48 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, ctype, f.read())
         else:
             self.send(404, "text/plain", b"not found")
+
+    def write_refused(self):
+        """Why a write request is refused, or None. Writes must come from the console page itself:
+        a custom header and a JSON body (other sites' pages cannot send these without a CORS
+        preflight, which is never answered), a local Host (no DNS rebinding) and a same-origin Origin."""
+        host = self.headers.get("Host") or ""
+        hostname = host.rsplit("]", 1)[0] + "]" if host.startswith("[") else host.split(":")[0]
+        if hostname not in ("localhost", "127.0.0.1", "[::1]"):
+            return "host"
+        if self.headers.get("X-Board-Write") != "1":
+            return "header"
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+            return "content type"
+        origin = self.headers.get("Origin")
+        if origin is not None and urlsplit(origin).netloc != host:
+            return "origin"
+        if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+            return "fetch site"
+        return None
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        handler = {"/api/answer": post_answer, "/api/name": post_name}.get(path)
+        if handler is None:
+            return self.send(404, "text/plain", b"not found")
+        why = self.write_refused()
+        if why:
+            return self.send(403, "text/plain", ("refused: %s" % why).encode())
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if not 0 < n <= MAX_POST:
+            return self.send(413, "text/plain", b"body too large or missing")
+        try:
+            body = json.loads(self.rfile.read(n))
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return self.send(400, "text/plain", b"bad json")
+        code, out = handler(body)
+        self.send(code, "application/json; charset=utf-8", json.dumps(out, ensure_ascii=False).encode())
 
     def log_message(self, *a):
         pass

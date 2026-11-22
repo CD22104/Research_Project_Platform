@@ -44,7 +44,8 @@ def start_server(repo, tmp):
         port = s.getsockname()[1]
     cfg = os.path.join(tmp, "servers.json")
     with open(cfg, "w") as f:  # no "socket": plain 127.0.0.1 port, fixtures only
-        json.dump({"port": port, "servers": [], "projects_root": root, "projects_interval_seconds": 3600}, f)
+        json.dump({"port": port, "servers": [], "projects_root": root, "projects_interval_seconds": 3600,
+                   "state_dir": os.path.join(tmp, "state")}, f)
     base = "http://127.0.0.1:%d/" % port
     log = open(os.path.join(tmp, "server.log"), "w")
     proc = subprocess.Popen([sys.executable, os.path.join(repo, "server.py")],
@@ -240,7 +241,11 @@ class Pages(unittest.TestCase):
         todo = self.m("todo")
         demo, _, shared = todo.partition("跨项目")                                    # grouped by project, shared last
         self.assertLess(demo.index("补 dev 集评测"), demo.index("决定要不要补跑"))       # blocking before whenever
-        self.assertIn("1 条尝试等你确认结论，1 条尝试缺结论和原因", demo)
+        self.assertIn('<button class="opt" data-opt="现在补">现在补<span class="rec">建议</span></button>', demo)   # choices, suggested one marked
+        self.assertIn("dev 集还没评测", demo)                                           # background shown with the question
+        self.assertIn('data-key="demo|a:2026-11-15-focal"', demo)                       # a 待确认 attempt can be confirmed here
+        self.assertIn('<button class="opt" data-opt="失败">失败<span class="rec">建议</span></button>', demo)
+        self.assertIn("1 条尝试缺「结论和原因」", demo)
         self.assertNotIn("确认 focal 的结论</span>", todo)                            # done: only in the done list, struck out
         self.assertIn("给所有项目加远程仓库", shared)
         self.assertIn("现在能跑的卡", self.m("gpu"))
@@ -273,6 +278,16 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   location.hash = '#/p/demo/roadmap'; await wait(300);
   [...document.querySelectorAll('#main a.tn.ta')].find(a => a.textContent.includes('focal-gamma1')).click(); await wait(300);
   out.selected = document.querySelector('#main .detail h2').textContent.trim().slice(0, 12);
+  location.hash = '#/todo'; await wait(300);
+  const box = document.querySelector('.reply[data-id="t3"]');
+  box.querySelector('[data-opt="先不补"]').click();
+  const ta = box.querySelector('textarea'); ta.value = '下周再说'; ta.dispatchEvent(new Event('input', {bubbles: true}));
+  box.querySelector('[data-send]').click(); await wait(800);
+  out.answered = (document.querySelector('#main .ans') || {}).textContent || '';
+  location.hash = '#/p/demo/overview'; await wait(500);
+  document.getElementById('rename-open').click(); await wait(50);
+  document.getElementById('rename-input').value = '演示'; document.getElementById('rename-save').click(); await wait(800);
+  out.renamed = document.querySelector('.phead h1').textContent + '|' + document.querySelector('#side a.sitem.on .lbl').textContent;
   location.hash = '#/gpu'; await wait(300);
   out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
   const pre = document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
@@ -299,7 +314,7 @@ class Interactions(unittest.TestCase):
                 f.write(text.replace("</body>", CLICKS.replace("<\\/script>", "</" + "script>"), 1))
             proc, base, log = start_server(repo, tmp)
             try:
-                dom, errors = dump(base + "#/overview", 9000)
+                dom, errors = dump(base + "#/overview", 14000)
             finally:
                 stop_server(proc, log)
         finally:
@@ -316,6 +331,9 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["track_hash"], "#/p/demo/runs?track=t-loss")
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
+        self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
+        self.assertIn("下周再说", out["answered"])
+        self.assertEqual(out["renamed"], "演示|演示")                   # header and sidebar use the new name
 
 
 if __name__ == "__main__":

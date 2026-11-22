@@ -178,6 +178,7 @@ FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
               ".svg": "image/svg+xml", ".json": TEXT, ".jsonl": TEXT, ".md": TEXT}
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MISSING = (FileNotFoundError, NotADirectoryError)
+SHARED = "_shared"  # cross-project directory under the root; not a project
 
 
 def valid_name(name):
@@ -278,6 +279,35 @@ class _Board:
         return dict(self.record("../" + name, st), file=name)
 
 
+TODO_KEYS = ("id", "text", "kind", "where", "created", "done", "by", "link", "context", "options", "recommend", "result")
+ATTEMPT_CHOICES = ("成功", "部分成功", "失败", "放弃")  # what the user can confirm a 待确认 attempt as
+
+
+def todo_options(t):
+    """The answer choices of a to-do: its "options" if that is a list of short strings, else none."""
+    opts = t.get("options")
+    if not isinstance(opts, list):
+        return []
+    return [o for o in opts if isinstance(o, str) and o.strip() and len(o) <= 200][:12]
+
+
+def read_answers(path, limit=20000):
+    """answers.jsonl -> {id: latest row}. Only the console writes this file: one row per reply,
+    the last row of an id wins (the user may change a reply before a session acts on it)."""
+    out = {}
+    for i, line in enumerate(_complete_lines(path)):
+        if i >= limit:
+            break
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            out.pop(row["id"], None)
+            out[row["id"]] = {k: row.get(k) for k in ("id", "answer", "text", "at")}
+    return out
+
+
 def read_todos(path, limit=2000):
     """todos.jsonl -> {"items": [...], "bad": n}. Rows are appended; the last row of an id wins,
     so a session marks an item done by appending it again with "done" set."""
@@ -296,7 +326,7 @@ def read_todos(path, limit=2000):
             bad += 1
             continue
         items.pop(str(row["id"]), None)  # re-insert so the order follows the latest row
-        items[str(row["id"])] = {k: row.get(k) for k in ("id", "text", "kind", "where", "created", "done", "by", "link")}
+        items[str(row["id"])] = {k: row.get(k) for k in TODO_KEYS}
     return {"items": list(items.values()), "bad": bad}
 
 
@@ -394,6 +424,11 @@ def scan_project(board, memo=None, new_memo=None):
         todos = b.cached("todos.jsonl", st, read_todos, todos) or todos
         if todos["bad"]:
             b.errors.append({"file": "todos.jsonl", "error": "%d 行无法解析或缺少 id / text" % todos["bad"]})
+    answers = {}
+    st = b.stat("answers.jsonl")
+    if st:
+        bump("todos", st.st_mtime)
+        answers = b.cached("answers.jsonl", st, read_answers, {}) or {}
 
     # general documents: board/plan.md is above; board/docs/*.md and two fixed files in the project root
     docs = []
@@ -409,7 +444,7 @@ def scan_project(board, memo=None, new_memo=None):
             docs.append(r)
 
     out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
-           "todos": todos["items"], "docs": docs, "updated": updated, "errors": b.errors}
+           "todos": todos["items"], "answers": answers, "docs": docs, "updated": updated, "errors": b.errors}
     out.update(records)
     try:
         out["checks"] = check_project(out)
@@ -536,7 +571,11 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [],
             "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
-            "todos": [], "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+            "todos": [], "answers": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+
+
+def with_answers(todos, answers):
+    return [dict(t, answer=answers.get(str(t.get("id")))) for t in todos]
 
 
 def summary(data):
@@ -558,13 +597,19 @@ def summary(data):
             out[s] = out.get(s, 0) + 1
         return out
 
+    answers = data.get("answers") or {}
     attempts = data.get("attempts") or []
     pending = []  # attempts waiting for the user (an empty 预期 alone is not counted)
     for a in attempts:
         needs = [x for x in a.get("needs_input") or [] if x != "预期"]
         if needs:
             m = a.get("meta", {})
-            pending.append({"file": a.get("file"), "id": m.get("id"), "status": m.get("status"), "needs": needs})
+            aid = m.get("id") if isinstance(m.get("id"), str) else None
+            proposed = m.get("proposed") if m.get("proposed") in ATTEMPT_CHOICES else None
+            pending.append({"file": a.get("file"), "id": m.get("id"), "status": m.get("status"), "needs": needs,
+                            "title": m.get("title"), "track": m.get("track"), "proposed": proposed,
+                            "conclusion": ((a.get("sections") or {}).get("结论和原因") or "")[:600],
+                            "answer": answers.get("a:" + aid) if aid and "结论待确认" in needs else None})
     return {"name": data.get("name"), "title": p.get("title") or data.get("name"),
             "status": p.get("status"), "conclusion": p.get("conclusion"),
             "current_version": p.get("current_version"), "updated": p.get("updated"),
@@ -574,9 +619,9 @@ def summary(data):
             "n_tracks": len(data.get("tracks") or []), "track_status": count(data.get("tracks") or []),
             "n_attempts": len(attempts), "attempt_status": count(attempts),
             "n_runs": len(data.get("runs") or []), "pending": pending,
-            "todos": [t for t in data.get("todos") or [] if not t.get("done")],
-            "todos_done": sorted((t for t in data.get("todos") or [] if t.get("done")),
-                                 key=lambda t: str(t.get("done")), reverse=True)[:20],
+            "todos": with_answers([t for t in data.get("todos") or [] if not t.get("done")], answers),
+            "todos_done": with_answers(sorted((t for t in data.get("todos") or [] if t.get("done")),
+                                              key=lambda t: str(t.get("done")), reverse=True)[:20], answers),
             "n_checks": len(data.get("checks") or [])}
 
 
@@ -592,6 +637,7 @@ class ProjectCache:
         self.log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
         self._lock = threading.Lock()
         self._projects, self._memo, self._todos, self._todos_sig = {}, {}, [], None
+        self._answers, self._answers_sig = {}, None  # replies to the cross-project to-dos (_shared/answers.jsonl)
         self._status = {"root": root, "started": None, "finished": None, "duration": None,
                         "running_since": None, "error": None, "error_at": None}
 
@@ -612,6 +658,16 @@ class ProjectCache:
                 todos, self._todos_sig = [], None
             except OSError as e:  # keep the previous list on I/O trouble
                 self.log("[projects] _shared/todos.jsonl: %s" % _err(e))
+            answers, path = self._answers, self.answers_path(SHARED)
+            try:
+                st = os.stat(path)
+                sig = (st.st_mtime_ns, st.st_size)
+                if sig != self._answers_sig:  # unchanged file: keep the previous parse
+                    answers, self._answers_sig = read_answers(path), sig
+            except MISSING:
+                answers, self._answers_sig = {}, None
+            except OSError as e:
+                self.log("[projects] _shared/answers.jsonl: %s" % _err(e))
         except Exception as e:
             self.log("[projects] scan of %s failed, keeping previous data:\n%s"
                      % (self.root, traceback.format_exc()))
@@ -620,7 +676,7 @@ class ProjectCache:
             return False
         t1 = time.time()
         with self._lock:
-            self._projects, self._memo, self._todos = projects, new_memo, todos
+            self._projects, self._memo, self._todos, self._answers = projects, new_memo, todos, answers
             self._status.update(started=t0, finished=t1, duration=round(t1 - t0, 3),
                                 running_since=None, error=None)
         return True
@@ -639,9 +695,25 @@ class ProjectCache:
             return self._projects, dict(self._status)
 
     def global_todos(self):
-        """Cross-project to-dos from <root>/_shared/todos.jsonl (all rows, done or not)."""
+        """Cross-project to-dos from <root>/_shared/todos.jsonl (all rows, done or not), with replies."""
         with self._lock:
-            return self._todos
+            return with_answers(self._todos, self._answers)
+
+    def answers_path(self, name):
+        if name == SHARED:
+            return os.path.join(self.root, SHARED, "answers.jsonl")
+        return os.path.join(self.root, name, "board", "answers.jsonl")
+
+    def reload_answers(self, name):
+        """Re-read one answers.jsonl now (after the console appended to it), so the reply shows at once."""
+        ans = read_answers(self.answers_path(name))
+        with self._lock:
+            if name == SHARED:
+                self._answers, self._answers_sig = ans, None
+            elif name in self._projects:
+                projects = dict(self._projects)  # snapshots are replaced, never mutated
+                projects[name] = dict(projects[name], answers=ans)
+                self._projects = projects
 
 
 def safe_board_file(root, name, relpath):

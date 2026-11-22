@@ -5,7 +5,11 @@ const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 
 // ============================================================ data
 const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
-const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false};  // view state kept across refreshes
+const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
+  pick: {}, draft: {}, editing: {}, err: {}, renaming: false};                   // replies being written, the rename box
+// the console's only writes: replies (board/answers.jsonl) and display names; the server checks they come from this page
+const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Board-Write': '1'},
+  body: JSON.stringify(body)}).then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status); return d; });
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
@@ -238,18 +242,47 @@ function pageOverview() {
 // ============================================================ todo
 const KIND_ORDER = {blocking: 0, decision: 1};
 const kindRank = t => KIND_ORDER[t.kind] ?? 2;
+const isoAgo = (iso, now) => iso ? B.ago(Date.parse(iso) / 1000, now) : '';
+// the reply part of a to-do or of an attempt waiting for confirmation
+function replyBox(project, id, choices, recommend, answer, now) {
+  const key = project + '|' + id;
+  if (answer && !ui.editing[key]) {
+    return `<div class="ans"><span class="pill t-run">已回复</span> ${answer.answer ? `<b>${esc(answer.answer)}</b>` : ''}` +
+      `${answer.text ? `<span class="atext">${answer.answer ? '　' : ''}${esc(answer.text)}</span>` : ''}
+      <div class="small">${isoAgo(answer.at, now)}回复 · 等会话处理：在这个项目的会话里说「处理回复」 · <a href="#" data-edit="${esc(key)}">改回复</a></div></div>`;
+  }
+  const pick = key in ui.pick ? ui.pick[key] : answer ? answer.answer : null;
+  const draft = key in ui.draft ? ui.draft[key] : answer ? answer.text || '' : '';
+  return `<div class="reply" data-key="${esc(key)}" data-p="${esc(project)}" data-id="${esc(id)}">
+    ${choices.length ? `<div class="opts">${choices.map(o => `<button class="opt${pick === o ? ' on' : ''}" data-opt="${esc(o)}">${esc(o)}` +
+      `${o === recommend ? '<span class="rec">建议</span>' : ''}</button>`).join('')}</div>` : ''}
+    <textarea rows="2" data-draft="${esc(key)}" placeholder="${choices.length ? '补充说明（可选）' : '写下你的回复'}">${esc(draft)}</textarea>
+    <div class="ract"><button class="send" data-send="${esc(key)}">提交回复</button>
+      ${answer ? `<a href="#" data-cancel="${esc(key)}">取消</a>` : ''}<span class="rerr">${esc(ui.err[key] || '')}</span></div></div>`;
+}
 function todoItem(t, project, now) {
+  const pname = project ? project.name : '_shared';
   const href = project ? linkFor(project.name, t.link) : null;
+  const opts = Array.isArray(t.options) ? t.options.filter(o => typeof o === 'string' && o.trim()) : [];
   return `<li><div>${t.kind && KIND[t.kind] ? `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind]}</span> ` : ''}` +
     `<span class="ttext">${esc(t.text)}</span>` + (href ? ` <a class="more" href="${href}">相关记录 →</a>` : '') + '</div>' +
-    (t.where ? `<div class="where2">怎么回复：${esc(t.where)}</div>` : '') +
-    `<div class="small">${t.created ? B.ago(Date.parse(t.created) / 1000, now) + '记下' : ''}${t.by ? ' · 由 ' + esc(t.by) : ''}</div></li>`;
+    (t.context ? `<div class="ctx md">${B.md(String(t.context))}</div>` : '') +
+    replyBox(pname, String(t.id), opts, t.recommend, t.answer, now) +
+    `<div class="small">${t.where ? esc(t.where) + ' · ' : ''}${isoAgo(t.created, now)}记下${t.by ? ' · 由 ' + esc(t.by) : ''}</div></li>`;
+}
+// an attempt whose conclusion waits for the user: the drafted conclusion and the four choices
+function confirmItem(p, a, now) {
+  return `<li><div><span class="pill t-todo">确认结论</span> <span class="ttext">尝试「${esc(a.title || a.id)}」</span>
+      <a class="more" href="${plink(p.name, 'roadmap', 'a:' + a.id)}">看这次尝试 →</a></div>
+    ${a.conclusion ? `<div class="ctx md">${B.md(a.conclusion)}</div>` : ''}
+    ${replyBox(p.name, 'a:' + a.id, ['成功', '部分成功', '失败', '放弃'], a.proposed, a.answer, now)}</li>`;
 }
 function doneItems(list, now) {
   const week = now - 7 * 86400;
   const done = (list || []).filter(t => t.done && Date.parse(t.done) / 1000 >= week).sort((a, b) => String(b.done).localeCompare(String(a.done)));
   return done.length ? `<details class="done" id="done-${esc(done[0].id)}"><summary>最近 7 天办完 ${done.length} 条</summary><ul class="tlist">` +
-    done.map(t => `<li><s>${esc(t.text)}</s><div class="small">${B.ago(Date.parse(t.done) / 1000, now)}办完</div></li>`).join('') + '</ul></details>' : '';
+    done.map(t => `<li><s>${esc(t.text)}</s>${t.answer ? `<div class="small">你的回复：${esc([t.answer.answer, t.answer.text].filter(Boolean).join('　'))}</div>` : ''}` +
+      `${t.result ? `<div class="res">结果：${esc(t.result)}</div>` : ''}<div class="small">${isoAgo(t.done, now)}办完</div></li>`).join('') + '</ul></details>' : '';
 }
 function pageTodo() {
   const pj = S.projects;
@@ -258,23 +291,26 @@ function pageTodo() {
   const count = ts => { for (const t of ts) tally[t.kind in tally ? t.kind : 'whenever']++; return ts; };
   const groups = pj.projects.map(p => {
     const todos = count([...(p.todos || [])].sort((a, b) => kindRank(a) - kindRank(b)));
-    const n = (p.pending || []).length, confirm = (p.pending || []).filter(x => x.needs.includes('结论待确认')).length;
-    const parts = [confirm ? `${confirm} 条尝试等你确认结论` : '', n - confirm ? `${n - confirm} 条尝试缺结论和原因` : ''].filter(Boolean);
-    const pending = n ? `<li><span class="pill t-todo">等你决定</span> <a href="${plink(p.name, 'roadmap', null, {todo: 1})}">${parts.join('，')}</a>
-      <div class="where2">怎么回复：在路线页逐条看，然后在这个项目的会话里说结论</div></li>` : '';
-    return {p, todos, pending, n: todos.length + n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, n ? 1 : 9), done: doneItems(p.todos_done, now)};
+    const confirm = (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string');
+    const missing = (p.pending || []).length - confirm.length;
+    tally.decision += confirm.length;
+    const items = todos.map(t => todoItem(t, p, now)).concat(confirm.map(a => confirmItem(p, a, now)));
+    if (missing) items.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'roadmap', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
+      <div class="where2">这要由会话补写，在项目会话里说「补写结论」</div></li>`);
+    const n = items.length;
+    return {p, items, n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, confirm.length ? 1 : 9), done: doneItems(p.todos_done, now)};
   }).filter(g => g.n || g.done).sort((a, b) => a.top - b.top || b.n - a.n);
   const shared = count(openTodos(pj.todos).sort((a, b) => kindRank(a) - kindRank(b)));
   const card = (title, meta, items, done) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>` +
     (items.length ? `<ul class="tlist">${items.join('')}</ul>` : '<div class="empty">没有要处理的。</div>') + done + '</div>';
-  const html = groups.map(g => card(`<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>`, g.n ? `${g.n} 条` : '',
-      g.todos.map(t => todoItem(t, g.p, now)).concat(g.pending ? [g.pending] : []), g.done)).join('') +
+  const html = groups.map(g => card(`<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>`, g.n ? `${g.n} 条` : '', g.items, g.done)).join('') +
     (shared.length || (pj.todos || []).some(t => t.done) ? card('跨项目', shared.length ? `${shared.length} 条` : '', shared.map(t => todoItem(t, null, now)), doneItems(pj.todos, now)) : '');
   return `<h1 class="pt">待办</h1>
     <div class="summary">${[['blocking', '卡着进度'], ['decision', '等你决定'], ['whenever', '不急']].map(([k, l]) =>
       `<div class="stat"><div class="k">${l}</div><div class="v">${tally[k]}</div></div>`).join('')}</div>
     ${html || '<div class="card"><div class="empty">没有待办。</div></div>'}
-    <p class="small">按项目分组，卡着进度的排在前面。待办由各会话写在项目的 board/todos.jsonl 和 /shared/ssd/dchen/_shared/todos.jsonl 里，控制台每分钟读一次；办完后由会话标记完成，会移到「最近 7 天办完」。</p>`;
+    <p class="small">在这里选好或写好回复，然后去项目会话里说「处理回复」，会话逐条执行并标记完成，办完的移到「最近 7 天办完」并写明结果。
+      回复存在项目的 board/answers.jsonl；待办由会话写在 board/todos.jsonl，控制台每分钟读一次。</p>`;
 }
 
 function pageNew() {
@@ -419,12 +455,13 @@ function ensureDetail(name, force = false) {
     if (res.status === 404) { changed = !S.missing[name]; S.missing[name] = true; delete S.detail[name]; return; }
     if (!res.ok) return;
     const d = await res.json(), old = S.detail[name];
-    changed = !old || old.scanned_at !== d.scanned_at || JSON.stringify(old.stale) !== JSON.stringify(d.stale) || JSON.stringify(old.scan) !== JSON.stringify(d.scan);
+    const same = k => JSON.stringify(old[k]) === JSON.stringify(d[k]);
+    changed = !old || old.scanned_at !== d.scanned_at || !same('stale') || !same('scan') || !same('project') || !same('answers');
     S.detail[name] = d; S.missing[name] = false;
   }).catch(() => {}).finally(() => {
     S.loading[name] = false; S.fetchedAt[name] = Date.now();
     const r = route();
-    if (changed && r.page === 'project' && r.name === name) render();
+    if (changed && r.page === 'project' && r.name === name && !busy()) render();
   });
 }
 
@@ -436,10 +473,16 @@ function pageProject(r) {
     : `<div class="empty">正在读取 ${esc(r.name)}…</div>`;
   const p = d.project || {};
   const counts = {setup: null, roadmap: d.attempts.length, runs: d.runs.length, examples: (d.example.probe_head || []).length || null, docs: docItems(d).length};
-  const head = `<div class="phead"><h1>${esc(p.title || d.name)}</h1>${B.pill(p.status)}
+  const nameHtml = ui.renaming
+    ? `<span class="rename"><input id="rename-input" data-p="${esc(d.name)}" maxlength="24" value="${esc(p.title || d.name)}" placeholder="控制台里显示的名字">
+        <button id="rename-save">保存</button>${p.full_title ? '<button id="rename-reset">恢复原名</button>' : ''}<button id="rename-cancel">取消</button>
+        <span class="small" id="rename-err">最多 24 个字，只改控制台里的显示，不改目录名</span></span>`
+    : `<h1>${esc(p.title || d.name)}</h1><button class="lnkbtn" id="rename-open" title="改控制台里显示的名字">改名</button>`;
+  const head = `<div class="phead">${nameHtml}${B.pill(p.status)}
       ${p.current_version ? `<span class="small">当前版本 <b>${esc(p.current_version)}</b></span>` : ''}
       ${entryBadge(d.name)}
       <span class="small right">数据读取于 ${B.ago(d.scanned_at, d.now)} · 每分钟刷新</span></div>
+    ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
     <nav class="ptabs">${TABS.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')}</nav>`;
   const body = {overview: tabOverview, setup: setupCard, roadmap: tabRoadmap, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
@@ -473,13 +516,15 @@ function tabOverview(d) {
       <div class="s">${c.disp.headline ? '还没有运行记录这个指标' : '未设置：在 project.json 的 display.headline 里写明分组、指标和方向'}</div></div>`;
   }
   const pending = d.attempts.filter(a => pendingOf(a).length).sort((a, b) => dateKey(b).localeCompare(dateKey(a)));
-  const todos = openTodos(d.todos);
+  const answers = d.answers || {}, proj = {name, title: p.title};
+  const todos = openTodos(d.todos).sort((a, b) => kindRank(a) - kindRank(b)).map(t => ({...t, answer: answers[String(t.id)] || null}));
   const waitItems = [
-    ...todos.map(t => { const href = linkFor(name, t.link);
-      return `<li><span class="when"><span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind] || '待办'}</span></span>
-        <span>${href ? `<a href="${href}">${esc(t.text)}</a>` : esc(t.text)}${t.where ? `<div class="small">在哪做：${esc(t.where)}</div>` : ''}</span></li>`; }),
-    ...pending.map(a => `<li><span class="when">${esc(attDate(a))}</span>
-      <span><a href="${plink(name, 'roadmap', 'a:' + attKey(a))}">${esc(attName(a))}</a> <span class="todo">${needsLabel(pendingOf(a))}</span></span></li>`)];
+    ...todos.map(t => todoItem(t, proj, d.now)),
+    ...pending.map(a => typeof a.meta.id === 'string' && pendingOf(a).includes('结论待确认')
+      ? confirmItem(proj, {id: a.meta.id, title: a.meta.title || attName(a), proposed: a.meta.proposed,
+          conclusion: ((a.sections || {})['结论和原因'] || '').slice(0, 600), answer: answers['a:' + a.meta.id] || null}, d.now)
+      : `<li><span class="pill t-other">缺结论</span> <a href="${plink(name, 'roadmap', 'a:' + attKey(a))}">${esc(attName(a))}</a>
+          <span class="small">${needsLabel(pendingOf(a))}</span></li>`)];
   const ev = B.foldEvents(B.events(d)).slice(0, 14);
   const evHref = e => e.tab === 'experiments' ? plink(name, 'roadmap', e.item != null ? 'a:' + e.item : null)
     : e.tab === 'roadmap' && e.item != null ? plink(name, 'roadmap', (e.text.startsWith('定版') ? 'v:' : 't:') + e.item) : plink(name, e.tab, e.item);
@@ -497,7 +542,7 @@ function tabOverview(d) {
     ${setupSummary(d)}
     <div class="cols2">
       <div class="card"><h2>等你处理 <span class="meta">${waitItems.length} 条</span></h2>
-        ${waitItems.length ? `<ul class="feed">${waitItems.slice(0, 14).join('')}</ul>` +
+        ${waitItems.length ? `<ul class="tlist">${waitItems.slice(0, 14).join('')}</ul>` +
           (waitItems.length > 14 ? `<div class="pad small"><a href="#/todo">全部 ${waitItems.length} 条 →</a></div>` : '') : '<div class="empty">没有等你处理的事。</div>'}</div>
       <div class="card"><h2>最近动态</h2>
         ${ev.length ? `<ul class="feed">${ev.map(e => `<li><span class="when">${B.ago(e.t, d.now)}</span><a href="${evHref(e)}">${esc(e.text)}</a></li>`).join('')}</ul>`
@@ -925,8 +970,68 @@ function tabDocs(d, r) {
 }
 
 // ============================================================ events
+// someone is typing in the page: refreshes must not rebuild it under them
+const busy = () => ui.renaming || !!(document.activeElement && document.activeElement.matches('#main textarea, #main input'));
+async function sendReply(key) {
+  const box = document.querySelector(`.reply[data-key="${CSS.escape(key)}"]`);
+  if (!box) return;
+  const text = (box.querySelector('textarea') || {}).value || '';
+  const answer = ui.pick[key] !== undefined ? ui.pick[key] : (box.querySelector('.opt.on') || {dataset: {}}).dataset.opt || null;
+  const btn = box.querySelector('.send');
+  btn.disabled = true; btn.textContent = '提交中…';
+  try {
+    await postJSON('/api/answer', {project: box.dataset.p, id: box.dataset.id, answer, text});
+    delete ui.pick[key]; delete ui.draft[key]; delete ui.editing[key]; delete ui.err[key];
+    await refreshAfterWrite(box.dataset.p);
+  } catch (err) {
+    ui.err[key] = err.message; btn.disabled = false; btn.textContent = '提交回复';
+    box.querySelector('.rerr').textContent = err.message;
+  }
+}
+async function refreshAfterWrite(name) {
+  try { S.projects = await getJSON('/api/projects'); } catch (e) {}
+  const r = route();
+  if (r.page === 'project' && (r.name === name || name === '_shared')) { S.fetchedAt[r.name] = 0; ensureDetail(r.name, true); }
+  render();
+}
+async function saveName(name, value) {
+  try {
+    await postJSON('/api/name', {project: name, name: value});
+    ui.renaming = false; S.fetchedAt[name] = 0;
+    await refreshAfterWrite(name);
+  } catch (err) { const el = $('rename-err'); if (el) el.textContent = err.message; }
+}
+document.addEventListener('input', e => {
+  const ta = e.target.closest('textarea[data-draft]');
+  if (ta) ui.draft[ta.dataset.draft] = ta.value;
+});
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'rename-input' && e.key === 'Enter') { e.preventDefault(); saveName(e.target.dataset.p, e.target.value); }
+  if (e.target.id === 'rename-input' && e.key === 'Escape') { ui.renaming = false; render(); }
+});
 document.addEventListener('click', e => {
   const t = e.target;
+  const opt = t.closest('.opt');
+  if (opt) {
+    const box = opt.closest('.reply'), key = box.dataset.key, on = !opt.classList.contains('on');
+    box.querySelectorAll('.opt').forEach(x => x.classList.remove('on'));
+    if (on) opt.classList.add('on');
+    ui.pick[key] = on ? opt.dataset.opt : null;
+    return;
+  }
+  const send = t.closest('[data-send]');
+  if (send) { sendReply(send.dataset.send); return; }
+  const ed = t.closest('[data-edit]'), cancel = t.closest('[data-cancel]');
+  if (ed || cancel) {
+    e.preventDefault();
+    const key = (ed || cancel).dataset[ed ? 'edit' : 'cancel'];
+    if (ed) ui.editing[key] = true; else { delete ui.editing[key]; delete ui.pick[key]; delete ui.draft[key]; delete ui.err[key]; }
+    render(); return;
+  }
+  if (t.closest('#rename-open')) { ui.renaming = true; render(); const i = $('rename-input'); if (i) { i.focus(); i.select(); } return; }
+  if (t.closest('#rename-save')) { const i = $('rename-input'); saveName(i.dataset.p, i.value); return; }
+  if (t.closest('#rename-reset')) { const i = $('rename-input'); saveName(i.dataset.p, ''); return; }
+  if (t.closest('#rename-cancel')) { ui.renaming = false; render(); return; }
   const go = t.closest('[data-goto]');
   if (go) { e.preventDefault(); const el = document.getElementById(go.dataset.goto); if (el) el.scrollIntoView({block: 'start', behavior: 'smooth'}); return; }
   if (t.closest('#gpu-refresh')) { fetch('/api/refresh').then(() => setTimeout(poll, 4000)); return; }
@@ -950,7 +1055,7 @@ document.addEventListener('change', e => {
   if (tr) { const r = route(); location.hash = plink(r.name, 'runs', null, {track: tr.value}); }
 });
 document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
-window.addEventListener('hashchange', render);
+window.addEventListener('hashchange', () => { ui.renaming = false; render(); });
 
 // ============================================================ polling
 async function poll() {
@@ -963,6 +1068,7 @@ async function poll() {
   // don't disturb a project page, except once when the project list first arrives (entry badge, counts)
   if (r.page === 'project' && !firstProjects) { renderSide(r); ensureDetail(r.name); document.title = titleFor(r); return; }
   if (r.page === 'gpu' && copying) { copying = false; renderSide(r); return; }
+  if (busy()) { renderSide(r); return; }
   render();
 }
 render();

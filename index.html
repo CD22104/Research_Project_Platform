@@ -295,6 +295,30 @@ details.ovarch{background:transparent;border:0}
 details.ovarch>summary{padding:6px 2px;font-size:13px;color:var(--muted);font-weight:500}
 details.ovarch[open]>summary{border-bottom:0;margin-bottom:8px}
 .where2{font-size:13px;margin-top:2px;color:var(--muted)}
+/* replies */
+.ctx{font-size:13px;color:var(--text);background:var(--bg);border-radius:6px;padding:6px 10px;margin:6px 0}
+.ctx p{margin:2px 0}
+.reply{margin:8px 0 4px;display:flex;flex-direction:column;gap:6px}
+.opts{display:flex;gap:6px;flex-wrap:wrap}
+.opt{padding:4px 12px;font-size:13px}
+.opt.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.opt .rec{font-size:11px;margin-left:6px;padding:0 5px;border-radius:4px;background:var(--free-bg);color:var(--free);font-weight:600}
+.opt.on .rec{background:rgba(255,255,255,.25);color:#fff}
+.reply textarea{font:inherit;font-size:13px;width:100%;max-width:720px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
+  background:var(--card);color:var(--text);resize:vertical}
+.reply textarea:focus{outline:2px solid var(--accent-bg);border-color:var(--accent)}
+.ract{display:flex;gap:10px;align-items:center}
+.send{background:var(--accent);border-color:var(--accent);color:#fff;font-size:13px}
+.send:disabled{opacity:.6}
+.rerr{color:var(--full);font-size:12px}
+.ans{margin:8px 0 4px;padding:6px 10px;border-left:3px solid var(--accent);background:var(--accent-bg);border-radius:0 6px 6px 0}
+.ans .atext{white-space:pre-wrap}
+.res{font-size:13px;color:var(--free)}
+.lnkbtn{border:0;background:none;color:var(--muted);font-size:12px;padding:2px 6px}
+.lnkbtn:hover{color:var(--accent)}
+.rename{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rename input{font:inherit;font-size:18px;font-weight:700;padding:2px 8px;border:1px solid var(--accent);border-radius:6px;background:var(--card);color:var(--text);width:16em}
+.fulltitle{margin-top:2px}
 .tlist .ttext{line-height:1.65}
 .tlist a.more{font-size:13px;white-space:nowrap}
 details.done>summary{cursor:pointer;padding:8px 14px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}

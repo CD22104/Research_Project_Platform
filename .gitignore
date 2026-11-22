@@ -1,3 +1,4 @@
 server.log
 run/
 __pycache__/
+state/
