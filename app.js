@@ -123,22 +123,29 @@ function todoCount() {
   if (!pj) return null;
   return pj.projects.reduce((n, p) => n + (p.pending || []).length + (p.todos || []).length, 0) + openTodos(pj.todos).length;
 }
+// projects by status: 进行中 first, then 暂停, then 已归档 (anything else counts as 进行中)
+const STAGE = {'暂停': 1, '已归档': 2};
+const stageOf = p => STAGE[p.status] ?? 0;
 function renderSide(r) {
   const pj = S.projects ? S.projects.projects : null;
   const free = S.status ? B.freeCount(S.status) : null, todo = todoCount();
+  const archOpen = !!($('side-arch') && $('side-arch').open);
   const item = (href, label, cnt, on) => `<a class="sitem${on ? ' on' : ''}" href="${href}"><span class="lbl">${label}</span>` +
     (cnt != null ? `<span class="cnt">${cnt}</span>` : '') + '</a>';
-  const order = {'进行中': 0, '暂停': 1, '已归档': 2};
-  const list = pj ? [...pj].sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1) || String(a.title).localeCompare(String(b.title))) : [];
+  const proj = p => `<a class="sitem${r.page === 'project' && r.name === p.name ? ' on' : ''}" href="${plink(p.name)}" ` +
+    `title="${esc(p.title)}${p.status ? ' · ' + esc(p.status) : ''}"><span class="dot d-${B.tone(p.status)}"></span><span class="lbl">${esc(p.title)}</span></a>`;
+  const list = pj ? [...pj].sort((a, b) => String(a.title).localeCompare(String(b.title))) : [];
+  const by = k => list.filter(p => stageOf(p) === k);
+  const arch = by(2), current = arch.some(p => r.page === 'project' && r.name === p.name);
   $('side').innerHTML = `<a class="brand" href="#/overview">${esc(B.APP_NAME)}</a>` +
     item('#/overview', '总览', null, r.page === 'overview') +
     item('#/gpu', 'GPU', free != null ? free + ' 空闲' : null, r.page === 'gpu') +
     item('#/todo', '待办', todo || null, r.page === 'todo') +
     item('#/guide', '使用说明', null, r.page === 'guide') +
     '<div class="shead">项目</div>' +
-    (list.length ? list.map(p => `<a class="sitem${r.page === 'project' && r.name === p.name ? ' on' : ''}" href="${plink(p.name)}" ` +
-      `title="${esc(p.title)}${p.status ? ' · ' + esc(p.status) : ''}"><span class="dot d-${B.tone(p.status)}"></span><span class="lbl">${esc(p.title)}</span></a>`).join('')
-      : `<div class="faint" style="padding:4px 10px">${pj ? '还没有项目' : '加载中…'}</div>`) +
+    (list.length ? by(0).map(proj).join('') : `<div class="faint" style="padding:4px 10px">${pj ? '还没有项目' : '加载中…'}</div>`) +
+    (by(1).length ? '<div class="shead">暂停</div>' + by(1).map(proj).join('') : '') +
+    (arch.length ? `<details class="sarch" id="side-arch"${archOpen || current ? ' open' : ''}><summary class="shead">已归档 ${arch.length}</summary>${arch.map(proj).join('')}</details>` : '') +
     `<a class="sitem new${r.page === 'new' ? ' on' : ''}" href="#/new"><span class="lbl">＋ 新建项目</span></a>`;
 }
 
@@ -178,68 +185,96 @@ function titleFor(r) {
 }
 
 // ============================================================ global overview
+function projectCard(p, now) {
+  const runningTracks = (p.track_status || {})['进行中'] || 0, as = Object.entries(p.attempt_status || {});
+  const waiting = (p.pending || []).length + (p.todos || []).length, act = p.active_runs || [];
+  const where = {};
+  for (const r of act) where[shortHost(r.server || '?')] = (where[shortHost(r.server || '?')] || 0) + 1;
+  const lost = act.filter(r => r.liveness === 'maybe_interrupted').length, sure = act.filter(r => r.liveness === 'running').length;
+  const runLine = act.length ? `<div class="r"><b>正在跑 ${act.length} 个</b>　${Object.entries(where).map(([h, n]) => `${esc(h)} × ${n}`).join(' · ')}
+      ${lost ? `<span class="pill t-bad">${lost} 个可能已中断</span>` : sure === act.length ? '<span class="pill t-ok">都确认在跑</span>' : ''}</div>` : '';
+  return `<a class="pcard" href="${plink(p.name)}">
+    <div class="t"><b>${esc(p.title)}</b>${B.pill(p.status)}</div>
+    <div class="small">${esc(p.name)}${p.current_version ? ' · 当前版本 ' + esc(p.current_version) : ''} · 常驻入口${hasEntry(p.name) ? '在运行' : '未运行'}</div>
+    <div class="c">${p.conclusion ? esc(p.conclusion) : '<span class="faint">还没有结论</span>'}</div>
+    <div class="n"><span>支线 <b>${p.n_tracks ?? 0}</b>${runningTracks ? `（${runningTracks} 条进行中）` : ''}</span>
+      <span>尝试 <b>${p.n_attempts ?? 0}</b></span><span>运行 <b>${p.n_runs ?? 0}</b></span></div>
+    ${as.length ? `<div class="small">尝试：${countLine(as.sort((a, b) => b[1] - a[1]))}</div>` : ''}
+    ${runLine}
+    ${waiting || p.n_checks || p.stale || p.n_errors ? `<div class="alerts">
+      ${waiting ? `<span class="w">${waiting} 条等你处理</span>` : ''}
+      ${p.n_checks ? `<span class="w">${p.n_checks} 条记录检查待修</span>` : ''}
+      ${p.stale ? `<span class="w">数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败</span>` : ''}
+      ${p.n_errors ? `<span class="w">${p.n_errors} 个记录文件读取有问题</span>` : ''}</div>` : ''}
+    <div class="small foot">最近动态 ${B.ago(p.mtime, now)}</div></a>`;
+}
 function pageOverview() {
   const pj = S.projects;
   if (!pj) return '<div class="empty">加载中…</div>';
-  const now = pj.now, order = {'进行中': 0, '暂停': 1, '已归档': 2};
-  const list = [...pj.projects].sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1) || (b.mtime || 0) - (a.mtime || 0));
+  const now = pj.now;
+  const list = [...pj.projects].sort((a, b) => stageOf(a) - stageOf(b) || (b.mtime || 0) - (a.mtime || 0));
   const free = S.status ? B.freeCount(S.status) : null;
   const running = list.reduce((n, p) => n + (p.active_runs || []).length, 0);
   const sc = pj.scan || {}, notes = [];
   if (sc.running_since && now - sc.running_since > 5) notes.push(`正在扫描共享盘，已 ${B.span(now - sc.running_since)}；下面是上一次的结果`);
   if (sc.error) notes.push(`最近一次扫描失败（${esc(sc.error)}），下面是 ${B.ago(sc.finished, now)}的结果`);
-  const cards = list.map(p => {
-    const runningTracks = (p.track_status || {})['进行中'] || 0, as = Object.entries(p.attempt_status || {});
-    const waiting = (p.pending || []).length + (p.todos || []).length;
-    return `<a class="pcard" href="${plink(p.name)}">
-      <div class="t"><span class="dot d-${B.tone(p.status)}"></span><b>${esc(p.title)}</b>${B.pill(p.status)}
-        ${p.current_version ? `<span class="small">当前版本 ${esc(p.current_version)}</span>` : ''}</div>
-      <div class="c">${p.conclusion ? esc(p.conclusion) : '<span class="faint">还没有结论</span>'}</div>
-      <div class="n"><span>支线 <b>${p.n_tracks ?? 0}</b>${runningTracks ? `（${runningTracks} 条进行中）` : ''}</span>
-        <span>尝试 <b>${p.n_attempts ?? 0}</b></span><span>运行 <b>${p.n_runs ?? 0}</b></span></div>
-      ${as.length ? `<div class="small">${countLine(as.sort((a, b) => b[1] - a[1]))}</div>` : ''}
-      ${(p.active_runs || []).map(r => `<div class="small">正在跑 ${esc(r.id)} · ${esc(r.server || '?')}${esc(gpusText(r))} ${B.livePill(r.liveness)}</div>`).join('')}
-      ${waiting ? `<div class="w">${waiting} 条等你处理</div>` : ''}
-      ${p.n_checks ? `<div class="w">${p.n_checks} 条记录检查待修</div>` : ''}
-      ${p.stale ? `<div class="w">数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败</div>` : ''}
-      ${p.n_errors ? `<div class="w">${p.n_errors} 个记录文件读取有问题</div>` : ''}
-      <div class="small">最近动态 ${B.ago(p.mtime, now)} · 常驻入口${hasEntry(p.name) ? '在运行' : '未运行'}</div></a>`;
-  }).join('');
+  const group = k => list.filter(p => stageOf(p) === k);
+  const cards = ps => `<div class="pcards">${ps.map(p => projectCard(p, now)).join('')}</div>`;
+  const active = group(0), paused = group(1), arch = group(2);
+  const body = !list.length
+    ? `<div class="card"><div class="empty">还没有项目。在 ${esc(sc.root || '共享盘')}/&lt;项目名&gt;/board/ 下写好 project.json，一分钟内就会出现在这里。</div></div>`
+    : (active.length ? cards(active) : '<div class="card"><div class="empty">没有进行中的项目。</div></div>') +
+      (paused.length ? `<h3 class="gh">暂停 ${paused.length} 个 <span class="faint">恢复方法见「使用说明」</span></h3>` + cards(paused) : '') +
+      (arch.length ? `<details class="box ovarch" id="ov-arch"><summary>已归档 ${arch.length} 个 <span class="faint">结束或放弃的项目，记录都还在</span></summary>${cards(arch)}</details>` : '');
   return `<h1 class="pt">总览</h1>
     <div class="summary">
       <a class="stat" href="#/gpu"><div class="k">空闲的卡</div><div class="v">${free ?? '—'}</div><div class="s">所有服务器合计</div></a>
       <a class="stat" href="#/todo"><div class="k">等你处理</div><div class="v">${todoCount() ?? '—'}</div><div class="s">所有项目合计</div></a>
       <div class="stat"><div class="k">正在跑的任务</div><div class="v">${running}</div><div class="s">按项目记录</div></div>
-      <div class="stat"><div class="k">项目</div><div class="v">${list.length}</div><div class="s">${sc.finished ? '扫描于 ' + B.ago(sc.finished, now) : ''}</div></div>
-    </div>` + notes.map(t => `<div class="notice">${t}</div>`).join('') +
-    (list.length ? `<div class="pcards">${cards}</div>`
-      : `<div class="card"><div class="empty">还没有项目。在 ${esc(sc.root || '共享盘')}/&lt;项目名&gt;/board/ 下写好 project.json，一分钟内就会出现在这里。</div></div>`);
+      <div class="stat"><div class="k">项目</div><div class="v">${active.length}</div><div class="s">进行中${paused.length ? ` · 暂停 ${paused.length}` : ''}${arch.length ? ` · 已归档 ${arch.length}` : ''}</div></div>
+    </div>` + notes.map(t => `<div class="notice">${t}</div>`).join('') + body;
 }
 
 // ============================================================ todo
-function todoItem(t, project) {
+const KIND_ORDER = {blocking: 0, decision: 1};
+const kindRank = t => KIND_ORDER[t.kind] ?? 2;
+function todoItem(t, project, now) {
   const href = project ? linkFor(project.name, t.link) : null;
   return `<li><div>${t.kind && KIND[t.kind] ? `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind]}</span> ` : ''}` +
-    (href ? `<a href="${href}">${esc(t.text)}</a>` : esc(t.text)) + '</div>' +
-    `<div class="small">${project ? esc(project.title) + ' · ' : '跨项目 · '}${t.where ? '在哪做：' + esc(t.where) + ' · ' : ''}` +
-    `${t.created ? B.ago(Date.parse(t.created) / 1000, S.projects.now) : ''}${t.by ? ' · 由 ' + esc(t.by) + ' 记下' : ''}</div></li>`;
+    `<span class="ttext">${esc(t.text)}</span>` + (href ? ` <a class="more" href="${href}">相关记录 →</a>` : '') + '</div>' +
+    (t.where ? `<div class="where2">怎么回复：${esc(t.where)}</div>` : '') +
+    `<div class="small">${t.created ? B.ago(Date.parse(t.created) / 1000, now) + '记下' : ''}${t.by ? ' · 由 ' + esc(t.by) : ''}</div></li>`;
+}
+function doneItems(list, now) {
+  const week = now - 7 * 86400;
+  const done = (list || []).filter(t => t.done && Date.parse(t.done) / 1000 >= week).sort((a, b) => String(b.done).localeCompare(String(a.done)));
+  return done.length ? `<details class="done" id="done-${esc(done[0].id)}"><summary>最近 7 天办完 ${done.length} 条</summary><ul class="tlist">` +
+    done.map(t => `<li><s>${esc(t.text)}</s><div class="small">${B.ago(Date.parse(t.done) / 1000, now)}办完</div></li>`).join('') + '</ul></details>' : '';
 }
 function pageTodo() {
   const pj = S.projects;
   if (!pj) return '<div class="empty">加载中…</div>';
-  const urgent = [], later = [];
-  for (const p of pj.projects) for (const t of p.todos || []) (t.kind === 'whenever' ? later : urgent).push(todoItem(t, p));
-  for (const t of openTodos(pj.todos)) (t.kind === 'whenever' ? later : urgent).push(todoItem(t, null));
-  for (const p of pj.projects.filter(p => (p.pending || []).length)) {
-    const n = p.pending.length, confirm = p.pending.filter(x => x.needs.includes('结论待确认')).length;
+  const now = pj.now, tally = {blocking: 0, decision: 0, whenever: 0};
+  const count = ts => { for (const t of ts) tally[t.kind in tally ? t.kind : 'whenever']++; return ts; };
+  const groups = pj.projects.map(p => {
+    const todos = count([...(p.todos || [])].sort((a, b) => kindRank(a) - kindRank(b)));
+    const n = (p.pending || []).length, confirm = (p.pending || []).filter(x => x.needs.includes('结论待确认')).length;
     const parts = [confirm ? `${confirm} 条尝试等你确认结论` : '', n - confirm ? `${n - confirm} 条尝试缺结论和原因` : ''].filter(Boolean);
-    later.push(`<li><a href="${plink(p.name, 'roadmap', null, {todo: 1})}"><b>${esc(p.title)}</b>：${parts.join('，')}</a>
-      <div class="small">在路线页逐条查看</div></li>`);
-  }
-  const col = (title, meta, items) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>` +
-    (items.length ? `<ul class="tlist">${items.join('')}</ul>` : '<div class="empty">没有。</div>') + '</div>';
-  return `<h1 class="pt">待办</h1><div class="cols2">${col('卡着进度的', '需要你先做或先决定，事情才能往下走', urgent)}${col('不急的', '有空时处理', later)}</div>
-    <p class="small">待办由各会话写在项目的 board/todos.jsonl 和 /shared/ssd/dchen/_shared/todos.jsonl 里；办完后由会话标记完成。</p>`;
+    const pending = n ? `<li><span class="pill t-todo">等你决定</span> <a href="${plink(p.name, 'roadmap', null, {todo: 1})}">${parts.join('，')}</a>
+      <div class="where2">怎么回复：在路线页逐条看，然后在这个项目的会话里说结论</div></li>` : '';
+    return {p, todos, pending, n: todos.length + n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, n ? 1 : 9), done: doneItems(p.todos_done, now)};
+  }).filter(g => g.n || g.done).sort((a, b) => a.top - b.top || b.n - a.n);
+  const shared = count(openTodos(pj.todos).sort((a, b) => kindRank(a) - kindRank(b)));
+  const card = (title, meta, items, done) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>` +
+    (items.length ? `<ul class="tlist">${items.join('')}</ul>` : '<div class="empty">没有要处理的。</div>') + done + '</div>';
+  const html = groups.map(g => card(`<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>`, g.n ? `${g.n} 条` : '',
+      g.todos.map(t => todoItem(t, g.p, now)).concat(g.pending ? [g.pending] : []), g.done)).join('') +
+    (shared.length || (pj.todos || []).some(t => t.done) ? card('跨项目', shared.length ? `${shared.length} 条` : '', shared.map(t => todoItem(t, null, now)), doneItems(pj.todos, now)) : '');
+  return `<h1 class="pt">待办</h1>
+    <div class="summary">${[['blocking', '卡着进度'], ['decision', '等你决定'], ['whenever', '不急']].map(([k, l]) =>
+      `<div class="stat"><div class="k">${l}</div><div class="v">${tally[k]}</div></div>`).join('')}</div>
+    ${html || '<div class="card"><div class="empty">没有待办。</div></div>'}
+    <p class="small">按项目分组，卡着进度的排在前面。待办由各会话写在项目的 board/todos.jsonl 和 /shared/ssd/dchen/_shared/todos.jsonl 里，控制台每分钟读一次；办完后由会话标记完成，会移到「最近 7 天办完」。</p>`;
 }
 
 function pageNew() {
@@ -272,33 +307,62 @@ function pageGuide() {
 }
 
 // ============================================================ GPU page
-const SHARE_MB = 10 * 1024;  // a busy card with at least this much free memory is listed as shareable
-const GPU_LABEL = {free: '空闲', busy: '使用中', full: '已占满'};
+const GPU_LABEL = {free: '空闲', busy: '有人在用', full: '显存将满'};
 const gpuState = g => B.isFree(g) ? 'free' : g.mem_total && g.mem_used / g.mem_total > 0.9 ? 'full' : 'busy';
 const errText = e => /退出码 3/.test(e || '') ? 'nvidia-smi 无法运行（显卡驱动没有加载），需要管理员处理' : e;
 const gb = mb => mb == null ? '–' : (mb / 1024).toFixed(1);
 const dur = s => s == null ? '' : s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天';
+const shortHost = name => String(name).replace(/^xtra/, '');
 function activeRuns() {
   return S.projects ? S.projects.projects.flatMap(p => (p.active_runs || []).map(r => ({...r, project: p.name, title: p.title}))) : [];
+}
+const modelsOf = gpus => [...new Set(gpus.map(g => `${g.name} · ${Math.round(g.mem_total / 1024)} GB`))].join(' / ');
+// one card of the overview grid: free memory in large type, a usage bar, who is on it
+function gpuCell(s, g, me, live) {
+  const st = gpuState(g), users = [...new Set(g.procs.map(p => p.user))];
+  const mine = users.includes(me), pct = g.mem_total ? Math.round(100 * g.mem_used / g.mem_total) : 0;
+  const who = users.length ? users.map(u => u === me ? '<b class="me">我</b>' : esc(u)).join('、')
+    : st === 'free' ? '没人用' : '看不到进程';
+  const tip = `${s.name} 卡 ${g.index} · 已用 ${gb(g.mem_used)} / ${gb(g.mem_total)} GB · 利用率 ${g.util ?? '–'}% · ${g.temp ?? '–'}°C` +
+    (users.length ? ' · ' + users.join('、') : '');
+  return `<td><div class="gcell ${live ? st : 'off'}${mine ? ' mine' : ''}" title="${esc(tip)}">
+    <div class="gc1"><span>卡 ${esc(g.index)}</span><span>${g.util ?? '–'}%</span></div>
+    <div class="gc2"><b>${gb(g.mem_total - g.mem_used)}</b> GB 空</div>
+    <div class="gbar"><i style="width:${pct}%"></i></div>
+    <div class="gc3">${who}</div></div></td>`;
+}
+function gpuGrid(servers, me) {
+  const width = Math.max(1, ...servers.map(s => (s.gpus || []).length));
+  const rows = servers.map(s => {
+    const gpus = s.gpus || [], live = s.status === 'ok', nFree = gpus.filter(g => gpuState(g) === 'free').length;
+    const head = `<th class="gsrv"><a href="#/gpu" data-goto="srv-${esc(s.name)}">${esc(shortHost(s.name))}</a>
+      <div class="small">${gpus.length ? esc(modelsOf(gpus)) : ''}</div></th>`;
+    if (!live && !gpus.length) return `<tr>${head}<td class="small" colspan="${width + 1}">${s.status === 'pending' ? '正在连接…' : '读不到：' + esc(errText(s.error))}</td></tr>`;
+    const free = live ? `<td class="gfree"><b class="${nFree ? 'okc' : ''}">${nFree}</b><span class="small"> / ${gpus.length} 空闲</span></td>`
+      : `<td class="gfree small">读不到<br>（上次的数据）</td>`;
+    return `<tr>${head}${free}${gpus.map(g => gpuCell(s, g, me, live)).join('')}${'<td></td>'.repeat(width - gpus.length)}</tr>`;
+  }).join('');
+  return `<section class="card"><h2>显卡一览 <span class="meta">大字是剩余显存；绿 = 空闲，橙 = 有人在用，红 = 显存用了九成以上；蓝框 = 有你的任务。点服务器名看明细</span></h2>
+    <div class="scroll"><table class="ggrid">${rows}</table></div></section>`;
 }
 function pageGpu() {
   const d = S.status;
   if (!d) return S.offline ? '<div class="empty">连不上控制台：请确认 Mac 能连到 xtraa100（校园网 / VPN）</div>' : '<div class="empty">加载中…</div>';
-  const runs = activeRuns();
+  const runs = activeRuns(), me = d.me, servers = B.sortServers(d.servers);
   let total = 0, okServers = 0, html = '';
-  const users = {}, freeBy = [], partial = [];
-  for (const s of d.servers) {
+  const users = {}, freeBy = [];
+  for (const s of servers) {
     const gpus = s.gpus || [], live = s.status === 'ok', freeCards = [];
     if (live) okServers++;
     let rows = '';
     for (const g of gpus) {
       const st = gpuState(g);
-      if (live) { total++; if (st === 'free') freeCards.push(g); else if (g.mem_total - g.mem_used >= SHARE_MB) partial.push({s, g}); }
+      if (live) { total++; if (st === 'free') freeCards.push(g); }
       const pct = g.mem_total ? Math.round(100 * g.mem_used / g.mem_total) : 0;
       const procs = g.procs.map(p => {
         const u = users[p.user] = users[p.user] || {mem: 0, gpus: new Set(), where: new Set()};
-        u.mem += p.mem || 0; u.gpus.add(s.name + '#' + g.index); u.where.add(s.name);
-        return `<div class="proc"><span class="user">${esc(p.user)}</span>
+        u.mem += p.mem || 0; u.gpus.add(s.name + '#' + g.index); u.where.add(shortHost(s.name));
+        return `<div class="proc"><span class="user${p.user === me ? ' me' : ''}">${esc(p.user)}</span>
           <span class="small">${gb(p.mem)} GB · ${dur(p.elapsed)} · PID ${esc(p.pid)}</span>
           <span class="cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</span></div>`;
       }).join('') || (st === 'free' ? '<span class="small">—</span>' : '<span class="small">有显存占用但看不到进程（可能在容器内）</span>');
@@ -307,13 +371,14 @@ function pageGpu() {
         return `<a class="tag${lost ? ' warn' : ''}" href="${plink(r.project, 'runs', r.id)}" title="tmux ${esc(r.tmux || '?')} · PID ${esc(r.pid ?? '?')}">` +
           `${esc(r.title)} · ${esc(r.id)}${lost ? '（记录说在这里跑，但没找到进程）' : ''}</a>`;
       }).join('');
-      rows += `<tr><td class="n">${esc(g.index)}</td><td><span class="pill ${st}">${GPU_LABEL[st]}</span></td><td class="n">${esc(g.name)}</td>
+      rows += `<tr><td class="n">${esc(g.index)}</td><td><span class="pill ${st}">${GPU_LABEL[st]}</span></td>
         <td class="n">${gb(g.mem_used)} / ${gb(g.mem_total)} GB<div class="bar"><i style="width:${pct}%;background:var(--${st})"></i></div></td>
         <td class="n">${g.util ?? '–'}%</td><td class="n">${g.temp ?? '–'}°C</td><td>${tags ? `<div>${tags}</div>` : ''}${procs}</td></tr>`;
     }
     if (freeCards.length) freeBy.push({s, cards: freeCards});
     const color = live ? 'var(--free)' : s.status === 'pending' ? 'var(--busy)' : 'var(--full)';
-    html += `<section class="card"><h2><span class="dotc" style="background:${color}"></span>${esc(s.name)}<span class="meta">${esc(s.host)}</span>
+    html += `<section class="card" id="srv-${esc(s.name)}"><h2><span class="dotc" style="background:${color}"></span>${esc(s.name)}
+      <span class="meta">${gpus.length ? esc(modelsOf(gpus)) : esc(s.host)}</span>
       <span class="meta right">${live ? `空闲 ${freeCards.length} / ${gpus.length}` : ''}${s.updated ? ' · 更新于 ' + B.ago(s.updated, d.now) : ''}</span></h2>`;
     if (s.status === 'pending') html += '<div class="empty">正在连接…</div>';
     if (s.status === 'error') {
@@ -321,35 +386,26 @@ function pageGpu() {
       if (/Permission denied/.test(s.error || '')) html += `<div class="hint">这台机器还没有配置免密登录：<code>ssh-copy-id ${esc(s.host)}</code></div>`;
     }
     if (gpus.length) html += `<div class="scroll" style="${live ? '' : 'opacity:.55'}"><table class="gt">
-      <tr><th>卡</th><th>状态</th><th>型号</th><th>显存</th><th>利用率</th><th>温度</th><th>使用者 / 进程</th></tr>${rows}</table></div>`;
+      <tr><th>卡</th><th>状态</th><th>显存</th><th>利用率</th><th>温度</th><th>使用者 / 进程</th></tr>${rows}</table></div>`;
     html += '</section>';
   }
   const nFree = freeBy.reduce((n, x) => n + x.cards.length, 0);
-  freeBy.sort((a, b) => b.cards.length - a.cards.length || b.cards[0].mem_total - a.cards[0].mem_total);
-  const freeHtml = `<section class="card lead"><h2>现在能跑的卡 <span class="big">${nFree}</span><span class="meta">张空闲 / 共 ${total} 张</span></h2>` +
+  const freeHtml = `<section class="card lead"><h2>现在能跑的卡 <span class="big">${nFree}</span><span class="meta">张完全空闲 / 在线的共 ${total} 张</span></h2>` +
     (nFree ? freeBy.map(({s, cards}) => {
       const ids = cards.map(g => g.index).join(',');
-      const models = [...new Set(cards.map(g => `${g.name} · ${Math.round(g.mem_total / 1024)} GB`))].join(' / ');
-      return `<div class="slot"><div class="where"><b>${esc(s.name)}</b><span class="small">${esc(models)}</span></div>
+      return `<div class="slot"><div class="where"><b>${esc(s.name)}</b><span class="small">${esc(modelsOf(cards))}</span></div>
         <div class="gchips"><span class="small">卡号</span>${cards.map(g => `<span class="gchip">${esc(g.index)}</span>`).join('')}</div>
         <div class="cmds"><code>CUDA_VISIBLE_DEVICES=${esc(ids)}</code>
           <button class="copy" data-c="CUDA_VISIBLE_DEVICES=${esc(ids)}">复制</button>
           <button class="copy" data-c="ssh ${esc(s.host)}">复制 ssh 命令</button></div></div>`;
-    }).join('') : `<div class="empty">现在没有完全空闲的卡。${partial.length ? '可以看看下面还有余量的卡。' : ''}</div>`) + '</section>';
-  partial.sort((a, b) => (b.g.mem_total - b.g.mem_used) - (a.g.mem_total - a.g.mem_used));
-  const partialHtml = partial.length ? `<section class="card"><h2>挤一挤能用的卡 <span class="meta">已有人在用，但剩余显存不少于 ${SHARE_MB / 1024} GB；共用会互相拖慢</span></h2>
-    <div class="scroll"><table class="gt"><tr><th>服务器</th><th>卡</th><th>剩余显存</th><th>当前利用率</th><th>已在用的人</th></tr>` +
-    partial.map(({s, g}) => `<tr><td><b>${esc(s.name)}</b></td><td class="n">${esc(g.index)}</td>
-      <td class="n">${gb(g.mem_total - g.mem_used)} GB <span class="small">/ ${gb(g.mem_total)}</span></td><td class="n">${g.util ?? '–'}%</td>
-      <td>${[...new Set(g.procs.map(p => p.user))].map(u => `<span class="user">${esc(u)}</span>`).join('、') || '<span class="small">看不到进程</span>'}</td></tr>`).join('') +
-    '</table></div></section>' : '';
+    }).join('') : '<div class="empty">现在没有完全空闲的卡。下面的一览里大字是每张卡的剩余显存，可以挑余量大的叠加使用。</div>') + '</section>';
   const list = Object.entries(users).sort((a, b) => b[1].mem - a[1].mem);
   const usersHtml = list.length ? `<table class="gt"><tr><th>用户</th><th>占用卡数</th><th>显存合计</th><th>所在服务器</th></tr>` +
-    list.map(([u, v]) => `<tr><td><span class="user">${esc(u)}</span></td><td class="n">${v.gpus.size}</td><td class="n">${gb(v.mem)} GB</td>
+    list.map(([u, v]) => `<tr><td><span class="user${u === me ? ' me' : ''}">${esc(u)}</span></td><td class="n">${v.gpus.size}</td><td class="n">${gb(v.mem)} GB</td>
       <td>${esc([...v.where].join('、'))}</td></tr>`).join('') + '</table>' : '<div class="empty">当前没有人在用卡。</div>';
   const down = d.servers.length - okServers;
   return `<div class="gtop"><h1>GPU</h1><span class="sub">${okServers} / ${d.servers.length} 台服务器在线${down ? '（' + down + ' 台读不到）' : ''} · 每 ${d.interval} 秒更新</span>
-      <button id="gpu-refresh">立即刷新</button></div>` + freeHtml + partialHtml +
+      <button id="gpu-refresh">立即刷新</button></div>` + freeHtml + gpuGrid(servers, me) +
     `<h3 class="gh">各服务器明细</h3>${html}<details class="box" id="gpu-users"><summary>谁在用（按占用显存排序）</summary><div class="scroll">${usersHtml}</div></details>`;
 }
 
@@ -871,6 +927,8 @@ function tabDocs(d, r) {
 // ============================================================ events
 document.addEventListener('click', e => {
   const t = e.target;
+  const go = t.closest('[data-goto]');
+  if (go) { e.preventDefault(); const el = document.getElementById(go.dataset.goto); if (el) el.scrollIntoView({block: 'start', behavior: 'smooth'}); return; }
   if (t.closest('#gpu-refresh')) { fetch('/api/refresh').then(() => setTimeout(poll, 4000)); return; }
   const copy = t.closest('.copy');
   if (copy) { navigator.clipboard.writeText(copy.dataset.c).then(() => { const x = copy.textContent; copy.textContent = '已复制'; setTimeout(() => copy.textContent = x, 1200); }); return; }

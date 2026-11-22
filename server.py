@@ -258,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_board_file(path[len("/files/"):])
         elif path == "/api/status":
             with lock:
-                body = json.dumps({"now": time.time(), "interval": INTERVAL,
+                body = json.dumps({"now": time.time(), "interval": INTERVAL, "me": ME,
                                    "servers": [state[s["name"]] for s in SERVERS]}).encode()
             self.send(200, "application/json", body)
         elif path == "/api/refresh":

@@ -214,10 +214,11 @@ class Pages(unittest.TestCase):
 
     def test_guide_and_entry_status(self):
         g = self.m("guide")
-        for s in ["项目的常驻入口", "a100 重启之后", "密钥和 token", "BOARD_FORMAT.md"]:
+        for s in ["新建项目", "暂停和恢复", "结束或放弃", "已归档", "待办怎么回复", "常用命令", "密钥和 token", "BOARD_FORMAT.md"]:
             self.assertIn(s, g)
-        self.assertIn("! ~/bin/rc-start &lt;项目名&gt;", g)
-        self.assertIn("! tmux send-keys -t '=rc-&lt;项目名&gt;:' y Enter", g)
+        self.assertIn("! ~/bin/rc-start &lt;名字&gt;", g)
+        self.assertIn("! tmux send-keys -t '=rc-&lt;名字&gt;:' y Enter", g)
+        self.assertIn("! ~/bin/rc-start --all", g)
         self.assertEqual(g.count("常驻入口未运行"), 3)                    # no rc-demo etc. in the test tmux
         self.assertIn("<code>! ~/bin/rc-start demo</code>", g)
         self.assertNotIn("<h3>使用说明</h3>", g)                          # the file's own title is dropped
@@ -229,13 +230,22 @@ class Pages(unittest.TestCase):
         ov = self.m("overview")
         self.assertEqual(len(re.findall(r'<a class="pcard"', ov)), 3)
         self.assertIn("4 条等你处理", ov)
+        live, _, arch = ov.partition('<details class="box ovarch" id="ov-arch">')       # archived projects are folded last
+        self.assertIn("演示项目", live)
+        self.assertIn("只有标题的项目", arch)
+        self.assertNotIn("只有标题的项目", live)
+        side = self.pages["overview"][0]
+        self.assertRegex(side, r'<details class="sarch" id="side-arch"><summary class="shead">已归档 1</summary><a class="sitem" href="#/p/minimal/overview"')
+        self.assertIn('<details class="sarch" id="side-arch"><summary', self.pages["p_overview"][0])  # folded unless you are in one
         todo = self.m("todo")
-        urgent, _, later = todo.partition("不急的")
-        self.assertIn("补 dev 集评测", urgent)
-        self.assertNotIn("确认 focal 的结论", todo)
-        self.assertIn("给所有项目加远程仓库", later)
-        self.assertIn("<b>演示项目</b>：1 条尝试等你确认结论，1 条尝试缺结论和原因", later)
+        demo, _, shared = todo.partition("跨项目")                                    # grouped by project, shared last
+        self.assertLess(demo.index("补 dev 集评测"), demo.index("决定要不要补跑"))       # blocking before whenever
+        self.assertIn("1 条尝试等你确认结论，1 条尝试缺结论和原因", demo)
+        self.assertNotIn("确认 focal 的结论</span>", todo)                            # done: only in the done list, struck out
+        self.assertIn("给所有项目加远程仓库", shared)
         self.assertIn("现在能跑的卡", self.m("gpu"))
+        self.assertIn("显卡一览", self.m("gpu"))
+        self.assertNotIn("挤一挤", self.m("gpu"))
         self.assertIn("没有这个项目", self.m("missing"))
 
 

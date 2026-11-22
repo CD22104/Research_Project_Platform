@@ -575,6 +575,8 @@ def summary(data):
             "n_attempts": len(attempts), "attempt_status": count(attempts),
             "n_runs": len(data.get("runs") or []), "pending": pending,
             "todos": [t for t in data.get("todos") or [] if not t.get("done")],
+            "todos_done": sorted((t for t in data.get("todos") or [] if t.get("done")),
+                                 key=lambda t: str(t.get("done")), reverse=True)[:20],
             "n_checks": len(data.get("checks") or [])}
 
 

@@ -174,6 +174,7 @@ class Http(unittest.TestCase):
     def test_gpu_api_unchanged(self):
         d = self.get_json("/api/status")
         self.assertEqual(d["servers"], [])
+        self.assertTrue(d["me"])                                     # the GPU page marks this user's cards
         self.assertEqual(self.get("/")[0], 200)
 
 

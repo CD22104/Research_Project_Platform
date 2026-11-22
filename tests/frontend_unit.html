@@ -97,6 +97,8 @@ check('chart ignores bad points', B.chart([{step: 0, loss: 'x'}], 'loss') === ''
 check('chart escapes key', !B.chart([{step: 0, '<k>': 1}], '<k>').includes('<k>'));
 
 // free cards
+check('sortServers: h200, h100, a100, then 6k', B.sortServers([{name: 'xtraa6k04'}, {name: 'xtraa100'}, {name: 'xtraa6k01'}, {name: 'xtrah100'}, {name: 'xtrah200'}])
+  .map(s => s.name).join() === 'xtrah200,xtrah100,xtraa100,xtraa6k01,xtraa6k04');
 check('isFree / freeCount', B.isFree({procs: [], mem_used: 100}) && !B.isFree({procs: [{pid: 1}], mem_used: 0}) && !B.isFree({procs: [], mem_used: 600})
   && B.freeCount({servers: [{status: 'ok', gpus: [{procs: [], mem_used: 0}, {procs: [], mem_used: 9000}]}, {status: 'error', gpus: [{procs: [], mem_used: 0}]}]}) === 1
   && B.freeCount(null) === 0);

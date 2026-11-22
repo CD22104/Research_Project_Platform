@@ -377,6 +377,10 @@ const Board = (() => {
   const freeCount = status => (status && status.servers || [])
     .filter(s => s.status === 'ok').reduce((n, s) => n + (s.gpus || []).filter(isFree).length, 0);
 
-  return {APP_NAME, FREE_MB, isFree, freeCount, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
+  // display order of servers: h200, h100, a100, then the 6k machines (the user rarely uses those)
+  const serverRank = name => { const n = String(name); const i = ['h200', 'h100', 'a100'].findIndex(k => n.includes(k)); return i < 0 ? 3 : i; };
+  const sortServers = list => [...(list || [])].sort((a, b) => serverRank(a.name) - serverRank(b.name) || String(a.name).localeCompare(String(b.name)));
+
+  return {APP_NAME, FREE_MB, isFree, freeCount, serverRank, sortServers, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
     flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree};
 })();
