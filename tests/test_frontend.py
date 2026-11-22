@@ -272,6 +272,11 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   location.hash = '#/p/demo/examples'; await wait(300);
   document.querySelector('[data-example]').click(); await wait(50);
   out.example_open = document.getElementById('main').innerHTML.includes('FULL-TEXT-MARKER');
+  document.body.style.paddingBottom = '3000px'; window.scrollTo(0, 400); await wait(50);
+  const items = [...document.querySelectorAll('#main a.li')];
+  items[items.length - 1].click(); await wait(300);
+  out.examples_scroll = window.scrollY;                       // picking another probe must not jump to the page top
+  document.body.style.paddingBottom = '';
   location.hash = '#/p/demo/runs'; await wait(300);
   const sel = document.querySelector('select[data-rtrack]'); sel.value = 't-loss'; sel.dispatchEvent(new Event('change', {bubbles: true})); await wait(300);
   out.track_hash = location.hash;
@@ -331,6 +336,7 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["track_hash"], "#/p/demo/runs?track=t-loss")
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
+        self.assertGreater(out["examples_scroll"], 0)
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
         self.assertIn("下周再说", out["answered"])
         self.assertEqual(out["renamed"], "演示|演示")                   # header and sidebar use the new name

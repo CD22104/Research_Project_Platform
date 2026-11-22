@@ -154,11 +154,13 @@ function renderSide(r) {
 }
 
 // ============================================================ main
-let lastHash = null, copying = false;
+let lastHash = null, lastView = null, copying = false;
 function render() {
   const r = route();
   renderSide(r);
   const open = [...document.querySelectorAll('#main details[open][id]')].map(x => x.id);  // keep what the user expanded
+  const scrolls = [...document.querySelectorAll('#main .items')].map(x => x.scrollTop);   // and how far each list is scrolled
+  const sameView = [r.page, r.name, r.tab].join('|') === lastView;
   let html;
   if (r.page === 'gpu') html = pageGpu();
   else if (r.page === 'todo') html = pageTodo();
@@ -168,13 +170,19 @@ function render() {
   else html = pageOverview();
   $('main').innerHTML = html;
   for (const id of open) { const el = document.getElementById(id); if (el) el.open = true; }
+  if (sameView) document.querySelectorAll('#main .items').forEach((x, i) => { if (scrolls[i]) x.scrollTop = scrolls[i]; });
   fitExample();
   // a linked setup entry is highlighted on every render and scrolled to once; other pages start at the top
   const anchor = r.page === 'project' && r.tab === 'setup' && r.item != null && document.querySelector(`[data-anchor="${CSS.escape(r.item)}"]`);
   if (anchor) anchor.classList.add('flash');
   if (location.hash !== lastHash && !(r.page === 'project' && !S.detail[r.name] && !S.missing[r.name])) {  // wait for the data before scrolling
     lastHash = location.hash;
-    if (anchor) anchor.scrollIntoView({block: 'center'}); else window.scrollTo(0, 0);
+    // another page or tab starts at the top; picking another item in the same tab keeps the list where it is
+    lastView = [r.page, r.name, r.tab].join('|');
+    const det = document.querySelector('#main .detail');
+    if (anchor) anchor.scrollIntoView({block: 'center'});
+    else if (!sameView) window.scrollTo(0, 0);
+    else if (det && det.getBoundingClientRect().top < 0) det.scrollIntoView({block: 'start'});
   }
   document.title = titleFor(r);
 }
