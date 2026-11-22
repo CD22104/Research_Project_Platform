@@ -33,7 +33,8 @@ board/
   runs/<运行编号>/run.json    运行：一次训练、评测或数据处理；可选 metrics.jsonl、samples.jsonl、图片
   examples/walkthrough.md     「一个例子」：一条样例从头走到底
   examples/probe.jsonl        固定的观察样例
-  docs/*.md                   其他说明文档
+  docs/*.md                   文档：开头写 about（属于哪一步）和 kind（类型）
+  answers.jsonl  marks.jsonl  控制台写的：你的回复和文档标记（会话只读）
 ```
 
 项目目录本身（`board/` 旁边）固定这样分：
@@ -209,6 +210,37 @@ with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
 - 跨项目的待办放在 `/shared/ssd/dchen/_shared/todos.jsonl`，格式相同。
 
 任何会话给用户留下一件要做或要决定的事，都在对应项目的 `todos.jsonl` 里追加一条；能给选项的就给选项和建议。
+
+## docs/*.md（文档）：属于哪一步、什么类型
+
+每篇文档开头写字段区，控制台据此把文档挂到流程图对应的那一步上，文档页按流程顺序归类：
+
+```
+---
+title: 第 1 轮复盘
+about: a:loop-txhist-v0-r1
+kind: 复盘
+replaces: [options-v0]
+---
+```
+- `about`：这篇文档属于流程里的哪一步：`v:<版本 id>`、`t:<支线 id>` 或 `a:<尝试 id>`。不写表示属于整个项目（例如团队简介、总体设计）。
+- `kind`：方案（做之前：设计、计划、选项）/ 观察（做的过程中记下的现象）/ 复盘（一轮做完后的总结）/ 报告（给别人看的结果汇总）/ 说明（参考资料、操作说明）。
+- `replaces`：可选，这篇取代了哪几篇旧文档（写文件名，不带 `.md` 也行）。旧文档保留，控制台把它标灰并指向新的。改动大的方案不要直接覆盖旧文件，新写一篇用 `replaces` 指向旧的。
+- `title`：可选，不写就用文件名。
+
+`plan.md` 自动算作「整个项目 · 方案」；根目录的 `NOTES.md`、`REPORT.md` 算作整个项目的笔记和报告。
+
+## marks.jsonl（用户对文档的标记）
+
+用户在控制台文档页把文档标为「看过」或「确认」，追加到 `board/marks.jsonl`。**只由控制台写，会话只读。**
+
+```
+{"file", "mark", "at", "mtime", "by"}
+```
+- `file`：文档路径，例如 `docs/r1-review.md`、`plan.md`、`NOTES.md`。
+- `mark`：`"看过"`、`"确认"`，或 `null`（清除标记）。同一 `file` 以最后一行为准。
+- `mtime`：标记时文档的修改时间；之后文档又改过，控制台显示「有更新」。
+- 「确认」表示用户认可这篇的内容。被确认的文档，会话要改内容之前先问用户，或者新写一篇用 `replaces` 指向它。
 
 ## answers.jsonl（用户在控制台上的回复）
 

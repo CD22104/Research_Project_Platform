@@ -180,8 +180,9 @@ def rc_entries():
 
 
 # ---------------------------------------------------------------- what the console writes
-# Only two things, both from the console page itself (see write_refused):
+# Only these, all from the console page itself (see write_refused):
 #   replies to to-dos -> <project>/board/answers.jsonl (append only; sessions act on them when told to)
+#   document marks    -> <project>/board/marks.jsonl (append only; 看过 / 确认, sessions may read them)
 #   display names     -> state/names.json here on a100 (console-only setting, not in the project)
 STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(HERE, "state"))
 NAMES_FILE = os.path.join(STATE_DIR, "names.json")
@@ -242,22 +243,46 @@ def post_answer(body):
     if answer is not None and answer not in choices:
         return 400, {"error": "选项不在这条待办的选项里"}
     row = {"id": tid, "answer": answer, "text": text, "at": _utc_now(), "by": "console"}
+    err = append_row(name, "answers", row)
+    return (503, {"error": err}) if err else (200, {"ok": True, "row": row})
+
+
+def append_row(name, which, row):
+    """Append one row to the project's answers.jsonl or marks.jsonl and show it at once. -> error text or None"""
     line = (json.dumps(row, ensure_ascii=False) + "\n").encode()
-    path = project_cache.answers_path(name)
     with write_lock:
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+            fd = os.open(project_cache.console_path(name, which), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
             try:
                 os.write(fd, line)
             finally:
                 os.close(fd)
         except OSError as e:
-            return 503, {"error": "写入失败：%s" % projects._err(e)}
+            return "写入失败：%s" % projects._err(e)
         try:
-            project_cache.reload_answers(name)
+            project_cache.reload(name, which)
         except OSError:
             pass  # written; the next scan picks it up
-    return 200, {"ok": True, "row": row}
+    return None
+
+
+def post_mark(body):
+    """Mark a document as 看过 or 确认 (or clear the mark with null). The document's mtime is kept,
+    so an edit after the mark shows as 有更新."""
+    name, rel, mark = body.get("project"), body.get("file"), body.get("mark")
+    if not (isinstance(name, str) and isinstance(rel, str) and (mark is None or mark in projects.MARKS)):
+        return 400, {"error": "请求格式不对"}
+    snap, _ = project_cache.snapshot()
+    if not (projects.valid_name(name) and name in snap):
+        return 404, {"error": "没有这个项目"}
+    data = snap[name]
+    docs = ([data["plan"]] if data.get("plan") else []) + list(data.get("docs") or [])
+    doc = next((x for x in docs if x.get("file") == rel), None)
+    if doc is None:
+        return 404, {"error": "没有这篇文档，刷新看看"}
+    row = {"file": rel, "mark": mark, "at": _utc_now(), "mtime": doc.get("mtime"), "by": "console"}
+    err = append_row(name, "marks", row)
+    return (503, {"error": err}) if err else (200, {"ok": True, "row": row})
 
 
 def post_name(body):
@@ -415,7 +440,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
-        handler = {"/api/answer": post_answer, "/api/name": post_name}.get(path)
+        handler = {"/api/answer": post_answer, "/api/name": post_name, "/api/mark": post_mark}.get(path)
         if handler is None:
             return self.send(404, "text/plain", b"not found")
         why = self.write_refused()

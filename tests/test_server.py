@@ -238,6 +238,22 @@ class Http(unittest.TestCase):
         self.assertEqual(self.post("/api/other", ok)[0], 404)
         self.assertEqual(self.post("/api/answer", ok, {"Origin": None})[0], 200)  # no Origin (same-origin GET-like) is fine
 
+    def test_mark_documents(self):
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "docs/lr-plan-v1.md", "mark": "确认"})[0], 200)
+        m = self.get_json("/api/project/demo")["marks"]["docs/lr-plan-v1.md"]
+        self.assertEqual(m["mark"], "确认")                                    # shows at once
+        self.assertIsInstance(m["mtime"], float)                               # the document's mtime, to spot later edits
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "docs/lr-plan-v1.md", "mark": None})[0], 200)
+        self.assertNotIn("docs/lr-plan-v1.md", self.get_json("/api/project/demo")["marks"])   # cleared
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "NOTES.md", "mark": "看过"})[0], 200)
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "plan.md", "mark": "看过"})[0], 200)
+        for body, code in [({"file": "docs/nope.md", "mark": "看过"}, 404), ({"file": "../demo/board/project.json", "mark": "看过"}, 404),
+                           ({"file": "NOTES.md", "mark": "喜欢"}, 400), ({"project": "nope", "file": "NOTES.md", "mark": "看过"}, 404)]:
+            with self.subTest(body=body):
+                self.assertEqual(self.post("/api/mark", dict({"project": "demo"}, **body))[0], code)
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "NOTES.md", "mark": "看过"},
+                                   {"Origin": "http://evil.example"})[0], 403)
+
     def test_rename(self):
         self.assertEqual(self.post("/api/name", {"project": "demo", "name": "演示"})[0], 200)
         row = self.demo_summary()

@@ -308,6 +308,27 @@ def read_answers(path, limit=20000):
     return out
 
 
+MARKS = ("看过", "确认")  # what the user can mark a document as in the console
+
+
+def read_marks(path, limit=20000):
+    """marks.jsonl -> {file: latest row}. Only the console writes it; "mark": null clears a mark.
+    "mtime" is the document's mtime when it was marked, so a later edit shows as 有更新."""
+    out = {}
+    for i, line in enumerate(_complete_lines(path)):
+        if i >= limit:
+            break
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("file"), str):
+            out.pop(row["file"], None)
+            if row.get("mark") in MARKS:
+                out[row["file"]] = {k: row.get(k) for k in ("file", "mark", "at", "mtime")}
+    return out
+
+
 def read_todos(path, limit=2000):
     """todos.jsonl -> {"items": [...], "bad": n}. Rows are appended; the last row of an id wins,
     so a session marks an item done by appending it again with "done" set."""
@@ -429,6 +450,10 @@ def scan_project(board, memo=None, new_memo=None):
     if st:
         bump("todos", st.st_mtime)
         answers = b.cached("answers.jsonl", st, read_answers, {}) or {}
+    marks = {}
+    st = b.stat("marks.jsonl")
+    if st:
+        marks = b.cached("marks.jsonl", st, read_marks, {}) or {}
 
     # general documents: board/plan.md is above; board/docs/*.md and two fixed files in the project root
     docs = []
@@ -444,7 +469,7 @@ def scan_project(board, memo=None, new_memo=None):
             docs.append(r)
 
     out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
-           "todos": todos["items"], "answers": answers, "docs": docs, "updated": updated, "errors": b.errors}
+           "todos": todos["items"], "answers": answers, "marks": marks, "docs": docs, "updated": updated, "errors": b.errors}
     out.update(records)
     try:
         out["checks"] = check_project(out)
@@ -571,7 +596,7 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [],
             "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
-            "todos": [], "answers": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+            "todos": [], "answers": {}, "marks": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 
 def with_answers(todos, answers):
@@ -699,21 +724,28 @@ class ProjectCache:
         with self._lock:
             return with_answers(self._todos, self._answers)
 
-    def answers_path(self, name):
+    def console_path(self, name, which="answers"):
+        """Where the console's own files live: answers.jsonl (replies) or marks.jsonl (document marks)."""
         if name == SHARED:
-            return os.path.join(self.root, SHARED, "answers.jsonl")
-        return os.path.join(self.root, name, "board", "answers.jsonl")
+            return os.path.join(self.root, SHARED, which + ".jsonl")
+        return os.path.join(self.root, name, "board", which + ".jsonl")
 
-    def reload_answers(self, name):
-        """Re-read one answers.jsonl now (after the console appended to it), so the reply shows at once."""
-        ans = read_answers(self.answers_path(name))
+    def answers_path(self, name):
+        return self.console_path(name, "answers")
+
+    def reload(self, name, which="answers"):
+        """Re-read one of the console's files now (after the console appended to it), so the change shows at once."""
+        data = (read_answers if which == "answers" else read_marks)(self.console_path(name, which))
         with self._lock:
-            if name == SHARED:
-                self._answers, self._answers_sig = ans, None
+            if name == SHARED and which == "answers":
+                self._answers, self._answers_sig = data, None
             elif name in self._projects:
                 projects = dict(self._projects)  # snapshots are replaced, never mutated
-                projects[name] = dict(projects[name], answers=ans)
+                projects[name] = dict(projects[name], **{which: data})
                 self._projects = projects
+
+    def reload_answers(self, name):
+        self.reload(name, "answers")
 
 
 def safe_board_file(root, name, relpath):

@@ -203,15 +203,18 @@ class Extras(FixtureCase):
         d = self.demo()
         self.assertEqual([x["id"] for x in d["setup"]["datasets"]], ["测试集"])
         self.assertEqual(len(d["flow"]["nodes"]), 3)
-        self.assertEqual([x["file"] for x in d["docs"]], ["docs/hparams.md", "NOTES.md", "REPORT.md"])
-        self.assertIn("进度笔记", d["docs"][1]["body"])
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/focal-review.md", "docs/hparams.md", "docs/lr-plan-v0.md",
+                                                          "docs/lr-plan-v1.md", "NOTES.md", "REPORT.md"])
+        self.assertIn("进度笔记", d["docs"][4]["body"])
+        self.assertEqual((d["docs"][0]["meta"]["about"], d["docs"][0]["meta"]["kind"]), ("a:2026-11-15-focal", "复盘"))
         self.assertIn("setup", d["updated"])
 
     def test_root_doc_symlink_out_is_ignored(self):
         os.remove(os.path.join(self.root, "demo", "NOTES.md"))
         os.symlink(os.path.join(self.tmp, "secret.md"), os.path.join(self.root, "demo", "NOTES.md"))
         d = self.demo()
-        self.assertEqual([x["file"] for x in d["docs"]], ["docs/hparams.md", "REPORT.md"])
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/focal-review.md", "docs/hparams.md", "docs/lr-plan-v0.md",
+                                                          "docs/lr-plan-v1.md", "REPORT.md"])
         self.assertNotIn("must never be read", repr(d))
 
     def test_todos_last_row_wins(self):

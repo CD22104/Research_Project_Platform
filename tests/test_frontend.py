@@ -87,6 +87,7 @@ ROUTES = {
     "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
+    "p_doc_review": "#/p/demo/docs/focal-review.md",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
@@ -223,8 +224,17 @@ class Pages(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert("xss in walkthrough")&lt;/script&gt;', ex)
         self.assertIn("观察样例", ex)
         docs = self.m("p_docs")
-        for g in ["方案", "说明", "项目笔记"]:
-            self.assertIn(f'<div class="tgroup">{g}</div>', docs)
+        groups = re.findall(r'<div class="tgroup">(.*?)</div>', docs)               # grouped by where they belong in the flow
+        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "损失函数 › 尝试 · focal"])
+        self.assertIn('<a class="li old" href="#/p/demo/docs/lr-plan-v0.md', docs)      # replaced documents are greyed
+        self.assertIn("已被「学习率方案」取代", docs)
+        self.assertIn('<span class="pill t-other">未看</span>', docs)
+        self.assertIn('data-mark="确认"', docs)
+        self.assertIn('>未看 7</a>', docs)                                                 # filter chips
+        review = self.m("p_doc_review")
+        self.assertRegex(review, r'属于：<a href="#/p/demo/flow/a%3A2026-11-15-focal">[^<]*尝试 · focal</a>')
+        self.assertIn('<a class="ref" href="#/p/demo/runs/r002"', review)                 # {{run:...}} shows the run's number
+        self.assertIn('📄1', self.m("p_road_v"))                                          # the flow step shows its document
         self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
@@ -309,6 +319,9 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   document.getElementById('rename-open').click(); await wait(50);
   document.getElementById('rename-input').value = '演示'; document.getElementById('rename-save').click(); await wait(800);
   out.renamed = document.querySelector('.phead h1').textContent + '|' + document.querySelector('#side a.sitem.on .lbl').textContent;
+  location.hash = '#/p/demo/docs/lr-plan-v1.md'; await wait(500);
+  document.querySelector('[data-mark="确认"]').click(); await wait(900);
+  out.marked = (document.querySelector('#main .li.on .pill') || {}).textContent || '';
   location.hash = '#/gpu'; await wait(300);
   out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
   const pre = document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
@@ -335,7 +348,7 @@ class Interactions(unittest.TestCase):
                 f.write(text.replace("</body>", CLICKS.replace("<\\/script>", "</" + "script>"), 1))
             proc, base, log = start_server(repo, tmp)
             try:
-                dom, errors = dump(base + "#/overview", 14000)
+                dom, errors = dump(base + "#/overview", 17000)
             finally:
                 stop_server(proc, log)
         finally:
@@ -356,6 +369,7 @@ class Interactions(unittest.TestCase):
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
         self.assertIn("下周再说", out["answered"])
         self.assertEqual(out["renamed"], "演示|演示")                   # header and sidebar use the new name
+        self.assertEqual(out["marked"], "已确认")                       # marking a document shows at once
 
 
 if __name__ == "__main__":
