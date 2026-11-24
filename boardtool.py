@@ -247,6 +247,31 @@ _handoff_next = P.handoff_next
 unprocessed_replies = P.unprocessed_replies
 
 
+def papers_lines(d, must_max=5, read_max=10):
+    """The facts pack's 论文 section: counts, the 必读 papers the user has not ticked, then the ones
+    the user has ticked 读过, so a discussion knows what it can assume the user has read."""
+    papers, marks = d.get("papers") or [], d.get("paper_marks") or {}
+    if not papers:
+        return ["（还没有）"]
+
+    def one(p):
+        t = str(p.get("title") or p["id"])
+        return "[%s] %s%s" % (p["id"], t if len(t) <= 80 else t[:79] + "…", "" if p.get("checked") else "（未核实）")
+
+    c = P.paper_counts(d)
+    must = [p for p in papers if p.get("priority") == "必读" and p["id"] not in marks]
+    read = [p for p in papers if p["id"] in marks]
+    out = ["- 共 %d 篇，用户读过 %d 篇，必读未读 %d 篇。读过的可以直接谈细节；没读过的，提到时先用一两句交代它做了什么。"
+           % (c["n"], c["read"], c["must_unread"])]
+    out += ["- 必读未读：" + one(p) for p in must[:must_max]]
+    if len(must) > must_max:
+        out.append("- 必读未读还有 %d 篇（见控制台「论文」页）" % (len(must) - must_max))
+    out += ["- 用户读过：" + one(p) for p in read[:read_max]]
+    if len(read) > read_max:
+        out.append("- 读过的还有 %d 篇（见控制台「论文」页）" % (len(read) - read_max))
+    return out
+
+
 def brief(project_dir, max_chars=6000, now=None, session_id=None):
     """The facts pack: what a new session (or one just compacted) must know about the project, built
     from board/ so it never disagrees with the console. Plain text, at most max_chars characters.
@@ -325,12 +350,15 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
         if len(recent) >= 3:
             break
     sections.append(("最近的结论", recent or ["（还没有）"]))
+    sections.append(("论文（board/papers.jsonl）", papers_lines(d)))
 
     sections.append(("提醒", [
         "- 用户在对话里说的长期有效的话（要求、偏好、定下的做法），记成 board/decisions/ 里的「候选」，告诉用户「已记下，等你在控制台采纳」。",
         "- 一件具体的事开工前写任务卡（board/tasks/），做完写交接；实验最上面写「一页纸」。格式：/shared/ssd/dchen/_shared/BOARD_FORMAT.md。",
         "- 用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 /home/dchen/bin/board task-begin <任务 id>%s，"
         "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (" --session " + sid if sid else ""),
+        "- 讨论或更新方案时，把用到的、建议用户读的论文记进 board/papers.jsonl，写明为什么读（why）；"
+        "亲自打开链接、核对过标题才写 checked。用户在控制台勾「读过」。",
         "- 改 board/ 里的文件后，记录检查有问题会当场提示，照提示改掉。"]))
 
     def render(secs):
@@ -342,7 +370,7 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
         return "\n".join(out)
 
     text = render(sections)
-    order = ["最近的结论", "等用户的", "进行中的任务（tasks/）", "已采纳的决定（照此执行；要改先问用户）", "在跑的运行", "项目规则"]
+    order = ["论文（board/papers.jsonl）", "最近的结论", "等用户的","进行中的任务（tasks/）", "已采纳的决定（照此执行；要改先问用户）", "在跑的运行", "项目规则"]
     for title in order:  # shorten the least important lists first
         while len(text) > max_chars:
             sec = next(s for s in sections if s[0] == title)

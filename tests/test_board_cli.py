@@ -73,6 +73,22 @@ class Brief(Base):
         for n in (700, 1200):
             self.assertLessEqual(len(T.brief(self.proj, max_chars=n)), n)
 
+    def test_papers(self):
+        text = T.brief(self.proj)
+        sec = self.section(text, "论文")
+        self.assertIn("共 6 篇，用户读过 1 篇，必读未读 2 篇", sec)
+        self.assertIn("- 必读未读：[goyal-large-batch] Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour\n", sec)
+        self.assertIn("- 必读未读：[radam] On the Variance of the Adaptive Learning Rate and Beyond（未核实）", sec)   # no `checked`
+        self.assertIn("- 用户读过：[focal-loss] Focal Loss for Dense Object Detection", sec)
+        for absent in ("old-survey", "sgdr", "mixup"):                  # dropped; or neither 必读 nor read
+            self.assertNotIn(absent, sec)
+        self.assertIn("board/papers.jsonl", self.section(text, "提醒"))   # sessions are told to keep the list
+        short = T.brief(self.proj, max_chars=len(text) - 40)           # the papers are the first list to be shortened
+        self.assertNotIn("用户读过：", self.section(short, "论文"))
+        self.assertIn("预热有用，并入主线。", self.section(short, "最近的结论"))
+        os.remove(os.path.join(self.proj, "board", "papers.jsonl"))
+        self.assertEqual(self.section(T.brief(self.proj), "论文").split("\n", 1)[1].strip(), "（还没有）")
+
 
 class Hooks(Base):
     """Agreed case 7."""
