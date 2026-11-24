@@ -248,7 +248,7 @@ class Pages(unittest.TestCase):
         self.assertIn("观察样例", ex)
         docs = self.m("p_docs")
         groups = re.findall(r'<div class="tgroup">(.*?)</div>', docs)               # grouped by where they belong in the flow
-        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "损失函数 › 尝试 · focal"])
+        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "版本 v2 · 加入学习率预热", "损失函数 › 尝试 · focal"])
         self.assertIn('<a class="li old" href="#/p/demo/docs/lr-plan-v0.md', docs)      # replaced documents are greyed
         self.assertIn("已被「学习率方案」取代", docs)
         self.assertIn('<span class="pill t-other">未看</span>', docs)

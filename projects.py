@@ -85,6 +85,49 @@ def split_sections(body):
 
 DONE = ("成功", "部分成功", "失败", "放弃", "待确认")  # attempt statuses that carry a conclusion
 
+# The "一页纸" at the top of an attempt: five short plain-language lines the user reads first.
+ONEPAGER = ("想回答", "怎么做", "预期", "结果", "所以")
+ONEPAGER_MAX = 150        # characters of a label's first line ("at most two sentences")
+ONEPAGER_EXTRA_MAX = 300  # characters of extra non-table text under one label
+ONEPAGER_TABLE_ROWS = 10  # table rows allowed under one label (e.g. a small ranking table under 结果)
+_OP_LINE = re.compile(r"^\s*[-*]?\s*\**\s*(%s)\s*\**\s*[:：]\s*\**\s*(.*)$" % "|".join(ONEPAGER))
+
+
+def parse_onepager(text):
+    """The 一页纸 section -> {label: {"text": first line, "extra": following lines}}; unknown lines before
+    the first label are ignored. Never raises."""
+    out, cur = {}, None
+    for line in (text or "").split("\n"):
+        m = _OP_LINE.match(line)
+        if m:
+            cur = m.group(1)
+            out[cur] = {"text": m.group(2).strip().rstrip("*").strip(), "extra": []}
+        elif cur is not None and line.strip():
+            out[cur]["extra"].append(line.rstrip())
+    return {k: {"text": v["text"], "extra": "\n".join(v["extra"])} for k, v in out.items()}
+
+
+def onepager_problems(meta, onepager, has_section):
+    """What is missing or too long in an attempt's 一页纸 (list of messages)."""
+    if not has_section:
+        return ["没有「一页纸」一节（想回答 / 怎么做 / 预期 / 结果 / 所以，每项一两句白话）"]
+    need = ["想回答", "怎么做", "预期"] + (["结果", "所以"] if meta.get("status") in DONE else [])
+    out = ["「一页纸」缺「%s」" % k for k in need if not (onepager.get(k) or {}).get("text")]
+    for k in ONEPAGER:
+        v = onepager.get(k)
+        if not v:
+            continue
+        if len(v["text"]) > ONEPAGER_MAX:
+            out.append("「一页纸」的「%s」太长（%d 字，上限 %d）：只写一两句，细节放到下面各节" % (k, len(v["text"]), ONEPAGER_MAX))
+        lines = v["extra"].split("\n") if v["extra"] else []
+        rows = [x for x in lines if x.lstrip().startswith("|")]
+        prose = sum(len(x.strip()) for x in lines if not x.lstrip().startswith("|"))
+        if len(rows) > ONEPAGER_TABLE_ROWS + 2:  # header and separator rows do not count
+            out.append("「一页纸」的「%s」下的表格太长（%d 行）：一页纸只放最能说明问题的一小张表" % (k, len(rows)))
+        if prose > ONEPAGER_EXTRA_MAX:
+            out.append("「一页纸」的「%s」下面的文字太长（%d 字）：细节放到下面各节" % (k, prose))
+    return out
+
 
 def needs_input(meta, sections):
     """Labels of what the user still has to fill in for an attempt."""
@@ -171,7 +214,17 @@ def read_jsonl_head(path, n=HEAD_ROWS):
 # ---------------------------------------------------------------- scanning
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")  # no leading "_" or "."
-RECORD_DIRS = ("versions", "tracks", "attempts", "method")  # method/: one file per step of how the method works
+# method/: one file per step of how the method works; tasks/: the work view (what agents do);
+# decisions/: what the user decided (候选 until the user adopts it in the console)
+RECORD_DIRS = ("versions", "tracks", "attempts", "method", "tasks", "decisions")
+SECTIONED = ("attempts", "tasks", "decisions")  # records whose "## " sections are parsed
+
+TASK_KINDS = ("讨论", "执行", "写作", "分析", "审查", "调试")
+TASK_STATUS = ("待开始", "进行中", "等运行", "等你", "可以继续", "完成", "暂停", "放弃")
+TASK_OPEN = ("待开始", "进行中", "等运行", "等你", "可以继续")
+DECISION_STATUS = ("候选", "采纳", "不采纳", "已替代")
+DECISION_CHOICES = ("采纳", "不采纳")  # what the user can answer a 候选 decision with
+DOC_KINDS = ("方案", "观察", "复盘", "报告", "说明", "纪要")
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg")
 TEXT = "text/plain; charset=utf-8"  # raw records are shown as text, never rendered
 FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -378,9 +431,11 @@ def scan_project(board, memo=None, new_memo=None):
                 continue
             bump(kind, st.st_mtime)
             r = b.record(kind + "/" + fn, st)
-            if kind == "attempts":
+            if kind in SECTIONED:
                 r["sections"] = split_sections(r["body"])
+            if kind == "attempts":
                 r["needs_input"] = needs_input(r["meta"], r["sections"])
+                r["onepager"] = parse_onepager(r["sections"].get("一页纸"))
             items.append(r)
         records[kind] = items
 
@@ -487,6 +542,52 @@ def _list(x):
     return x if isinstance(x, list) else []
 
 
+def decision_states(decisions, answers):
+    """{decision id: effective status}. A 候选 the user answered in the console counts as answered at
+    once (before any session processes the reply); a decision replaced by an adopted one is 已替代."""
+    state = {}
+    for r in decisions:
+        m = r.get("meta") or {}
+        i = m.get("id")
+        if not isinstance(i, str):
+            continue
+        s = m.get("status") if m.get("status") in DECISION_STATUS else "候选"
+        a = (answers or {}).get("d:" + i)
+        if s == "候选" and a and a.get("answer") in DECISION_CHOICES:
+            s = a["answer"]
+        state[i] = s
+    for r in decisions:
+        m = r.get("meta") or {}
+        if state.get(m.get("id")) == "采纳":
+            for old in _list(m.get("replaces")):
+                if old in state and old != m.get("id"):
+                    state[old] = "已替代"
+    return state
+
+
+_REF_KINDS = {"v": "versions", "t": "tracks", "a": "attempts", "m": "method", "k": "tasks", "d": "decisions"}
+
+
+def ref_problem(ref, d):
+    """Why an "about" reference (v:/t:/a:/m:/k:/d: + id) does not resolve, or None."""
+    if not isinstance(ref, str) or ":" not in ref:
+        return "「%s」不是 v: / t: / a: / m: / k: / d: 加 id 的写法" % ref
+    kind, _, rid = ref.partition(":")
+    if kind not in _REF_KINDS:
+        return "「%s」不是 v: / t: / a: / m: / k: / d: 加 id 的写法" % ref
+    if rid not in _ids(d.get(_REF_KINDS[kind]) or []):
+        return "「%s」指向的记录不存在" % ref
+    return None
+
+
+def _id_matcher(ids):
+    """Match names against setup ids; "{n}" in an id stands for a number (acc_step{n} covers acc_step1, acc_step2 ...)."""
+    exact = {i for i in ids if isinstance(i, str) and "{n}" not in i}
+    pats = [re.compile("^" + re.escape(i).replace(re.escape("{n}"), r"\d+") + "$")
+            for i in ids if isinstance(i, str) and "{n}" in i]
+    return lambda x: x in exact or any(p.match(x) for p in pats)
+
+
 def check_project(d, limit=200):
     """Broken links and missing definitions in a project's records: [{"where", "what"}].
     Only reports what a session writing the records can fix; never raises."""
@@ -520,8 +621,10 @@ def check_project(d, limit=200):
         for rid in _list(m.get("runs")):
             if rid not in run_ids:
                 add(a["file"], "引用的运行「%s」不存在" % rid)
-        if "例子" not in (a.get("sections") or {}):
+        if "例子" not in (a.get("sections") or {}) and m.get("status") != "计划中":
             add(a["file"], "没有「例子」小节")
+        for msg in onepager_problems(m, a.get("onepager") or {}, "一页纸" in (a.get("sections") or {})):
+            add(a["file"], msg)
     for r in d["runs"]:
         at = r["run"].get("attempt")
         if at and at not in att_ids:
@@ -561,8 +664,8 @@ def check_project(d, limit=200):
 
     s = d.get("setup")
     if s:
-        datasets = {x.get("id") for x in _list(s.get("datasets")) if isinstance(x, dict)}
-        metrics = {x.get("id") for x in _list(s.get("metrics")) if isinstance(x, dict)}
+        datasets = _id_matcher([x.get("id") for x in _list(s.get("datasets")) if isinstance(x, dict)])
+        metrics = _id_matcher([x.get("id") for x in _list(s.get("metrics")) if isinstance(x, dict)])
         groups, cols = {}, {}
         for r in d["runs"]:
             m = r["run"].get("metrics")
@@ -575,10 +678,16 @@ def check_project(d, limit=200):
                         cols[c] = cols.get(c, 0) + 1
                 else:
                     cols[g] = cols.get(g, 0) + 1
-        for g in sorted(set(groups) - datasets):
+        for g in sorted(x for x in groups if not datasets(x)):
             add("setup.json", "分组「%s」（%d 次运行用到）没有在 datasets 里定义" % (g, groups[g]))
-        for c in sorted(set(cols) - metrics):
+        for c in sorted(x for x in cols if not metrics(x)):
             add("setup.json", "指标「%s」（%d 次运行用到）没有在 metrics 里定义" % (c, cols[c]))
+        for x in _list(s.get("terms")):
+            if not (isinstance(x, dict) and isinstance(x.get("term"), str) and x["term"].strip()
+                    and isinstance(x.get("about"), str) and x["about"].strip()):
+                add("setup.json", "terms 里每项要有 term（术语）和 about（一句白话解释）")
+            elif len(x["about"]) > 120:
+                add("setup.json", "术语「%s」的解释太长（%d 字）：一句白话就够" % (x["term"], len(x["about"])))
         for x in _list(s.get("methods")):
             if not isinstance(x, dict):
                 continue
@@ -587,6 +696,73 @@ def check_project(d, limit=200):
             for rid in _list(x.get("runs")):
                 if rid not in run_ids:
                     add("setup.json", "方法「%s」引用的运行「%s」不存在" % (x.get("id"), rid))
+
+    task_ids = _ids(d.get("tasks") or [])
+    for t in d.get("tasks") or []:
+        m, secs = t["meta"], t.get("sections") or {}
+        if not isinstance(m.get("id"), str):
+            add(t["file"], "没有 id（字段区写 id: <英文短名>，和文件名一致）")
+            continue
+        if t["file"] != "tasks/%s.md" % m["id"]:
+            add(t["file"], "文件名要和 id 一致：tasks/%s.md" % m["id"])
+        if m.get("kind") not in TASK_KINDS:
+            add(t["file"], "kind「%s」不认识（%s）" % (m.get("kind"), " / ".join(TASK_KINDS)))
+        if m.get("status") not in TASK_STATUS:
+            add(t["file"], "status「%s」不认识（%s）" % (m.get("status"), " / ".join(TASK_STATUS)))
+        for x in _list(m.get("after")):
+            if x not in task_ids:
+                add(t["file"], "after 里的任务「%s」不存在" % x)
+        if m.get("about"):
+            p = ref_problem(m["about"], d)
+            if p:
+                add(t["file"], "about " + p)
+        if not secs.get("要做什么", "").strip():
+            add(t["file"], "没有「要做什么」一节")
+        if m.get("status") in ("完成", "等你", "可以继续") and not secs.get("交接", "").strip():
+            add(t["file"], "状态是「%s」，但「交接」是空的（做了什么 / 证据在哪 / 没做完的 / 下一步 / 要你决定的）" % m.get("status"))
+
+    dec_ids = _ids(d.get("decisions") or [])
+    states = decision_states(d.get("decisions") or [], d.get("answers") or {})
+    replaced_by = {}
+    for r in d.get("decisions") or []:
+        m, secs = r["meta"], r.get("sections") or {}
+        if not isinstance(m.get("id"), str):
+            add(r["file"], "没有 id（字段区写 id: <英文短名>，和文件名一致）")
+            continue
+        if r["file"] != "decisions/%s.md" % m["id"]:
+            add(r["file"], "文件名要和 id 一致：decisions/%s.md" % m["id"])
+        if m.get("status") not in DECISION_STATUS:
+            add(r["file"], "status「%s」不认识（%s）" % (m.get("status"), " / ".join(DECISION_STATUS)))
+        if not secs.get("决定", "").strip():
+            add(r["file"], "没有「决定」一节（一句话写定了什么）")
+        if m.get("about"):
+            p = ref_problem(m["about"], d)
+            if p:
+                add(r["file"], "about " + p)
+        for old in _list(m.get("replaces")):
+            if old not in dec_ids:
+                add(r["file"], "replaces 里的决定「%s」不存在" % old)
+            elif states.get(m["id"]) == "采纳":
+                if old in replaced_by:
+                    add(r["file"], "决定「%s」已经被「%s」替代，不能再被替代一次" % (old, replaced_by[old]))
+                else:
+                    replaced_by[old] = m["id"]
+
+    for doc in d.get("docs") or []:
+        if not doc["file"].startswith("docs/"):
+            continue
+        m = doc.get("meta") or {}
+        if not m.get("kind"):
+            add(doc["file"], "没有 kind（%s）" % " / ".join(DOC_KINDS))
+        elif m["kind"] not in DOC_KINDS:
+            add(doc["file"], "kind「%s」不认识（%s）" % (m["kind"], " / ".join(DOC_KINDS)))
+        if m.get("about"):
+            p = ref_problem(m["about"], d)
+            if p:
+                add(doc["file"], "about " + p)
+        for x in _list(m.get("decisions")):
+            if x not in dec_ids:
+                add(doc["file"], "decisions 里的决定「%s」不存在" % x)
 
     h = ((d.get("project") or {}).get("display") or {}).get("headline")
     if isinstance(h, dict) and h.get("group") and h.get("metric"):
@@ -627,7 +803,7 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [], "method": [],
-            "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
+            "tasks": [], "decisions": [], "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
             "todos": [], "answers": {}, "marks": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 

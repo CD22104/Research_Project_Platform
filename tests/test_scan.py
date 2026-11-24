@@ -76,7 +76,7 @@ class Scan(FixtureCase):
         self.assertIn("<script>", d["plan"]["body"])       # backend returns raw text; frontend escapes
         self.assertIn("<script>", d["example"]["walkthrough"]["body"])
         self.assertEqual(len(d["example"]["probe_head"]), 2)
-        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method"})
+        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method", "tasks", "decisions"})
 
     def test_runs(self):
         d = self.demo()
@@ -203,18 +203,18 @@ class Extras(FixtureCase):
         d = self.demo()
         self.assertEqual([x["id"] for x in d["setup"]["datasets"]], ["测试集"])
         self.assertEqual(len(d["flow"]["nodes"]), 3)
-        self.assertEqual([x["file"] for x in d["docs"]], ["docs/focal-review.md", "docs/hparams.md", "docs/lr-plan-v0.md",
-                                                          "docs/lr-plan-v1.md", "NOTES.md", "REPORT.md"])
-        self.assertIn("进度笔记", d["docs"][4]["body"])
-        self.assertEqual((d["docs"][0]["meta"]["about"], d["docs"][0]["meta"]["kind"]), ("a:2026-11-15-focal", "复盘"))
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/2026-11-20-discussion.md", "docs/focal-review.md", "docs/hparams.md",
+                                                          "docs/lr-plan-v0.md", "docs/lr-plan-v1.md", "NOTES.md", "REPORT.md"])
+        self.assertIn("进度笔记", d["docs"][5]["body"])
+        self.assertEqual((d["docs"][1]["meta"]["about"], d["docs"][1]["meta"]["kind"]), ("a:2026-11-15-focal", "复盘"))
         self.assertIn("setup", d["updated"])
 
     def test_root_doc_symlink_out_is_ignored(self):
         os.remove(os.path.join(self.root, "demo", "NOTES.md"))
         os.symlink(os.path.join(self.tmp, "secret.md"), os.path.join(self.root, "demo", "NOTES.md"))
         d = self.demo()
-        self.assertEqual([x["file"] for x in d["docs"]], ["docs/focal-review.md", "docs/hparams.md", "docs/lr-plan-v0.md",
-                                                          "docs/lr-plan-v1.md", "REPORT.md"])
+        self.assertEqual([x["file"] for x in d["docs"]], ["docs/2026-11-20-discussion.md", "docs/focal-review.md", "docs/hparams.md",
+                                                          "docs/lr-plan-v0.md", "docs/lr-plan-v1.md", "REPORT.md"])
         self.assertNotIn("must never be read", repr(d))
 
     def test_todos_last_row_wins(self):
@@ -262,6 +262,95 @@ class Extras(FixtureCase):
         d["project"]["display"] = {"headline": {"group": "zz", "metric": "acc"}}
         checks = P.check_project(d)
         self.assertIn({"where": "project.json", "what": "display.headline 指向的「zz / acc」在运行记录里找不到"}, checks)
+
+
+class FormatV2(FixtureCase):
+    """Record format v2: 一页纸, tasks/, decisions/, minutes, terms, numbered metric ids."""
+
+    def checks(self, d=None):
+        return {(c["where"], c["what"]) for c in (d or self.demo())["checks"]}
+
+    def test_onepager_parsed_and_checked(self):
+        d = self.demo()
+        a = {x["file"]: x for x in d["attempts"]}
+        op = a["attempts/2026-11-10-lr-sweep.md"]["onepager"]
+        self.assertEqual(list(op), ["想回答", "怎么做", "预期", "结果", "所以"])
+        self.assertEqual(op["所以"]["text"], "预热有用，并入主线。")
+        checks = self.checks(d)
+        self.assertFalse([c for c in checks if c[0] == "attempts/2026-11-10-lr-sweep.md" and "一页纸" in c[1]])
+        self.assertIn(("attempts/2026-11-15-focal.md", "没有「一页纸」一节（想回答 / 怎么做 / 预期 / 结果 / 所以，每项一两句白话）"), checks)
+
+    def test_onepager_rules(self):
+        P_ = P.parse_onepager
+        op = P_("- **想回答**：问题？\n- 怎么做: 做法\n  续行说明\n| 名次 | A |\n|---|---|\n| 1 | x |\n- 预期：好\n")
+        self.assertEqual((op["想回答"]["text"], op["怎么做"]["text"]), ("问题？", "做法"))
+        self.assertIn("| 1 | x |", op["怎么做"]["extra"])
+        done = {"status": "成功"}
+        self.assertEqual(P.onepager_problems(done, op, True), ["「一页纸」缺「结果」", "「一页纸」缺「所以」"])
+        self.assertEqual(P.onepager_problems({"status": "进行中"}, op, True), [])
+        long = P_("- 想回答：" + "长" * 151 + "\n- 怎么做：x\n- 预期：y")
+        self.assertTrue(any("太长（151 字" in m for m in P.onepager_problems({}, long, True)))
+        table = P_("- 想回答：q\n- 怎么做：h\n- 预期：e\n" + "\n".join("| %d |" % i for i in range(13)))
+        self.assertTrue(any("表格太长" in m for m in P.onepager_problems({}, table, True)))
+        # a planned attempt needs no example yet, but still its first three lines
+        self.assertEqual(P.onepager_problems({"status": "计划中"}, {}, True), ["「一页纸」缺「想回答」", "「一页纸」缺「怎么做」", "「一页纸」缺「预期」"])
+
+    def test_tasks(self):
+        d = self.demo()
+        t = {x["meta"].get("id"): x for x in d["tasks"]}
+        self.assertEqual(t["f1-metric"]["meta"]["scope"], ["src/eval/"])
+        self.assertIn("重算 r002", t["f1-metric"]["sections"]["交接"])
+        checks = self.checks(d)
+        self.assertFalse([c for c in checks if c[0] in ("tasks/f1-metric.md", "tasks/report-r1.md")])
+        for want in ["文件名要和 id 一致：tasks/other-name.md", "kind「跳舞」不认识（讨论 / 执行 / 写作 / 分析 / 审查 / 调试）",
+                     "status「搞定」不认识（待开始 / 进行中 / 等运行 / 等你 / 可以继续 / 完成 / 暂停 / 放弃）",
+                     "after 里的任务「ghost」不存在", "about 「a:nope」指向的记录不存在", "没有「要做什么」一节"]:
+            self.assertIn(("tasks/broken-task.md", want), checks)
+        board = os.path.join(self.root, "demo", "board")
+        with open(os.path.join(board, "tasks", "f1-metric.md")) as f:
+            text = f.read()
+        with open(os.path.join(board, "tasks", "f1-metric.md"), "w") as f:
+            f.write(text.replace("status: 进行中", "status: 完成").split("## 交接")[0])
+        self.assertIn(("tasks/f1-metric.md", "状态是「完成」，但「交接」是空的（做了什么 / 证据在哪 / 没做完的 / 下一步 / 要你决定的）"), self.checks())
+
+    def test_decisions_and_answers(self):
+        d = self.demo()
+        self.assertEqual(P.decision_states(d["decisions"], {}),
+                         {"broken-dec": "候选", "old-plan": "已替代", "scale-later": "候选", "warmup-first": "采纳"})
+        # the user's click in the console counts at once, before any session processes the reply
+        answers = {"d:scale-later": {"id": "d:scale-later", "answer": "采纳"}}
+        self.assertEqual(P.decision_states(d["decisions"], answers)["scale-later"], "采纳")
+        self.assertEqual(P.decision_states(d["decisions"], {"d:scale-later": {"answer": "随便"}})["scale-later"], "候选")
+        checks = self.checks(d)
+        for want in [("decisions/broken-dec.md", "status「拍板」不认识（候选 / 采纳 / 不采纳 / 已替代）"),
+                     ("decisions/broken-dec.md", "没有「决定」一节（一句话写定了什么）"),
+                     ("decisions/broken-dec.md", "replaces 里的决定「ghost」不存在"),
+                     ("docs/2026-11-20-discussion.md", "decisions 里的决定「ghost-dec」不存在")]:
+            self.assertIn(want, checks)
+        self.assertFalse([c for c in checks if c[0] in ("decisions/warmup-first.md", "decisions/old-plan.md", "decisions/scale-later.md")])
+
+    def test_two_adopted_decisions_cannot_replace_the_same_one(self):
+        board = os.path.join(self.root, "demo", "board")
+        with open(os.path.join(board, "decisions", "again.md"), "w") as f:
+            f.write("---\nid: again\nstatus: 采纳\nreplaces: [old-plan]\n---\n## 决定\nx\n")
+        msgs = [c[1] for c in self.checks() if c[0] in ("decisions/again.md", "decisions/warmup-first.md")]
+        self.assertEqual(len([m for m in msgs if "已经被" in m and "不能再被替代一次" in m]), 1)
+
+    def test_terms_doc_kinds_and_numbered_metrics(self):
+        board = os.path.join(self.root, "demo", "board")
+        os.makedirs(os.path.join(board, "runs", "r006"))
+        with open(os.path.join(board, "runs", "r006", "run.json"), "w") as f:
+            f.write('{"id": "r006", "metrics": {"测试集": {"acc_step1": 0.5, "acc_step12": 0.6, "acc_stepx": 1}}}')
+        with open(os.path.join(board, "docs", "odd.md"), "w") as f:
+            f.write("---\nkind: 随笔\nabout: z:1\n---\n正文\n")
+        checks = self.checks()
+        self.assertIn(("setup.json", "指标「acc_stepx」（1 次运行用到）没有在 metrics 里定义"), checks)
+        self.assertFalse([c for c in checks if "acc_step1" in c[1]])          # acc_step{n} covers numbered steps
+        self.assertIn(("setup.json", "terms 里每项要有 term（术语）和 about（一句白话解释）"), checks)
+        self.assertIn(("docs/odd.md", "kind「随笔」不认识（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要）"), checks)
+        self.assertIn(("docs/odd.md", "about 「z:1」不是 v: / t: / a: / m: / k: / d: 加 id 的写法"), checks)
+        self.assertIn(("docs/hparams.md", "没有 kind（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要）"), checks)
+        self.assertFalse([c for c in checks if c[0] == "NOTES.md"])           # root notes need no front matter
 
 
 class SafeFile(FixtureCase):
