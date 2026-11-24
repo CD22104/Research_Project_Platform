@@ -559,6 +559,47 @@ li.sub{font-size:12px;font-weight:700;color:var(--muted);padding:8px 14px 2px;bo
 li.arow .ans{margin-top:3px}
 .filters2{margin:0 0 6px}
 ul.inbox{list-style:none;margin:0;padding:0}
+/* ---------- 设计思路 (design.js) */
+.dz-head{margin-bottom:12px}
+.dz-sub{color:var(--muted);font-size:15px;margin:-4px 0 8px}
+.dz-act{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.dz-body{display:grid;grid-template-columns:200px minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.dz-body{grid-template-columns:1fr}}
+.dz-toc{position:sticky;top:12px;display:flex;flex-direction:column;gap:1px;font-size:13px;max-height:calc(100vh - 24px);overflow-y:auto}
+@media (max-width:900px){.dz-toc{position:static;max-height:none}}
+.dz-toc a{color:var(--text);padding:4px 8px;border-radius:6px;display:flex;gap:6px}
+.dz-toc a:hover{background:var(--hover);text-decoration:none}
+.dz-toc a span{color:var(--muted);width:1.4em;text-align:right;flex:none}
+.dz-sec{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:14px;scroll-margin-top:12px}
+.dz-sec h2{font-size:18px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+.dz-n{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-size:13px;flex:none}
+.dz-sec p{margin:8px 0;line-height:1.75}
+.dz-lead{font-size:15px}
+.dz-ol,.dz-ul{margin:6px 0;padding-left:22px;line-height:1.75}
+.dz-ol li,.dz-ul li{margin:4px 0}
+table.dz-t{margin:8px 0}
+table.dz-t td{white-space:normal;vertical-align:top;line-height:1.6}
+table.dz-t th{white-space:nowrap}
+.dz-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:6px 0}
+@media (max-width:900px){.dz-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dz-stats .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dz-svg{width:100%;height:auto;display:block;margin:6px 0 10px}
+.dz-svg .dg rect{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.dz-svg .dg.you rect{stroke:var(--text)}
+.dz-svg .dg.core rect{fill:var(--accent-bg);stroke:var(--accent)}
+.dz-svg .dg.agent rect{fill:var(--free-bg);stroke:var(--free)}
+.dz-svg .dg.prog rect{fill:var(--part-bg);stroke:var(--part)}
+.dz-svg .dg.disk rect{fill:var(--track);stroke:var(--muted)}
+.dz-svg .dg.gpu rect{fill:var(--busy-bg);stroke:var(--busy)}
+.dz-svg .dg.zone rect{fill:none;stroke:var(--muted);stroke-dasharray:6 5}
+.dz-svg .dt{fill:var(--text);font-size:14px;font-weight:700}
+.dz-svg .dt.c{text-anchor:middle;font-size:13px}
+.dz-svg .dl{fill:var(--muted);font-size:12.5px}
+.dz-svg .dgt{fill:var(--text);font-size:14px;font-weight:700}
+.dz-svg .da{stroke:var(--muted);stroke-width:1.6;fill:none}
+.dz-svg .da.dash{stroke-dasharray:5 4}
+.dz-svg .dam{fill:var(--muted)}
+.dz-svg .dal{fill:var(--accent);font-size:12px}
 ul.inbox li{display:flex;gap:8px;align-items:baseline;padding:7px 14px;border-bottom:1px solid var(--line)}
 ul.inbox li:last-child{border-bottom:0}
 ul.inbox .ip{flex:none;font-size:12px;color:var(--muted);width:8.5em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -577,6 +618,7 @@ table.sess .bar i{background:var(--bar)}
 </div>
 <script src="common.js"></script>
 <script src="work.js"></script>
+<script src="design.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

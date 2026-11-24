@@ -91,7 +91,7 @@ ROUTES = {
     "p_method_ramp": "#/p/demo/method/warmup-ramp",
     "p_home": "#/p/demo/home", "p_tasks": "#/p/demo/tasks", "p_task": "#/p/demo/tasks/f1-metric", "p_decisions": "#/p/demo/decisions",
     "p_decision": "#/p/demo/decisions/scale-later", "p_minutes": "#/p/demo/decisions/doc:2026-11-20-discussion.md",
-    "p_timeline": "#/p/demo/timeline", "p_upkeep": "#/p/demo/upkeep", "sessions": "#/sessions",
+    "p_timeline": "#/p/demo/timeline", "p_upkeep": "#/p/demo/upkeep", "sessions": "#/sessions", "design": "#/design",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
@@ -125,7 +125,7 @@ class Pages(unittest.TestCase):
         for k, (dom, errors) in self.pages.items():
             with self.subTest(route=k):
                 self.assertEqual(errors, [])
-                self.assertEqual(len(re.findall(r"<script\b", dom)), 3)  # common.js + work.js + app.js only
+                self.assertEqual(len(re.findall(r"<script\b", dom)), 4)  # common.js + work.js + design.js + app.js only
 
     def test_sidebar_and_titles(self):
         d = self.pages["p_overview"][0]
@@ -196,6 +196,16 @@ class Pages(unittest.TestCase):
         self.assertIn("定版 v2", tl)
         self.assertIn('<li class="day">', tl)
         self.assertIn("所有会话", self.m("sessions"))
+
+    def test_design_page(self):
+        d = self.m("design")
+        self.assertEqual(len(re.findall(r'<section class="dz-sec" id="dz-', d)), 19)      # every section of the table of contents
+        self.assertEqual(len(re.findall(r'<a href="#/design" data-goto="dz-', d)), 19)
+        self.assertIn('<button id="dz-export"', d)
+        self.assertEqual(len(re.findall(r'<svg class="dz-svg"', d)), 2)
+        self.assertIn("进行中的项目", d)                                                  # live numbers from the console
+        self.assertIn('<span class="lbl">设计思路</span>', self.pages["design"][0])
+        self.assertEqual(title(self.pages["design"][0]), "设计思路 · CD的研究控制台")
 
     def test_setup_tab(self):
         d = self.m("p_setup")

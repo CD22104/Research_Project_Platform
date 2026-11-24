@@ -395,7 +395,7 @@ def api_sessions():
 HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
 STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
           "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS), "/app.js": ("app.js", JS),
-          "/work.js": ("work.js", JS),
+          "/work.js": ("work.js", JS), "/design.js": ("design.js", JS),
           "/guide.md": ("docs/guide.md", "text/plain; charset=utf-8")}
 
 # Served board files must never run code, even when opened directly (SVG can carry scripts)

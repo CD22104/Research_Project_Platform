@@ -17,7 +17,7 @@ const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new
 const RESEARCH_TABS = [['home', '概况'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
 const WORK_TABS = [['tasks', '任务'], ['decisions', '讨论与决定'], ['sessions', '会话'], ['timeline', '时间线'], ['upkeep', '记录维护']];
 const TABS = [...RESEARCH_TABS, ...WORK_TABS];
-const PAGES = ['overview', 'sessions', 'gpu', 'todo', 'guide', 'new'];
+const PAGES = ['overview', 'sessions', 'gpu', 'todo', 'guide', 'design', 'new'];
 
 function route() {
   const raw = location.hash.replace(/^#/, '');
@@ -153,6 +153,7 @@ function renderSide(r) {
     item('#/gpu', 'GPU', free != null ? free + ' 空闲' : null, r.page === 'gpu') +
     item('#/todo', '待办', todo || null, r.page === 'todo') +
     item('#/guide', '使用说明', null, r.page === 'guide') +
+    item('#/design', '设计思路', null, r.page === 'design') +
     '<div class="shead">项目</div>' +
     (list.length ? by(0).map(proj).join('') : `<div class="faint" style="padding:4px 10px">${pj ? '还没有项目' : '加载中…'}</div>`) +
     (by(1).length ? '<div class="shead">暂停</div>' + by(1).map(proj).join('') : '') +
@@ -174,6 +175,7 @@ function render() {
   else if (r.page === 'todo') html = pageTodo();
   else if (r.page === 'new') html = pageNew();
   else if (r.page === 'guide') html = pageGuide();
+  else if (r.page === 'design') html = pageDesign();
   else if (r.page === 'project') html = pageProject(r);
   else html = pageOverview();
   $('main').innerHTML = html;
@@ -201,6 +203,7 @@ function titleFor(r) {
   if (r.page === 'sessions') return `会话 · ${app}`;
   if (r.page === 'new') return `新建项目 · ${app}`;
   if (r.page === 'guide') return `使用说明 · ${app}`;
+  if (r.page === 'design') return `设计思路 · ${app}`;
   if (r.page === 'project') { const d = S.detail[r.name]; return `${(d && d.project && d.project.title) || r.name} · ${app}`; }
   return `今天 · ${app}`;
 }
