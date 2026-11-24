@@ -429,7 +429,11 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   out.fig_probes = probes;
   location.hash = '#/gpu'; await wait(300);
   out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
-  const pre = document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
+  const sess = document.createElement('div');   // a big context matters only while the session is open
+  sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
+                                {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
+  out.sessions = [...sess.querySelectorAll('tr')].slice(1).map(tr => [tr.className, tr.textContent.includes('建议换新')]);
+  const pre =document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
 })();
 <\\/script>
 </body>"""
@@ -470,6 +474,7 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["track_hash"], "#/p/demo/runs?track=t-loss")
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
+        self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])   # ended: greyed, no 建议换新
         self.assertGreater(out["examples_scroll"], 0)
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
         self.assertIn("下周再说", out["answered"])

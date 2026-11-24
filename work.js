@@ -312,13 +312,13 @@ const SESSION_BIG = 150000, SESSION_IDLE = 3 * 86400;
 function sessionRows(list, now, showProject) {
   if (!list.length) return '<div class="empty">没有会话。</div>';
   const rows = list.map(s => {
-    const flags = [];
-    if (s.context > SESSION_BIG) flags.push('<span class="pill t-todo" title="每次调用都要把整段对话读一遍；换一个新会话，从文件里接上">上下文大，建议换新</span>');
+    const flags = [], big = s.live && s.context > SESSION_BIG;   // an ended session needs no advice: it is greyed instead
+    if (big) flags.push('<span class="pill t-todo" title="每次调用都要把整段对话读一遍；换一个新会话，从文件里接上">上下文大，建议换新</span>');
     if (!s.live && s.last_active && now - s.last_active > SESSION_IDLE) flags.push('<span class="pill t-off">闲置超过 3 天</span>');
     if (s.project && !s.task) flags.push('<span class="pill t-other" title="没有挂在任何任务卡上">临时</span>');
     const st = s.live ? (s.status === 'busy' ? '<span class="pill t-run">在工作</span>' : '<span class="pill t-ok">空闲</span>') : '<span class="pill t-other">已结束</span>';
     const pct = s.context ? Math.min(100, Math.round(100 * s.context / 400000)) : 0;
-    return `<tr class="${s.context > SESSION_BIG ? 'ctxbig' : ''}"><td><b>${esc(s.title || s.name)}</b>${s.title && s.name !== s.title ? `<div class="small">${esc(s.name)}</div>` : ''}
+    return `<tr class="${!s.live ? 'ended' : big ? 'ctxbig' : ''}"><td><b>${esc(s.title || s.name)}</b>${s.title && s.name !== s.title ? `<div class="small">${esc(s.name)}</div>` : ''}
         <div class="small faint">${esc(s.id.slice(0, 8))}${s.kind ? ' · ' + esc(s.kind) : ''}</div></td>
       <td>${st} ${flags.join(' ')}</td>
       ${showProject ? `<td>${s.project ? `<a href="${plink(s.project)}">${esc(s.project)}</a>` : `<span class="small">${esc(s.cwd || '')}</span>`}</td>` : ''}
@@ -341,7 +341,7 @@ function ensureSessions(force) {
   });
 }
 const SESSION_NOTE = `<div class="pad small">只读会话的元数据（名字、所在目录、上下文大小、token 数），不读对话内容。上下文 = 最近一次调用读入的 token 数：对话越长，每次调用越贵，
-  超过 15 万标黄，建议让它写好交接、换一个新会话。数据来自 a100 上的 <code>claude agents</code> 和会话记录，每分钟更新；其他服务器上的会话（例如 h100）暂时不在这里。</div>`;
+  开着的会话超过 15 万标黄，建议让它写好交接、换一个新会话；已结束的会话整行灰色，不再提示。数据来自 a100 上的 <code>claude agents</code> 和会话记录，每分钟更新；其他服务器上的会话（例如 h100）暂时不在这里。</div>`;
 function tabSessions(d) {
   ensureSessions();
   const x = S.sessions;
