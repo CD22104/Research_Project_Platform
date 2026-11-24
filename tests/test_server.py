@@ -26,11 +26,34 @@ class UnixHTTP(http.client.HTTPConnection):
         self.sock.connect(self.sock_path)
 
 
+def fake_claude(tmp, root):
+    """A stand-in for `claude agents --json` and one transcript, so the 会话 page has something to show."""
+    tdir = os.path.join(tmp, "transcripts", "-x-demo")
+    os.makedirs(tdir, exist_ok=True)
+    sid = "11111111-2222-3333-4444-555555555555"
+    rows = [{"type": "user", "cwd": os.path.join(root, "demo"), "timestamp": "2026-11-24T01:00:00.000Z"},
+            {"customTitle": "demo·f1-metric"},
+            {"type": "assistant", "timestamp": "2026-11-24T01:00:05.000Z",
+             "message": {"model": "claude-opus-5-5", "usage": {"input_tokens": 10, "cache_read_input_tokens": 40000,
+                                                               "cache_creation_input_tokens": 2000, "output_tokens": 300}}}]
+    with open(os.path.join(tdir, sid + ".jsonl"), "w") as f:
+        f.write("".join(json.dumps(r) + "\n" for r in rows))
+    os.utime(os.path.join(tdir, sid + ".jsonl"))
+    bin_ = os.path.join(tmp, "fake-claude")
+    live = [{"pid": 1, "cwd": os.path.join(root, "demo"), "kind": "interactive", "startedAt": 1795000000000,
+             "sessionId": sid, "name": "demo·f1-metric", "status": "idle"}]
+    with open(bin_, "w") as f:
+        f.write("#!/bin/sh\necho '%s'\n" % json.dumps(live))
+    os.chmod(bin_, 0o755)
+    return {"claude_bin": bin_, "transcripts": os.path.join(tmp, "transcripts"), "interval_seconds": 3600}
+
+
 def write_config(tmp, root, servers=()):
     cfg = os.path.join(tmp, "servers.json")
     with open(cfg, "w") as f:
         json.dump({"socket": os.path.join(tmp, "run", "t.sock"), "servers": list(servers),
-                   "projects_root": root, "projects_interval_seconds": 3600, "state_dir": os.path.join(tmp, "state")}, f)
+                   "projects_root": root, "projects_interval_seconds": 3600, "state_dir": os.path.join(tmp, "state"),
+                   "sessions": fake_claude(tmp, root)}, f)
     return cfg
 
 
@@ -55,14 +78,14 @@ class Liveness(unittest.TestCase):
         L, me = self.S.liveness, "dchen"
         run = {"server": "xtrah200", "gpus": [2, 3], "pid": 999999}
         other = [{"pid": 11, "user": "someone"}]
-        self.assertEqual(L(run, self.srv({2: other, 3: []}), me), "maybe_interrupted")
+        self.assertEqual(L(run, self.srv({2: other, 3: []}), me), "absent")
         self.assertEqual(L(run, self.srv({0: [{"pid": 999999, "user": "dchen"}]}), me), "running")  # pid anywhere
         self.assertEqual(L(run, self.srv({3: [{"pid": 5, "user": "dchen"}]}), me), "running")  # child on its GPU
-        self.assertEqual(L(run, self.srv({0: [{"pid": 5, "user": "dchen"}]}), me), "maybe_interrupted")  # other GPU
-        self.assertEqual(L(run, self.srv({2: []}, status="error"), me), "unknown")  # server not reachable
-        self.assertEqual(L(run, None, me), "unknown")                               # server not polled
-        self.assertEqual(L(dict(run, gpus=[]), self.srv({}), me), "unknown")        # no GPUs: can't tell
-        self.assertEqual(L(dict(run, gpus=None, pid=None), self.srv({}), me), "unknown")
+        self.assertEqual(L(run, self.srv({0: [{"pid": 5, "user": "dchen"}]}), me), "absent")  # other GPU
+        self.assertEqual(L(run, self.srv({2: []}, status="error"), me), "unreachable")  # server not reachable
+        self.assertIsNone(L(run, None, me))                                         # server not polled
+        self.assertIsNone(L(dict(run, gpus=[]), self.srv({}), me))                  # no GPUs: can't tell
+        self.assertIsNone(L(dict(run, gpus=None, pid=None), self.srv({}), me))
         self.assertEqual(L({"server": "x", "gpus": ["2"], "pid": "999999"},
                            self.srv({2: [{"pid": 999999, "user": "x"}]}), me), "running")  # strings tolerated
 
@@ -143,14 +166,21 @@ class Http(unittest.TestCase):
         self.assertEqual([p["name"] for p in d["projects"]], ["broken", "demo", "minimal"])
         demo = d["projects"][1]
         self.assertEqual(demo["active_runs"][0]["id"], "r002")
-        self.assertEqual(demo["active_runs"][0]["liveness"], "unknown")  # xtrah200 is not polled here
+        self.assertIsNone(demo["active_runs"][0]["liveness"])            # xtrah200 is not polled here
+        self.assertEqual(demo["active_runs"][0]["state"], "状态未知")       # no heartbeat, no probe
+        self.assertEqual([t["id"] for t in demo["tasks_open"]], ["f1-metric", "report-r1"])
+        self.assertEqual([x["id"] for x in demo["decisions_candidate"]], ["broken-dec", "scale-later"])
+        self.assertEqual(demo["latest_onepager"][0]["so"], "预热有用，并入主线。")
         self.assertIsNone(d["scan"]["error"])
 
     def test_project_detail(self):
         d = self.get_json("/api/project/demo")
         runs = {r["id"]: r for r in d["runs"]}
-        self.assertEqual(runs["r002"]["liveness"], "unknown")
+        self.assertIsNone(runs["r002"]["liveness"])
+        self.assertEqual(runs["r002"]["state"], "状态未知")
         self.assertIsNone(runs["r001"]["liveness"])  # finished runs are not checked
+        self.assertEqual(runs["r001"]["state"], "已结束")
+        self.assertEqual(d["decision_states"]["old-plan"], "已替代")
         self.assertEqual(len(d["attempts"]), 7)
         self.assertIn("scan", d)
 
@@ -214,6 +244,32 @@ class Http(unittest.TestCase):
         self.assertEqual((focal["answer"]["answer"], focal["proposed"]), ("失败", "失败"))
         self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "a:2026-11-15-focal", "answer": "大成功"})[0], 400)
         self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "a:2026-11-10-lr-sweep", "answer": "成功"})[0], 404)
+
+    def test_adopt_decision(self):
+        """Agreed case 8 (part): adopting twice counts once; only 候选 decisions can be answered."""
+        for _ in range(2):
+            status, body = self.post("/api/answer", {"project": "demo", "id": "d:scale-later", "answer": "采纳", "text": ""})
+            self.assertEqual(status, 200, body)
+        d = self.get_json("/api/project/demo")
+        self.assertEqual(d["decision_states"]["scale-later"], "采纳")
+        self.assertEqual(d["answers"]["d:scale-later"]["answer"], "采纳")
+        self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "d:scale-later", "answer": "随便"})[0], 400)
+        self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "d:warmup-first", "answer": "采纳"})[0], 404)
+        self.assertEqual(self.post("/api/answer", {"project": "demo", "id": "d:ghost", "answer": "采纳"})[0], 404)
+        self.post("/api/answer", {"project": "demo", "id": "d:scale-later", "answer": "不采纳"})   # changing a reply: last row wins
+        self.assertEqual(self.get_json("/api/project/demo")["decision_states"]["scale-later"], "不采纳")
+
+    def test_sessions(self):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            d = self.get_json("/api/sessions")
+            if d["sessions"]:
+                break
+            time.sleep(0.2)
+        s = d["sessions"][0]
+        self.assertEqual((s["project"], s["task"], s["live"], s["status"]), ("demo", "f1-metric", True, "idle"))
+        self.assertEqual((s["context"], s["calls_7d"] >= 0, s["resumable"]), (42010, True, True))
+        self.assertNotIn("message", json.dumps(d))                      # metadata only
 
     def test_reply_rejected(self):
         ok = {"project": "demo", "id": "t2", "answer": None, "text": "好"}

@@ -509,6 +509,61 @@ table.ggrid .gfree b{font-size:18px}
 a.tag{display:inline-block;margin:0 4px 3px 0;padding:0 7px;border-radius:5px;font-size:12px;font-weight:600;
   color:var(--accent);background:var(--accent-bg);text-decoration:none}
 a.tag.warn{color:var(--full);background:var(--full-bg)}
+
+/* ---------- work view (work.js): project head, grouped tabs, 一页纸, kanban, decisions, timeline, sessions */
+.hero{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.2fr;gap:10px;margin:10px 0 0}
+@media (max-width:1100px){.hero{grid-template-columns:1fr 1fr}}
+@media (max-width:640px){.hero{grid-template-columns:1fr}}
+.hcell{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 12px;min-width:0}
+.hk{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:3px}
+.hk a{color:var(--muted)}
+.hq{font-size:13.5px;line-height:1.55}
+ul.hl{list-style:none;margin:0;padding:0}
+ul.hl li{padding:2px 0;line-height:1.5;overflow:hidden;text-overflow:ellipsis}
+.pgrp{align-self:center;font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.08em;padding:0 4px 0 2px}
+.psep{width:1px;background:var(--line);margin:8px 10px;flex:none}
+.ptab.quiet{font-weight:500}
+.onepager{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:0 10px 10px 0;background:var(--bg);margin:6px 0 10px;padding:4px 0}
+.oprow{display:grid;grid-template-columns:4.6em minmax(0,1fr);gap:10px;padding:5px 12px;border-bottom:1px dashed var(--line)}
+.oprow:last-child{border-bottom:0}
+.opk{font-size:12px;font-weight:700;color:var(--muted);padding-top:2px}
+.op-所以 .opk,.op-结果 .opk{color:var(--accent)}
+.op-所以 .opv{font-weight:600}
+.opx{margin-top:4px;font-weight:400}
+.opmiss{font-size:12px;color:var(--muted);margin:0 0 8px}
+.opblk+.opblk{margin-top:14px}
+.opt2{margin-bottom:2px}
+abbr.term{text-decoration:underline dotted var(--accent);text-underline-offset:3px;cursor:help}
+.homegrid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:1000px){.homegrid{grid-template-columns:1fr}}
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:10px;overflow-x:auto;margin-bottom:12px}
+.kcol{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px;min-height:80px}
+.kh{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.tcard{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin-bottom:6px;color:var(--text);text-decoration:none}
+.tcard:hover{border-color:var(--accent);text-decoration:none}
+.tcard.on{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.tc1{display:flex;gap:6px;align-items:baseline}
+.kdone .li{display:flex;gap:8px;align-items:center}
+.taskd .kv2{margin:3px 0}
+ul.tline{list-style:none;margin:0;padding:0}
+ul.tline li{display:flex;gap:8px;align-items:baseline;padding:4px 6px;border-bottom:1px solid var(--line);font-size:13.5px}
+ul.tline li.day{font-weight:700;color:var(--muted);font-size:12px;border-bottom:0;padding-top:12px}
+ul.tline li.new{background:var(--accent-bg)}
+ul.tline .when{flex:none;width:3.2em;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+ul.tline a{color:var(--text)}
+ul.plain{margin:0;padding-left:18px}
+table.sess td{vertical-align:top}
+table.sess tr.ctxbig td{background:var(--busy-bg)}
+ul.inbox{list-style:none;margin:0;padding:0}
+ul.inbox li{display:flex;gap:8px;align-items:baseline;padding:7px 14px;border-bottom:1px solid var(--line)}
+ul.inbox li:last-child{border-bottom:0}
+ul.inbox .ip{flex:none;font-size:12px;color:var(--muted);width:8.5em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ul.inbox .it{flex:1;min-width:0}
+ul.inbox .ig{flex:none;font-size:12px}
+table.sess .bar{width:90px}
+table.sess .bar i{background:var(--bar)}
+.taskd .kv2{grid-template-columns:6.5em 1fr}
+.q2{font-size:13px}
 </style>
 </head>
 <body>
@@ -517,6 +572,7 @@ a.tag.warn{color:var(--full);background:var(--full-bg)}
   <main class="main"><div class="page" id="main">加载中…</div></main>
 </div>
 <script src="common.js"></script>
+<script src="work.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

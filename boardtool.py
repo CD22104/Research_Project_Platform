@@ -235,40 +235,9 @@ def find_project(start, root=None):
         here = up
 
 
-def _first_line(text, n=120):
-    for line in (text or "").split("\n"):
-        line = line.strip().lstrip("-*").strip().replace("**", "")
-        if line and not line.startswith("|") and not line.startswith("#"):
-            return line[:n] + ("…" if len(line) > n else "")
-    return ""
-
-
-def _handoff_next(sections):
-    for line in (sections.get("交接") or "").split("\n"):
-        m = re.match(r"^\s*[-*]?\s*下一步\s*[:：]\s*(.+)$", line)
-        if m:
-            return m.group(1).strip()[:120]
-    return ""
-
-
-def unprocessed_replies(d):
-    """Replies in answers.jsonl that no session has acted on yet: [id]."""
-    todos = {str(t.get("id")): t for t in d.get("todos") or []}
-    attempts = {a["meta"].get("id"): a for a in d.get("attempts") or [] if isinstance(a["meta"].get("id"), str)}
-    decisions = {r["meta"].get("id"): r for r in d.get("decisions") or [] if isinstance(r["meta"].get("id"), str)}
-    out = []
-    for rid in d.get("answers") or {}:
-        if rid.startswith("a:"):
-            a = attempts.get(rid[2:])
-            if a and a["meta"].get("status") == "待确认":
-                out.append(rid)
-        elif rid.startswith("d:"):
-            r = decisions.get(rid[2:])
-            if r and r["meta"].get("status") in (None, "候选"):
-                out.append(rid)
-        elif rid in todos and not todos[rid].get("done"):
-            out.append(rid)
-    return out
+_first_line = P.first_line
+_handoff_next = P.handoff_next
+unprocessed_replies = P.unprocessed_replies
 
 
 def brief(project_dir, max_chars=6000, now=None):

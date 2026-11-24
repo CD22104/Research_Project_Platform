@@ -1,6 +1,7 @@
 // The console: routing, sidebar and pages. Needs common.js (Board); no other dependencies.
-// Routes (hash):  #/overview  #/gpu  #/todo  #/new  #/p/<project>/<tab>[/<item>][?filters]
-//   project tabs: overview, setup, roadmap (versions > tracks > attempts), runs, examples, docs
+// Routes (hash):  #/overview (今天)  #/sessions  #/gpu  #/todo  #/new  #/p/<project>/<tab>[/<item>][?filters]
+//   project tabs, research view: home (概况), method, flow, runs, examples, setup, docs
+//                 work view: tasks, decisions, sessions, timeline, upkeep (see work.js)
 const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 
 // ============================================================ data
@@ -13,8 +14,10 @@ const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-T
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
-const TABS = [['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
-const PAGES = ['overview', 'gpu', 'todo', 'guide', 'new'];
+const RESEARCH_TABS = [['home', '概况'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
+const WORK_TABS = [['tasks', '任务'], ['decisions', '讨论与决定'], ['sessions', '会话'], ['timeline', '时间线'], ['upkeep', '记录维护']];
+const TABS = [...RESEARCH_TABS, ...WORK_TABS];
+const PAGES = ['overview', 'sessions', 'gpu', 'todo', 'guide', 'new'];
 
 function route() {
   const raw = location.hash.replace(/^#/, '');
@@ -28,12 +31,13 @@ function route() {
       if (item != null) item = 'a:' + item;
       else if (query.track) { item = 't:' + query.track; delete query.track; }
     }
-    if (tab === 'roadmap' || tab === 'overview') tab = 'flow';
-    return {page: 'project', name: parts[1], tab: TABS.some(t => t[0] === tab) ? tab : 'flow', item, query};
+    if (tab === 'roadmap') tab = 'flow';
+    if (tab === 'overview') tab = 'home';
+    return {page: 'project', name: parts[1], tab: TABS.some(t => t[0] === tab) ? tab : 'home', item, query};
   }
   return {page: PAGES.includes(parts[0]) ? parts[0] : 'overview', query};
 }
-const plink = (name, tab = 'flow', item = null, query = null) => {
+const plink = (name, tab = 'home', item = null, query = null) => {
   const q = query && Object.entries(query).filter(([, v]) => v != null && v !== '');
   return B.projectUrl(name, tab, item) + (q && q.length ? '?' + new URLSearchParams(q) : '');
 };
@@ -126,7 +130,7 @@ function placeOfRun(d, r) {
 function todoCount() {
   const pj = S.projects;
   if (!pj) return null;
-  return pj.projects.reduce((n, p) => n + (p.pending || []).length + (p.todos || []).length, 0) + openTodos(pj.todos).length;
+  return pj.projects.reduce((n, p) => n + (p.pending || []).length + (p.todos || []).length + (p.decisions_candidate || []).length, 0) + openTodos(pj.todos).length;
 }
 // projects by status: 进行中 first, then 暂停, then 已归档 (anything else counts as 进行中)
 const STAGE = {'暂停': 1, '已归档': 2};
@@ -143,7 +147,8 @@ function renderSide(r) {
   const by = k => list.filter(p => stageOf(p) === k);
   const arch = by(2), current = arch.some(p => r.page === 'project' && r.name === p.name);
   $('side').innerHTML = `<a class="brand" href="#/overview">${esc(B.APP_NAME)}</a>` +
-    item('#/overview', '总览', null, r.page === 'overview') +
+    item('#/overview', '今天', null, r.page === 'overview') +
+    item('#/sessions', '会话', S.sessions ? S.sessions.sessions.filter(s => s.live).length + ' 个' : null, r.page === 'sessions') +
     item('#/gpu', 'GPU', free != null ? free + ' 空闲' : null, r.page === 'gpu') +
     item('#/todo', '待办', todo || null, r.page === 'todo') +
     item('#/guide', '使用说明', null, r.page === 'guide') +
@@ -164,6 +169,7 @@ function render() {
   const sameView = [r.page, r.name, r.tab].join('|') === lastView;
   let html;
   if (r.page === 'gpu') html = pageGpu();
+  else if (r.page === 'sessions') html = pageSessions();
   else if (r.page === 'todo') html = pageTodo();
   else if (r.page === 'new') html = pageNew();
   else if (r.page === 'guide') html = pageGuide();
@@ -191,35 +197,73 @@ function titleFor(r) {
   const app = B.APP_NAME;
   if (r.page === 'gpu') return (S.status ? `(${B.freeCount(S.status)} 空) ` : '') + app;
   if (r.page === 'todo') return `待办 · ${app}`;
+  if (r.page === 'sessions') return `会话 · ${app}`;
   if (r.page === 'new') return `新建项目 · ${app}`;
   if (r.page === 'guide') return `使用说明 · ${app}`;
   if (r.page === 'project') { const d = S.detail[r.name]; return `${(d && d.project && d.project.title) || r.name} · ${app}`; }
-  return `总览 · ${app}`;
+  return `今天 · ${app}`;
 }
 
-// ============================================================ global overview
+// ============================================================ 今天: what waits for you, what is stuck, what is moving
+const UPDATE_KIND = {plan: '方案', versions: '版本', tracks: '支线', attempts: '实验', runs: '运行', docs: '文档', todos: '待办', setup: '实验设置', method: '方法', tasks: '任务', decisions: '决定'};
 function projectCard(p, now) {
-  const runningTracks = (p.track_status || {})['进行中'] || 0, as = Object.entries(p.attempt_status || {});
-  const waiting = (p.pending || []).length + (p.todos || []).length, act = p.active_runs || [];
-  const where = {};
-  for (const r of act) where[shortHost(r.server || '?')] = (where[shortHost(r.server || '?')] || 0) + 1;
-  const lost = act.filter(r => r.liveness === 'maybe_interrupted').length, sure = act.filter(r => r.liveness === 'running').length;
-  const runLine = act.length ? `<div class="r"><b>正在跑 ${act.length} 个</b>　${Object.entries(where).map(([h, n]) => `${esc(h)} × ${n}`).join(' · ')}
-      ${lost ? `<span class="pill t-bad">${lost} 个可能已中断</span>` : sure === act.length ? '<span class="pill t-ok">都确认在跑</span>' : ''}</div>` : '';
+  const act = p.active_runs || [], tasks = p.tasks_open || [];
+  const seen = lastSeenOf(p.name), upd = Object.entries(p.updated_kinds || {}).filter(([, t]) => seen != null && t > seen).map(([k]) => UPDATE_KIND[k]).filter(Boolean);
+  const bad = act.filter(r => r.state === '已中断' || r.state === '状态未知').length;
+  const latest = (p.latest_onepager || [])[0];
   return `<a class="pcard" href="${plink(p.name)}">
     <div class="t"><b>${esc(p.title)}</b>${B.pill(p.status)}</div>
     <div class="small">${esc(p.name)}${p.current_version ? ' · 当前版本 ' + esc(p.current_version) : ''} · 常驻入口${hasEntry(p.name) ? '在运行' : '未运行'}</div>
-    <div class="c">${p.conclusion ? esc(p.conclusion) : '<span class="faint">还没有结论</span>'}</div>
-    <div class="n"><span>支线 <b>${p.n_tracks ?? 0}</b>${runningTracks ? `（${runningTracks} 条进行中）` : ''}</span>
-      <span>尝试 <b>${p.n_attempts ?? 0}</b></span><span>运行 <b>${p.n_runs ?? 0}</b></span></div>
-    ${as.length ? `<div class="small">尝试：${countLine(as.sort((a, b) => b[1] - a[1]))}</div>` : ''}
-    ${runLine}
-    ${waiting || p.n_checks || p.stale || p.n_errors ? `<div class="alerts">
-      ${waiting ? `<span class="w">${waiting} 条等你处理</span>` : ''}
-      ${p.n_checks ? `<span class="w">${p.n_checks} 条记录检查待修</span>` : ''}
-      ${p.stale ? `<span class="w">数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败</span>` : ''}
+    ${p.question ? `<div class="c q2">${esc(p.question.length > 90 ? p.question.slice(0, 89) + '…' : p.question)}</div>` : ''}
+    ${latest ? `<div class="small"><b>最新：</b>${esc(latest.so)}</div>` : p.conclusion ? `<div class="small"><b>结论：</b>${esc(p.conclusion)}</div>` : ''}
+    <div class="n"><span>进行中的任务 <b>${tasks.length}</b></span><span>正在跑 <b>${act.length}</b>${bad ? ` <span class="pill t-todo">${bad} 个状态存疑</span>` : ''}</span>
+      <span>实验 <b>${p.n_attempts ?? 0}</b></span></div>
+    ${tasks.length ? `<ul class="hl small">${tasks.slice(0, 3).map(t => `<li>${taskPill(t.status)} ${esc(t.title)}</li>`).join('')}</ul>` : ''}
+    ${p.stale || p.n_errors ? `<div class="alerts">${p.stale ? `<span class="w">数据是 ${B.ago(p.scanned_at, now)}的，最近一次读取失败</span>` : ''}
       ${p.n_errors ? `<span class="w">${p.n_errors} 个记录文件读取有问题</span>` : ''}</div>` : ''}
-    <div class="small foot">最近动态 ${B.ago(p.mtime, now)}</div></a>`;
+    <div class="small foot">${seen == null ? '还没在这个浏览器打开过' : upd.length ? `你上次来之后：${esc(upd.join('、'))}有更新` : '你上次来之后没有新变化'} · 最近动态 ${B.ago(p.mtime, now)}</div></a>`;
+}
+// what waits for you across projects, most urgent first: blocking to-dos, candidate decisions, conclusions to confirm,
+// decision to-dos, the rest. One line each: the reply itself happens where the item lives.
+function inboxItems(pj, now) {
+  const out = [];
+  const line = (p, pill, text, href, go) => `<li><span class="ip" title="${esc(p ? p.title : '跨项目')}">${esc(p ? p.title : '跨项目')}</span>` +
+    `<span class="it">${pill} ${esc(text)}</span><a class="ig" href="${href}">${go} →</a></li>`;
+  for (const p of pj.projects) {
+    if (stageOf(p) === 2) continue;
+    for (const x of p.decisions_candidate || [])
+      out.push({rank: x.answer ? 5 : 1, html: line(p, '<span class="pill t-todo">采纳决定</span>', x.title, plink(p.name, 'decisions', x.id), '采纳或不采纳')});
+    for (const a of (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string'))
+      out.push({rank: a.answer ? 5 : 2, html: line(p, '<span class="pill t-todo">确认结论</span>', `尝试「${a.title || a.id}」${a.proposed ? '，建议：' + a.proposed : ''}`,
+        plink(p.name, 'flow', 'a:' + a.id), '看一页纸再确认')});
+    for (const t of p.todos || [])
+      out.push({rank: t.answer ? 5 : t.kind === 'blocking' ? 0 : t.kind === 'decision' ? 3 : 4,
+        html: line(p, `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind] || '待办'}</span>`, t.text, '#/todo', '回复')});
+  }
+  for (const t of openTodos(pj.todos)) out.push({rank: t.answer ? 5 : t.kind === 'blocking' ? 0 : 3,
+    html: line(null, `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind] || '待办'}</span>`, t.text, '#/todo', '回复')});
+  return out.sort((a, b) => a.rank - b.rank);
+}
+function stuckItems(pj, now) {
+  const out = [];
+  for (const p of pj.projects) {
+    for (const r of p.active_runs || []) {
+      if (r.state === '已中断') out.push(`<li>${statePill(r.state)} <a href="${plink(p.name, 'runs', r.id)}">${esc(p.title)} · 运行 ${esc(r.id)}</a>
+        <span class="small">机器上找不到它的进程，收尾程序会把记录改成被中断</span></li>`);
+      else if (r.state === '状态未知') out.push(`<li>${statePill(r.state)} <a href="${plink(p.name, 'runs', r.id)}">${esc(p.title)} · 运行 ${esc(r.id)}</a>
+        <span class="small">${r.heartbeat ? '心跳 ' + B.ago(r.heartbeat, now) : '没有心跳'}，${esc(shortHost(r.server || '?'))} 上看不到进程或连不上</span></li>`);
+    }
+    for (const t of p.tasks_open || []) {
+      if (t.status === '可以继续') out.push(`<li>${taskPill(t.status)} <a href="${plink(p.name, 'tasks', t.id)}">${esc(p.title)} · ${esc(t.title)}</a>
+        <span class="small">等的东西到了，开一个会话说「做 ${esc(t.id)}」</span></li>`);
+      else if (t.status === '等你') out.push(`<li>${taskPill(t.status)} <a href="${plink(p.name, 'tasks', t.id)}">${esc(p.title)} · ${esc(t.title)}</a>
+        <span class="small">${t.next ? esc(t.next) : '卡在你这里，看任务卡的交接'}</span></li>`);
+    }
+    if ((p.unprocessed || []).length) out.push(`<li><span class="pill t-todo">回复未处理</span> <a href="#/todo">${esc(p.title)} · ${p.unprocessed.length} 条回复</a>
+      <span class="small">在项目会话里说「处理回复」</span></li>`);
+    if (p.stale) out.push(`<li><span class="pill t-bad">读取失败</span> <a href="${plink(p.name)}">${esc(p.title)}</a> <span class="small">数据是 ${B.ago(p.scanned_at, now)}的</span></li>`);
+  }
+  return out;
 }
 function pageOverview() {
   const pj = S.projects;
@@ -234,18 +278,25 @@ function pageOverview() {
   const group = k => list.filter(p => stageOf(p) === k);
   const cards = ps => `<div class="pcards">${ps.map(p => projectCard(p, now)).join('')}</div>`;
   const active = group(0), paused = group(1), arch = group(2);
+  const inbox = inboxItems(pj, now), open = inbox.filter(x => x.rank < 5), stuck = stuckItems(pj, now);
+  const SHOW = 12;
+  const inboxHtml = `<div class="card"><h2>等你决定 <span class="meta">${open.length} 条还没回复${inbox.length > open.length ? ` · ${inbox.length - open.length} 条已回复、等会话处理` : ''}</span>
+      <a class="meta right" href="#/todo">全部待办 →</a></h2>
+    ${open.length ? `<ul class="inbox">${open.slice(0, SHOW).map(x => x.html).join('')}</ul>` +
+      (open.length > SHOW ? `<div class="pad small"><a href="#/todo">还有 ${open.length - SHOW} 条 →</a></div>` : '') : '<div class="empty">没有等你决定的事。</div>'}</div>`;
+  const stuckHtml = `<div class="card"><h2>卡住了 <span class="meta">${stuck.length} 条</span></h2>${stuck.length ? `<ul class="tlist">${stuck.join('')}</ul>` : '<div class="empty">没有卡住的事。</div>'}</div>`;
   const body = !list.length
     ? `<div class="card"><div class="empty">还没有项目。在 ${esc(sc.root || '共享盘')}/&lt;项目名&gt;/board/ 下写好 project.json，一分钟内就会出现在这里。</div></div>`
-    : (active.length ? cards(active) : '<div class="card"><div class="empty">没有进行中的项目。</div></div>') +
+    : `<h3 class="gh">正在推进</h3>` + (active.length ? cards(active) : '<div class="card"><div class="empty">没有进行中的项目。</div></div>') +
       (paused.length ? `<h3 class="gh">暂停 ${paused.length} 个 <span class="faint">恢复方法见「使用说明」</span></h3>` + cards(paused) : '') +
       (arch.length ? `<details class="box ovarch" id="ov-arch"><summary>已归档 ${arch.length} 个 <span class="faint">结束或放弃的项目，记录都还在</span></summary>${cards(arch)}</details>` : '');
-  return `<h1 class="pt">总览</h1>
+  return `<h1 class="pt">今天</h1>
     <div class="summary">
+      <a class="stat" href="#/todo"><div class="k">等你决定</div><div class="v">${open.length}</div><div class="s">所有项目合计</div></a>
+      <div class="stat"><div class="k">卡住了</div><div class="v">${stuck.length}</div><div class="s">运行状态存疑、任务等人</div></div>
+      <div class="stat"><div class="k">正在跑</div><div class="v">${running}</div><div class="s">按运行记录</div></div>
       <a class="stat" href="#/gpu"><div class="k">空闲的卡</div><div class="v">${free ?? '—'}</div><div class="s">所有服务器合计</div></a>
-      <a class="stat" href="#/todo"><div class="k">等你处理</div><div class="v">${todoCount() ?? '—'}</div><div class="s">所有项目合计</div></a>
-      <div class="stat"><div class="k">正在跑的任务</div><div class="v">${running}</div><div class="s">按项目记录</div></div>
-      <div class="stat"><div class="k">项目</div><div class="v">${active.length}</div><div class="s">进行中${paused.length ? ` · 暂停 ${paused.length}` : ''}${arch.length ? ` · 已归档 ${arch.length}` : ''}</div></div>
-    </div>` + notes.map(t => `<div class="notice">${t}</div>`).join('') + body;
+    </div>` + notes.map(t => `<div class="notice">${t}</div>`).join('') + `<div class="homegrid"><div>${inboxHtml}</div><div>${stuckHtml}</div></div>` + body;
 }
 
 // ============================================================ todo
@@ -253,12 +304,14 @@ const KIND_ORDER = {blocking: 0, decision: 1};
 const kindRank = t => KIND_ORDER[t.kind] ?? 2;
 const isoAgo = (iso, now) => iso ? B.ago(Date.parse(iso) / 1000, now) : '';
 // the reply part of a to-do or of an attempt waiting for confirmation
-function replyBox(project, id, choices, recommend, answer, now) {
+function replyBox(project, id, choices, recommend, answer, now, progress) {
   const key = project + '|' + id;
   if (answer && !ui.editing[key]) {
+    const stage = progress && progress.state === '已领取' ? '<span class="pill t-run">会话已领取，正在处理</span>'
+      : progress && progress.state === '受阻' ? `<span class="pill t-bad">受阻</span> ${esc(progress.result || '')}` : '';
     return `<div class="ans"><span class="pill t-run">已回复</span> ${answer.answer ? `<b>${esc(answer.answer)}</b>` : ''}` +
-      `${answer.text ? `<span class="atext">${answer.answer ? '　' : ''}${esc(answer.text)}</span>` : ''}
-      <div class="small">${isoAgo(answer.at, now)}回复 · 等会话处理：在这个项目的会话里说「处理回复」 · <a href="#" data-edit="${esc(key)}">改回复</a></div></div>`;
+      `${answer.text ? `<span class="atext">${answer.answer ? '　' : ''}${esc(answer.text)}</span>` : ''}${stage ? ' ' + stage : ''}
+      <div class="small">${isoAgo(answer.at, now)}回复 · ${stage ? '' : '等会话处理：在这个项目的会话里说「处理回复」 · '}<a href="#" data-edit="${esc(key)}">改回复</a></div></div>`;
   }
   const pick = key in ui.pick ? ui.pick[key] : answer ? answer.answer : null;
   const draft = key in ui.draft ? ui.draft[key] : answer ? answer.text || '' : '';
@@ -276,7 +329,7 @@ function todoItem(t, project, now) {
   return `<li><div>${t.kind && KIND[t.kind] ? `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind]}</span> ` : ''}` +
     `<span class="ttext">${esc(t.text)}</span>` + (href ? ` <a class="more" href="${href}">相关记录 →</a>` : '') + '</div>' +
     (t.context ? `<div class="ctx md">${B.md(String(t.context))}</div>` : '') +
-    replyBox(pname, String(t.id), opts, t.recommend, t.answer, now) +
+    replyBox(pname, String(t.id), opts, t.recommend, t.answer, now, t) +
     `<div class="small">${t.where ? esc(t.where) + ' · ' : ''}${isoAgo(t.created, now)}记下${t.by ? ' · 由 ' + esc(t.by) : ''}</div></li>`;
 }
 // an attempt whose conclusion waits for the user: the drafted conclusion and the four choices
@@ -301,13 +354,13 @@ function pageTodo() {
   const groups = pj.projects.map(p => {
     const todos = count([...(p.todos || [])].sort((a, b) => kindRank(a) - kindRank(b)));
     const confirm = (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string');
-    const missing = (p.pending || []).length - confirm.length;
-    tally.decision += confirm.length;
-    const items = todos.map(t => todoItem(t, p, now)).concat(confirm.map(a => confirmItem(p, a, now)));
+    const missing = (p.pending || []).length - confirm.length, cands = p.decisions_candidate || [];
+    tally.decision += confirm.length + cands.length;
+    const items = cands.map(x => decisionItem(p, x, now)).concat(todos.map(t => todoItem(t, p, now)), confirm.map(a => confirmItem(p, a, now)));
     if (missing) items.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'flow', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
       <div class="where2">这要由会话补写，在项目会话里说「补写结论」</div></li>`);
     const n = items.length;
-    return {p, items, n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, confirm.length ? 1 : 9), done: doneItems(p.todos_done, now)};
+    return {p, items, n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, confirm.length || cands.length ? 1 : 9), done: doneItems(p.todos_done, now)};
   }).filter(g => g.n || g.done).sort((a, b) => a.top - b.top || b.n - a.n);
   const shared = count(openTodos(pj.todos).sort((a, b) => kindRank(a) - kindRank(b)));
   const card = (title, meta, items, done) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>` +
@@ -412,9 +465,9 @@ function pageGpu() {
           <span class="cmd" title="${esc(p.cmd)}">${esc(p.cmd)}</span></div>`;
       }).join('') || (st === 'free' ? '<span class="small">—</span>' : '<span class="small">有显存占用但看不到进程（可能在容器内）</span>');
       const tags = B.runsOnGpu(runs, s.name, g).map(r => {
-        const lost = r.liveness === 'maybe_interrupted';
-        return `<a class="tag${lost ? ' warn' : ''}" href="${plink(r.project, 'runs', r.id)}" title="tmux ${esc(r.tmux || '?')} · PID ${esc(r.pid ?? '?')}">` +
-          `${esc(r.title)} · ${esc(r.id)}${lost ? '（记录说在这里跑，但没找到进程）' : ''}</a>`;
+        const lost = r.state === '已中断' || r.state === '状态未知';
+        return `<a class="tag${lost ? ' warn' : ''}" href="${plink(r.project, 'runs', r.id)}" title="tmux ${esc(r.tmux || '?')} · PID ${esc(r.pid ?? '?')}${r.heartbeat ? ' · 心跳 ' + B.ago(r.heartbeat, d.now) : ''}">` +
+          `${esc(r.title)} · ${esc(r.id)}${r.state && r.state !== '运行中' ? '（' + esc(r.state) + '）' : ''}</a>`;
       }).join('');
       rows += `<tr><td class="n">${esc(g.index)}</td><td><span class="pill ${st}">${GPU_LABEL[st]}</span></td>
         <td class="n">${gb(g.mem_used)} / ${gb(g.mem_total)} GB<div class="bar"><i style="width:${pct}%;background:var(--${st})"></i></div></td>
@@ -482,8 +535,14 @@ function pageProject(r) {
     : `<div class="empty">正在读取 ${esc(r.name)}…</div>`;
   const p = d.project || {};
   const unread = docItems(d).filter(x => x.state === 'unread' || x.state === 'changed').length;
-  const counts = {method: methodIndex(d).steps.length || null, flow: d.attempts.length || null, setup: null, runs: d.runs.length, examples: (d.example.probe_head || []).length || null,
-    docs: docItems(d).length ? (unread ? `${unread} 未看 / ${docItems(d).length}` : docItems(d).length) : null};
+  const W = work(d), since = lastSeenOf(d.name), fresh = since == null ? 0 : timelineOf(d).filter(e => e.t > since).length;
+  const openTasks = W.tasks.filter(t => TASK_COLS.includes(t.meta.status)).length, cands = W.decisions.filter(x => x.state === '候选').length;
+  const mySessions = S.sessions ? S.sessions.sessions.filter(x => x.project === d.name && x.live).length : null;
+  const counts = {home: fresh ? fresh + ' 新' : null, method: methodIndex(d).steps.length || null, flow: d.attempts.length || null, setup: null, runs: d.runs.length,
+    examples: (d.example.probe_head || []).length || null,
+    docs: docItems(d).length ? (unread ? `${unread} 未看 / ${docItems(d).length}` : docItems(d).length) : null,
+    tasks: openTasks || null, decisions: cands ? cands + ' 待采纳' : W.decisions.length || null, sessions: mySessions || null, timeline: null,
+    upkeep: (d.checks || []).length + d.errors.length || null};
   const nameHtml = ui.renaming
     ? `<span class="rename"><input id="rename-input" data-p="${esc(d.name)}" maxlength="24" value="${esc(p.title || d.name)}" placeholder="控制台里显示的名字">
         <button id="rename-save">保存</button>${p.full_title ? '<button id="rename-reset">恢复原名</button>' : ''}<button id="rename-cancel">取消</button>
@@ -494,10 +553,13 @@ function pageProject(r) {
       ${entryBadge(d.name)}
       <span class="small right">数据读取于 ${B.ago(d.scanned_at, d.now)} · 每分钟刷新</span></div>
     ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
-    <nav class="ptabs">${TABS.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
-      (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')}</nav>`;
-  const body = {method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs}[r.tab](d, r);
-  return head + notices(d) + body;
+    ${projectHero(d)}
+    <nav class="ptabs">${[['研究', RESEARCH_TABS], ['工作', WORK_TABS]].map(([g, tabs]) => `<span class="pgrp">${g}</span>` +
+      tabs.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}${k === 'upkeep' ? ' quiet' : ''}" href="${plink(d.name, k)}">${label}` +
+      (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')).join('<span class="psep"></span>')}</nav>`;
+  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs,
+    tasks: tabTasks, decisions: tabDecisions, sessions: tabSessions, timeline: tabTimeline, upkeep: tabUpkeep}[r.tab](d, r);
+  return head + notices(d) + withTerms(body, d);
 }
 
 function notices(d) {
@@ -552,7 +614,7 @@ function flowSummary(d) {
         <div class="s">${countLine(atts) || '还没有尝试'}</div></a>
       ${bestCard}
       <a class="stat" href="${plink(name, 'runs')}"><div class="k">正在跑</div><div class="v">${active.length}</div>
-        <div class="s">${active.length ? active.map(x => `${esc(c.label(x))} · ${esc((x.run || {}).server || '?')}${esc(gpusText(x.run || {}))} ${B.livePill(x.liveness)}`).join('<br>') : '没有正在跑的任务'}</div></a>
+        <div class="s">${active.length ? active.map(x => `${esc(c.label(x))} · ${esc((x.run || {}).server || '?')}${esc(gpusText(x.run || {}))} ${statePill(x.state)}`).join('<br>') : '没有正在跑的任务'}</div></a>
     </div>
     ${recent.length ? `<div class="sec"><h3>最近定下的结论</h3><ul class="gists">${recent.map(a => `<li>${B.pill(a.meta.status)}
       <a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>：${esc(gistOf(d, a))}</li>`).join('')}</ul></div>` : ''}
@@ -565,7 +627,7 @@ function flowSummary(d) {
         ${ev.length ? `<ul class="feed">${ev.map(e => `<li><span class="when">${B.ago(e.t, d.now)}</span><a href="${evHref(e)}">${esc(e.text)}</a></li>`).join('')}</ul>`
           : '<div class="empty">还没有记录。</div>'}</div>
     </div>
-    ${checksCard(d)}</div>`;
+    ${(d.checks || []).length + d.errors.length ? `<div class="pad small"><a href="${plink(name, 'upkeep')}">记录维护：${(d.checks || []).length + d.errors.length} 条格式问题 →</a></div>` : ''}</div>`;
 }
 
 // one line per kind on the overview; every name links to its definition on the setup tab
@@ -657,8 +719,8 @@ function currentConclusion(d) {
 }
 // one line about an attempt: its conclusion once there is one, else its results, else what it set out to test
 function gistOf(d, a) {
-  const sec = a.sections || {};
-  return gist(sec['结论和原因']) || gist(sec['结果']) || gist(sec['假设']) || '';
+  const sec = a.sections || {}, op = a.onepager || {}, t = k => (op[k] || {}).text || '';
+  return plain(t('所以')) || gist(sec['结论和原因']) || plain(t('结果')) || gist(sec['结果']) || plain(t('想回答')) || gist(sec['假设']) || '';
 }
 // the first sentence that says something: skips a bare status line such as "部分成功(用户于 11-21 确认)。"
 function gist(text) {
@@ -675,7 +737,7 @@ function refValue(d, spec) {
   return {r, v, id, group, metric};
 }
 function refs(html, d) {
-  return html.replace(/\{\{run:([^}\s]+)\}\}/g, (all, spec) => {
+  return String(html).replace(/\{\{run:([^}\s]+)\}\}/g, (all, spec) => {
     const x = refValue(d, spec.replace(/&amp;/g, '&'));
     if (typeof x.v !== 'number') return `<span class="ref bad" title="找不到运行记录里的这个数：${esc(spec)}">?</span>`;
     return `<a class="ref" href="${plink(d.name, 'runs', x.id)}" title="运行 ${esc(x.id)}${x.group ? ' · ' + esc(ctx(d).groupName(x.group)) : ''} · ${esc(ctx(d).metricName(x.metric))}">${B.num(x.v)}</a>`;
@@ -688,13 +750,13 @@ const nodeTone = n => n.type === 'attempt' ? (n.ref.meta.status === '计划中' 
 // what the runs of an attempt say right now (from the run records, no one has to write it)
 function runState(d, a) {
   const runs = ctx(d).runsOf(a).filter(r => !r.missing), st = r => (r.run || {}).status;
-  const running = runs.filter(r => st(r) === '运行中'), lost = running.filter(r => r.liveness === 'maybe_interrupted');
+  const running = runs.filter(r => st(r) === '运行中'), lost = running.filter(r => r.state === '已中断' || r.state === '状态未知');
   return {runs, running, lost, waiting: a.meta.status === '进行中' && runs.length > 0 && !running.length};
 }
 function flowFlags(d, a) {
   const rs = runState(d, a), out = [], ans = (d.answers || {})['a:' + attKey(a)];
   if (rs.running.length) out.push(`<span class="ff run">▶ ${rs.running.length}/${rs.runs.length} 在跑</span>`);
-  if (rs.lost.length) out.push(`<span class="ff bad">${rs.lost.length} 个可能已中断</span>`);
+  if (rs.lost.length) out.push(`<span class="ff bad">${rs.lost.length} 个状态存疑</span>`);
   if (rs.waiting) out.push('<span class="ff todo">结果已出 · 待写结论</span>');
   if (a.meta.status === '待确认') out.push(ans ? '<span class="ff run">已回复</span>' : '<span class="ff todo">等你确认</span>');
   else if (pendingOf(a).includes('结论和原因')) out.push('<span class="ff todo">缺结论</span>');
@@ -974,7 +1036,7 @@ function trackDetail(d, t) {
     ${bodySections(t.body, ['假设', '现状', '结局和原因']).replace('class="sec first"', 'class="sec"')}${docsOfStep(d, 't:' + tid)}</div>`;
 }
 
-const SECTION_ORDER = ['假设', '预期', '改了什么', '结果', '例子', '结论和原因'];
+const SECTION_ORDER = ['一页纸', '假设', '预期', '改了什么', '结果', '例子', '结论和原因'];
 function attemptDetail(d, a, L) {
   const c = ctx(d), m = a.meta, name = d.name, pend = pendingOf(a), sec = a.sections || {};
   const t = c.trackById.get(m.track), ver = t && c.verById.get(c.homeOf.get(idOf(t)));
@@ -1014,7 +1076,8 @@ function attemptDetail(d, a, L) {
     <h2>${esc(attName(a))} ${m.status === '计划中' ? '<span class="pill t-other">计划中</span>' : B.pill(m.status)}${pend.length ? ` <span class="todo">${needsLabel(pend)}</span>` : ''}</h2>
     <div class="dmeta"><span>${esc(attDate(a)) || '没有日期'}</span>${k >= 0 ? `<span>这条支线的第 ${k + 1} / ${siblings.length} 次尝试</span>` : '<span>没有归属支线</span>'}<span>${esc(a.file)}</span></div>
     ${methodIndex(d).stepsOfAttempt(a).length ? `<div class="chips mstepsof"><span class="small">改的是方法里的：</span>${methodIndex(d).stepsOfAttempt(a).map(x => stepLink(d, x)).join('')}</div>` : ''}
-    <div class="oneline s-${tone}">${line}</div>${confirm}${happened}${example}${data}${conclusion}${docsOfStep(d, 'a:' + attKey(a))}${rest}${nav}</div>`;
+    ${Object.keys(a.onepager || {}).length ? onepagerBox(a) : `<div class="oneline s-${tone}">${line}</div>${onepagerBox(a, {missing: true})}`}
+    ${confirm}${happened}${example}${data}${conclusion}${docsOfStep(d, 'a:' + attKey(a))}${rest}${nav}</div>`;
 }
 
 // numbers of an attempt's runs, following display (primary columns, numerator/denominator in one cell) and setup names
@@ -1126,7 +1189,7 @@ function tabRuns(d, r) {
     const rr = x.run || {}, v = vals(x), p = placeOfRun(d, x);
     return `<tr class="run${x === sel ? ' open' : ''}" data-href="${plink(name, 'runs', runKey(x), qs({}))}">
       <td><b>${esc(c.label(x))}</b>${c.label(x) !== runKey(x) ? `<div class="small">${esc(runKey(x))}</div>` : ''}</td>
-      <td>${B.pill(rr.status)} ${B.livePill(x.liveness)}${p.track ? `<div class="small">${esc(p.track.meta.title || idOf(p.track))}</div>` : ''}</td>
+      <td>${B.pill(rr.status)} ${statePill(x.state)}${p.track ? `<div class="small">${esc(p.track.meta.title || idOf(p.track))}</div>` : ''}</td>
       ${cols.map(col => `<td class="n">${cellHtml(v, col, disp.ratio)}</td>`).join('')}</tr>`;
   };
   const table = shown.length ? `<div class="scroll"><table class="runs"><tr><th>运行</th><th>状态 / 支线</th>${cols.map(col => metricTh(c, col)).join('')}</tr>${shown.map(row).join('')}</table></div>` +
@@ -1155,7 +1218,7 @@ function runDetail(d, x) {
     `</table></div>${allN > cols.length || ui.runAllCols ? `<div class="small"><a href="#" data-runallcols>${ui.runAllCols ? '只显示主要列' : `显示全部列（${allN}）`}</a></div>` : ''}` : '<div class="none">没有指标</div>';
   const samples = x.samples_head || [];
   const sampleCols = [...new Set(samples.flatMap(o => Object.keys(B.flatten(o))))].slice(0, 8);
-  return `<div class="detail">${crumbs(d, p)}<h2>${esc(c.label(x))} ${B.pill(rr.status)} ${B.livePill(x.liveness)}</h2>
+  return `<div class="detail">${crumbs(d, p)}<h2>${esc(c.label(x))} ${B.pill(rr.status)} ${statePill(x.state)}</h2>
     <div class="dmeta">${facts.map(([k, v]) => `<span><span class="small">${k}</span> ${esc(v)}</span>`).join('')}</div>
     <div class="sec first"><h3>指标</h3>${metricsHtml}</div>
     ${s && s.keys && s.keys.length ? `<div class="sec"><h3>曲线</h3><div class="charts">${s.keys.slice(0, 12).map(k => B.chart(s.points, k)).join('')}</div>
@@ -1407,6 +1470,7 @@ async function poll() {
   if (st.status === 'fulfilled') S.status = st.value;
   if (pj.status === 'fulfilled') S.projects = pj.value;
   const r = route();
+  if (r.page === 'sessions' || r.page === 'project' || !S.sessions) ensureSessions();
   // don't disturb a project page, except once when the project list first arrives (entry badge, counts)
   if (r.page === 'project' && !firstProjects) { renderSide(r); ensureDetail(r.name); document.title = titleFor(r); return; }
   if (r.page === 'gpu' && copying) { copying = false; renderSide(r); return; }

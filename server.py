@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 import projects
+import sessions
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # GPUBOARD_CONFIG lets tests run the server against a throwaway config
@@ -34,6 +35,10 @@ PROJECTS_ROOT = os.path.expanduser(CFG.get("projects_root") or "/shared/ssd/dche
 PROJECTS_INTERVAL = int(CFG.get("projects_interval_seconds", 60))
 ME = pwd.getpwuid(os.getuid()).pw_name  # same login on every server
 project_cache = projects.ProjectCache(PROJECTS_ROOT, PROJECTS_INTERVAL)
+_sc = CFG.get("sessions") or {}
+session_watch = sessions.SessionWatch(PROJECTS_ROOT, claude_bin=_sc.get("claude_bin"), transcripts=_sc.get("transcripts"),
+                                      interval=int(_sc.get("interval_seconds", 60)))
+SESSIONS_ON = _sc.get("enabled", True)
 
 # 在远端执行的只读脚本：GPU 列表 / GPU 上的进程 / 这些进程的用户
 REMOTE = r"""
@@ -135,23 +140,25 @@ def poll(server):
 
 
 def liveness(run, srv, me):
-    """For a run recorded as 运行中: "running", "maybe_interrupted" or "unknown".
+    """What the GPU polls say about a run recorded as 运行中, as a probe for projects.run_state():
+    "running" (its process is on its GPUs), "absent" (the server answered, the process is not there),
+    "unreachable" (the server's last poll failed) or None (no GPUs recorded, or the server is not polled).
 
-    srv is the latest GPU poll of run["server"] (None if that name is not
-    polled). Polls only see GPU processes, so runs without GPUs are unknown.
-    The recorded pid may be a launcher whose children hold the GPUs, so our
-    own process on one of the run's GPUs also counts as running.
+    srv is the latest GPU poll of run["server"]. The recorded pid may be a launcher whose children
+    hold the GPUs, so our own process on one of the run's GPUs also counts as running.
     """
     gpus = run.get("gpus")
-    if not isinstance(gpus, list) or not gpus or not srv or srv.get("status") != "ok":
-        return "unknown"
+    if not srv or not isinstance(gpus, list) or not gpus:
+        return None
+    if srv.get("status") != "ok":
+        return "unreachable"
     want = {num(g) for g in gpus} - {None}
     pid = num(run.get("pid"))
     for g in srv.get("gpus") or []:
         for p in g.get("procs") or []:
             if (pid is not None and p.get("pid") == pid) or (g.get("index") in want and p.get("user") == me):
                 return "running"
-    return "maybe_interrupted"
+    return "absent"
 
 
 def run_liveness(run):
@@ -159,6 +166,13 @@ def run_liveness(run):
     with lock:
         srv = state.get(name) if isinstance(name, str) else None
     return liveness(run, srv, ME)
+
+
+def with_state(row, run, heartbeat, now):
+    """A run row with what the GPU polls say ("liveness", a probe) and what to show ("state":
+    运行中 / 状态未知 / 已结束 / 已中断, see projects.run_state)."""
+    probe = run_liveness(run) if run.get("status") == "运行中" else None
+    return dict(row, liveness=probe, state=projects.run_state(run, heartbeat, probe, now))
 
 
 _rc = {"at": 0.0, "names": []}
@@ -233,6 +247,9 @@ def post_answer(body):
         if tid.startswith("a:"):
             choices = next((list(projects.ATTEMPT_CHOICES) for a in snap[name].get("attempts") or []
                             if a.get("meta", {}).get("id") == tid[2:] and "结论待确认" in (a.get("needs_input") or [])), None)
+        elif tid.startswith("d:"):  # adopting a decision: only while its file still says 候选
+            choices = next((list(projects.DECISION_CHOICES) for r in snap[name].get("decisions") or []
+                            if r.get("meta", {}).get("id") == tid[2:] and r["meta"].get("status") in (None, "候选")), None)
         else:
             choices = next((projects.todo_options(t) for t in snap[name].get("todos") or []
                             if str(t.get("id")) == tid and not t.get("done")), None)
@@ -328,7 +345,8 @@ def api_projects():
     rows = []
     for name in sorted(snap):
         row = projects.summary(snap[name])
-        row["active_runs"] = [dict(r, liveness=run_liveness(r)) for r in row["active_runs"]]
+        now = time.time()
+        row["active_runs"] = [with_state(r, r, r.get("heartbeat"), now) for r in row["active_runs"]]
         if names.get(name):
             row["full_title"], row["title"] = row["title"], names[name]
         rows.append(row)
@@ -343,15 +361,38 @@ def api_project(name):
         return None
     out = dict(data, scan=status, now=time.time())  # shallow copy: cached snapshots are never mutated
     out["project"] = renamed(data.get("project") or {}, name)
-    out["runs"] = [dict(r, liveness=run_liveness(r["run"]) if r["run"].get("status") == "运行中" else None)
-                   for r in data["runs"]]
+    now = time.time()
+    out["runs"] = [with_state(r, r["run"], r.get("heartbeat"), now) for r in data["runs"]]
+    out["decision_states"] = projects.decision_states(data.get("decisions") or [], data.get("answers") or {})
     return out
+
+
+def api_sessions():
+    """Claude sessions on this machine with the project and task card each one works on (metadata only)."""
+    snap = session_watch.snapshot()
+    projs, _ = project_cache.snapshot()
+    task_of = {}  # (project, session id or name) -> task id, from the task cards' sessions lists
+    for pname, data in projs.items():
+        for t in data.get("tasks") or []:
+            for s in projects._list(t["meta"].get("sessions")):
+                task_of[(pname, str(s))] = t["meta"].get("id")
+    rows = []
+    for s in snap.get("sessions") or []:
+        p = s.get("project")
+        task = task_of.get((p, s["id"])) or task_of.get((p, s.get("name")))
+        if not task and p and isinstance(s.get("name"), str) and "·" in s["name"]:
+            head, _, tail = s["name"].partition("·")
+            ids = {t["meta"].get("id") for t in (projs.get(p) or {}).get("tasks") or []}
+            task = tail if head == p and tail in ids else None
+        rows.append(dict(s, task=task))
+    return {"now": time.time(), "at": snap.get("at"), "error": snap.get("error"), "enabled": SESSIONS_ON, "sessions": rows}
 
 
 # The board's own pages, read from the repo on each request
 HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
 STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
           "/project.html": ("project.html", HTML), "/common.js": ("common.js", JS), "/app.js": ("app.js", JS),
+          "/work.js": ("work.js", JS),
           "/guide.md": ("docs/guide.md", "text/plain; charset=utf-8")}
 
 # Served board files must never run code, even when opened directly (SVG can carry scripts)
@@ -408,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps({"now": time.time(), "interval": INTERVAL, "me": ME,
                                    "servers": [state[s["name"]] for s in SERVERS]}).encode()
             self.send(200, "application/json", body)
+        elif path == "/api/sessions":
+            self.send_json(api_sessions())
         elif path == "/api/refresh":
             wake.set()
             wake.clear()
@@ -506,5 +549,7 @@ if __name__ == "__main__":
     for s in SERVERS:
         threading.Thread(target=poll, args=(s,), daemon=True).start()
     project_cache.start()
+    if SESSIONS_ON:
+        session_watch.start()
     print("CD的研究控制台已启动: %s" % where, flush=True)
     httpd.serve_forever()

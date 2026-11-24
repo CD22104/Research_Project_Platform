@@ -332,7 +332,7 @@ class _Board:
         return dict(self.record("../" + name, st), file=name)
 
 
-TODO_KEYS = ("id", "text", "kind", "where", "created", "done", "by", "link", "context", "options", "recommend", "result")
+TODO_KEYS = ("id", "text", "kind", "where", "created", "done", "by", "link", "context", "options", "recommend", "result", "state")
 ATTEMPT_CHOICES = ("成功", "部分成功", "失败", "放弃")  # what the user can confirm a 待确认 attempt as
 
 
@@ -815,6 +815,81 @@ def with_answers(todos, answers):
     return [dict(t, answer=answers.get(str(t.get("id")))) for t in todos]
 
 
+def first_line(text, n=120):
+    """The first line of prose in a Markdown section, without list markers or emphasis."""
+    for line in (text or "").split("\n"):
+        line = line.strip().lstrip("-*").strip().replace("**", "")
+        if line and not line.startswith("|") and not line.startswith("#"):
+            return line[:n] + ("…" if len(line) > n else "")
+    return ""
+
+
+def handoff_next(sections):
+    """The 下一步 line of a task card's 交接."""
+    for line in (sections.get("交接") or "").split("\n"):
+        m = re.match(r"^\s*[-*]?\s*下一步\s*[:：]\s*(.+)$", line)
+        if m:
+            return m.group(1).strip()[:120]
+    return ""
+
+
+def unprocessed_replies(d):
+    """Replies in answers.jsonl that no session has acted on yet: [id]."""
+    todos = {str(t.get("id")): t for t in d.get("todos") or []}
+    attempts = {a["meta"].get("id"): a for a in d.get("attempts") or [] if isinstance(a["meta"].get("id"), str)}
+    decisions = {r["meta"].get("id"): r for r in d.get("decisions") or [] if isinstance(r["meta"].get("id"), str)}
+    out = []
+    for rid in d.get("answers") or {}:
+        if rid.startswith("a:"):
+            a = attempts.get(rid[2:])
+            if a and a["meta"].get("status") == "待确认":
+                out.append(rid)
+        elif rid.startswith("d:"):
+            r = decisions.get(rid[2:])
+            if r and r["meta"].get("status") in (None, "候选"):
+                out.append(rid)
+        elif rid in todos and not todos[rid].get("done"):
+            out.append(rid)
+    return out
+
+
+def work_summary(data):
+    """The work view of a project for the project list: open tasks, decisions, the latest 一页纸."""
+    answers = data.get("answers") or {}
+    states = decision_states(data.get("decisions") or [], answers)
+    tasks, n_tasks = [], {}
+    for t in data.get("tasks") or []:
+        m = t.get("meta") or {}
+        st = m.get("status") if m.get("status") in TASK_STATUS else "未写"
+        n_tasks[st] = n_tasks.get(st, 0) + 1
+        if st in TASK_OPEN:
+            tasks.append({"id": m.get("id"), "title": m.get("title") or m.get("id"), "kind": m.get("kind"), "status": st,
+                          "about": m.get("about"), "updated": m.get("updated") or m.get("created"),
+                          "next": handoff_next(t.get("sections") or {})})
+    cand, adopted = [], []
+    for r in data.get("decisions") or []:
+        m = r.get("meta") or {}
+        i = m.get("id")
+        row = {"id": i, "title": m.get("title") or i, "decision": first_line((r.get("sections") or {}).get("决定")),
+               "date": m.get("date"), "answer": answers.get("d:%s" % i)}
+        if states.get(i) == "候选" or (states.get(i) in DECISION_CHOICES and m.get("status") in (None, "候选")):
+            cand.append(dict(row, state=states.get(i)))
+        if states.get(i) == "采纳":
+            adopted.append(row)
+    latest = []
+    for a in sorted(data.get("attempts") or [], key=lambda a: str((a.get("meta") or {}).get("date") or ""), reverse=True):
+        op = a.get("onepager") or {}
+        so = (op.get("所以") or {}).get("text")
+        if so:
+            latest.append({"id": a["meta"].get("id"), "title": a["meta"].get("title") or a["meta"].get("id"),
+                           "status": a["meta"].get("status"), "so": so, "q": (op.get("想回答") or {}).get("text")})
+        if len(latest) >= 2:
+            break
+    return {"tasks_open": tasks, "n_tasks": n_tasks, "decisions_candidate": cand,
+            "decisions_adopted": sorted(adopted, key=lambda x: str(x.get("date") or ""), reverse=True),
+            "latest_onepager": latest, "unprocessed": unprocessed_replies(data)}
+
+
 HEARTBEAT_STALE = 300   # seconds without a heartbeat before a run counts as possibly dead
 RUN_STATES = ("运行中", "状态未知", "已结束", "已中断")
 
@@ -848,9 +923,10 @@ def summary(data):
     for r in data.get("runs") or []:
         run = r.get("run") or {}
         if run.get("status") == "运行中":
-            active.append({"id": run.get("id") or r.get("id"), "server": run.get("server"),
+            active.append({"id": run.get("id") or r.get("id"), "server": run.get("server"), "status": "运行中",
                            "gpus": run.get("gpus"), "pid": run.get("pid"), "tmux": run.get("tmux"),
-                           "attempt": run.get("attempt")})
+                           "attempt": run.get("attempt"), "task": run.get("task"), "heartbeat": r.get("heartbeat"),
+                           "started": run.get("started")})
     def count(records):
         out = {}
         for r in records:
@@ -881,6 +957,7 @@ def summary(data):
             "n_tracks": len(data.get("tracks") or []), "track_status": count(data.get("tracks") or []),
             "n_attempts": len(attempts), "attempt_status": count(attempts),
             "n_runs": len(data.get("runs") or []), "pending": pending,
+            "question": p.get("question"), "updated_kinds": data.get("updated") or {}, **work_summary(data),
             "todos": with_answers([t for t in data.get("todos") or [] if not t.get("done")], answers),
             "todos_done": with_answers(sorted((t for t in data.get("todos") or [] if t.get("done")),
                                               key=lambda t: str(t.get("done")), reverse=True)[:20], answers),

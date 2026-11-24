@@ -45,7 +45,7 @@ def start_server(repo, tmp):
     cfg = os.path.join(tmp, "servers.json")
     with open(cfg, "w") as f:  # no "socket": plain 127.0.0.1 port, fixtures only
         json.dump({"port": port, "servers": [], "projects_root": root, "projects_interval_seconds": 3600,
-                   "state_dir": os.path.join(tmp, "state")}, f)
+                   "state_dir": os.path.join(tmp, "state"), "sessions": {"enabled": False}}, f)
     base = "http://127.0.0.1:%d/" % port
     log = open(os.path.join(tmp, "server.log"), "w")
     proc = subprocess.Popen([sys.executable, os.path.join(repo, "server.py")],
@@ -89,6 +89,9 @@ ROUTES = {
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
     "p_doc_review": "#/p/demo/docs/focal-review.md", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
     "p_method_ramp": "#/p/demo/method/warmup-ramp",
+    "p_home": "#/p/demo/home", "p_tasks": "#/p/demo/tasks", "p_task": "#/p/demo/tasks/f1-metric", "p_decisions": "#/p/demo/decisions",
+    "p_decision": "#/p/demo/decisions/scale-later", "p_minutes": "#/p/demo/decisions/doc:2026-11-20-discussion.md",
+    "p_timeline": "#/p/demo/timeline", "p_upkeep": "#/p/demo/upkeep", "sessions": "#/sessions",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
@@ -122,24 +125,27 @@ class Pages(unittest.TestCase):
         for k, (dom, errors) in self.pages.items():
             with self.subTest(route=k):
                 self.assertEqual(errors, [])
-                self.assertEqual(len(re.findall(r"<script\b", dom)), 2)  # common.js + app.js only
+                self.assertEqual(len(re.findall(r"<script\b", dom)), 3)  # common.js + work.js + app.js only
 
     def test_sidebar_and_titles(self):
         d = self.pages["p_overview"][0]
         self.assertIn('<a class="brand" href="#/overview">CD的研究控制台</a>', d)
-        self.assertIn('<span class="lbl">待办</span><span class="cnt">5</span>', d)   # 2 pending attempts + 2 open project to-dos + 1 global
-        self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/flow"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
+        self.assertIn('<span class="lbl">待办</span><span class="cnt">7</span>', d)   # 2 pending attempts + 2 open to-dos + 2 candidate decisions + 1 global
+        self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/home"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
         self.assertEqual(title(self.pages["gpu"][0]), "(0 空) CD的研究控制台")
         for k in ["p_overview", "legacy_project"]:
             self.assertEqual(title(self.pages[k][0]), "演示项目 · CD的研究控制台", k)
         for k in ["legacy_projects", "root"]:
-            self.assertIn('<h1 class="pt">总览</h1>', self.m(k), k)
+            self.assertIn('<h1 class="pt">今天</h1>', self.m(k), k)
 
     def test_tabs_follow_the_hierarchy(self):
         tabs = re.findall(r'<a class="ptab[^"]*" href="#/p/demo/(\w+)">([^<]+)', self.m("p_overview"))
-        self.assertEqual(tabs, [("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"), ("docs", "文档")])
-        for k in ["p_old_overview", "p_road"]:                                       # old addresses land on the flow
-            self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m(k), k)
+        self.assertEqual(tabs, [("home", "概况"), ("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"),
+                                ("docs", "文档"), ("tasks", "任务"), ("decisions", "讨论与决定"), ("sessions", "会话"), ("timeline", "时间线"), ("upkeep", "记录维护")])
+        self.assertIn('<span class="pgrp">研究</span>', self.m("p_overview"))      # two views: research, then work
+        self.assertIn('<span class="pgrp">工作</span>', self.m("p_overview"))
+        self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m("p_road"))    # the old roadmap is the flow
+        self.assertIn('<a class="ptab on" href="#/p/demo/home">', self.m("p_old_overview"))   # the old overview is 概况
 
     def test_overview(self):                                    # the flow with nothing selected shows the project summary
         d = self.m("p_overview")
@@ -152,9 +158,44 @@ class Pages(unittest.TestCase):
         self.assertIn('<span class="pill t-todo">卡着进度</span>', d)
         self.assertIn("补 dev 集评测", d)
         self.assertNotIn("确认 focal 的结论", d)                                              # done (last row wins)
-        self.assertIn("记录检查", d)
-        self.assertIn("没有「例子」小节", d)
+        self.assertIn('<a href="#/p/demo/upkeep">记录维护：', d)                            # record problems moved out of the way
+        self.assertNotIn("没有「例子」小节", d)
+        self.assertIn("没有「例子」小节", self.m("p_upkeep"))
         self.assertNotIn("Tiny-6L</b>", d)                                                    # full tables live on the setup tab
+
+    def test_project_head_and_home(self):
+        d = self.m("p_home")
+        hero = d.split('<div class="hero">', 1)[1].split("</nav>", 1)[0]
+        self.assertIn("学习率预热能否稳定小模型训练？", hero)                                # the question
+        self.assertIn('<a href="#/p/demo/decisions/warmup-first">先定预热，再试 loss</a>', hero)   # adopted decisions only
+        self.assertNotIn("old-plan", hero)
+        self.assertIn('<span class="pill t-run">进行中</span> <a href="#/p/demo/tasks/f1-metric">', hero)   # next tasks
+        self.assertIn("预热有用，并入主线。", hero)                                         # latest evidence
+        self.assertIn("最近的变化", d)                                                     # first visit in this browser
+        self.assertIn('data-key="demo|d:scale-later"', d)                                  # waiting for you, adoptable here
+        self.assertIn("下一步：重算 r002、r003。", d)                                       # what is going on
+        self.assertIn('<div class="onepager">', d)
+
+    def test_work_view(self):
+        tasks = self.m("p_tasks")
+        self.assertEqual(re.findall(r'<div class="kh"><span class="pill t-\w+">(\S+)</span>', tasks), ["待开始", "进行中", "等运行", "等你", "可以继续"])
+        self.assertIn('<a class="tcard" href="#/p/demo/tasks/f1-metric">', tasks)
+        task = self.m("p_task")
+        self.assertIn("<code>src/eval/</code>", task)                                     # scope
+        self.assertIn('<a href="#/p/demo/flow/a%3A2026-11-15-focal">', task)                # hangs on an attempt
+        self.assertIn("<h3>交接</h3>", task)
+        dec = self.m("p_decision")
+        self.assertIn('data-key="demo|d:scale-later"', dec)
+        self.assertIn("点了「采纳」立即生效", dec)
+        decs = self.m("p_decisions")
+        self.assertIn('被「先定预热，再试 loss」替代', decs)                                 # replaced decisions say by what
+        self.assertIn("讨论纪要 · 1", decs)
+        self.assertIn("和 loss 两条支线谁先做", self.m("p_minutes"))
+        tl = self.m("p_timeline")
+        self.assertIn("新任务「加 F1 指标并重算旧结果」", tl)
+        self.assertIn("定版 v2", tl)
+        self.assertIn('<li class="day">', tl)
+        self.assertIn("所有会话", self.m("sessions"))
 
     def test_setup_tab(self):
         d = self.m("p_setup")
@@ -192,7 +233,9 @@ class Pages(unittest.TestCase):
         self.assertIn('版本 v1</a> <span class="small">›</span> <a href="#/p/demo/flow/t%3At-lr">学习率调度</a>', d)
         heads = re.findall(r'<div class="sec[^"]*"><h3>(.*?)</h3>', d)
         self.assertEqual([re.sub(r"<.*", "", h).strip() for h in heads[:4]], ["发生了什么", "一个例子", "数据", "结论和原因"])
-        self.assertIn('<div class="oneline s-ok">', d)                                 # one line first
+        self.assertIn('<div class="onepager"><div class="oprow op-想回答"><span class="opk">想回答</span>', d)   # the 一页纸 first
+        self.assertIn('<div class="oprow op-所以"><span class="opk">所以</span><div class="opv">预热有用，并入主线。</div>', d)
+        self.assertIn('<abbr class="term" title="训练刚开始的几百步把学习率从很小慢慢调到目标值。">预热</abbr>', d)   # terms explained once
         self.assertIn('<div class="vsh">预期</div>', d)                                 # expected next to observed
         self.assertRegex(d, r'<th>测试集</th><th class="num" title="[^"]*">准确率 ↑</th><th class="num" title="[^"]*">F1 ↑</th>')
         self.assertIn('<td class="num">0.8100 <span class="small">(488/602)</span></td>', d)
@@ -279,13 +322,15 @@ class Pages(unittest.TestCase):
     def test_global_pages(self):
         ov = self.m("overview")
         self.assertEqual(len(re.findall(r'<a class="pcard"', ov)), 3)
-        self.assertIn("4 条等你处理", ov)
+        self.assertIn("等你决定 <span class=\"meta\">6 条还没回复</span>", ov)
+        self.assertIn('<a class="ig" href="#/p/demo/decisions/scale-later">采纳或不采纳 →</a>', ov)   # one line each, linking to where you reply
+        self.assertIn("没有心跳，h200 上看不到进程或连不上", ov)                          # r002: 状态未知 is stuck, not "interrupted"
         live, _, arch = ov.partition('<details class="box ovarch" id="ov-arch">')       # archived projects are folded last
         self.assertIn("演示项目", live)
         self.assertIn("只有标题的项目", arch)
         self.assertNotIn("只有标题的项目", live)
         side = self.pages["overview"][0]
-        self.assertRegex(side, r'<details class="sarch" id="side-arch"><summary class="shead">已归档 1</summary><a class="sitem" href="#/p/minimal/flow"')
+        self.assertRegex(side, r'<details class="sarch" id="side-arch"><summary class="shead">已归档 1</summary><a class="sitem" href="#/p/minimal/home"')
         self.assertIn('<details class="sarch" id="side-arch"><summary', self.pages["p_overview"][0])  # folded unless you are in one
         todo = self.m("todo")
         demo, _, shared = todo.partition("跨项目")                                    # grouped by project, shared last
@@ -362,7 +407,7 @@ class Interactions(unittest.TestCase):
         try:
             repo = os.path.join(tmp, "repo")
             os.mkdir(repo)
-            for f in ["server.py", "projects.py", "index.html", "project.html", "common.js", "app.js"]:
+            for f in ["server.py", "projects.py", "sessions.py", "index.html", "project.html", "common.js", "work.js", "app.js"]:
                 shutil.copy(os.path.join(REPO, f), repo)
             page = os.path.join(repo, "index.html")
             with open(page, encoding="utf-8") as f:
