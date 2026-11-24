@@ -12,7 +12,7 @@
 - 测试夹具 `demo/board/figures/lr-warmup.html` 里有一段探测脚本，点击测试靠它验证读不到父页面、localStorage、API，且重画后只加载一次。
 
 ### 要接着做的
-1. **还差一步：告诉研究服务台**在分发规则里加一句「画图做成自包含 HTML 放 board/figures/（格式见 BOARD_FORMAT.md 的「图解」一节）」。2026-11-24 问过用户要不要发、发给哪个会话（「A100: 研究服务台」还是 tmux rc-desk 的常驻入口），等用户回答。
+1. ~~告诉研究服务台分发图解那句规则~~：不用做了，研究服务台 2026-11-24 已把「画图做成自包含 HTML 放 board/figures/」发到 6 台（全局规则第 99 行，sha256 0ae77a8a…，已核对）。
 2. **boardrun 的「代码有没有改动」检查要排除记录**：现在用 `git status --porcelain --untracked-files=no` 看整个仓库，`board/` 里的记录（例如正在跑的运行的 `run.json`）、`NOTES.md`、`CLAUDE.md` 改了也算「有未提交改动」，项目记录一更新，下一次运行就被拒。改成只看代码：排除 `board`、`NOTES.md`、`REPORT.md`、`CLAUDE.md`（git pathspec `:(exclude)...`）。`tests/test_boardrun.py` 第 9 个测试现在靠改 `board/project.json` 制造改动，要改成改一个代码文件，并加一条「只改 board/ 不算改动」的断言。改完发布 boardrun。
 3. 以后可以做的（设计思路页第 18 节）：会话页看到其他服务器的会话、手机上看进度、自动回收闲置会话、记录维护的定时轮次、模型分级、迁移辅助。都要先和用户确认。
 
