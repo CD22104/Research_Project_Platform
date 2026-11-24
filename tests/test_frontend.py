@@ -253,7 +253,7 @@ class Pages(unittest.TestCase):
         self.assertIn("已被「学习率方案」取代", docs)
         self.assertIn('<span class="pill t-other">未看</span>', docs)
         self.assertIn('data-mark="确认"', docs)
-        self.assertIn('>未看 7</a>', docs)                                                 # filter chips
+        self.assertIn('>未看 8</a>', docs)                                                 # filter chips
         review = self.m("p_doc_review")
         self.assertRegex(review, r'属于：<a href="#/p/demo/flow/a%3A2026-11-15-focal">[^<]*尝试 · focal</a>')
         self.assertIn('<a class="ref" href="#/p/demo/runs/r002"', review)                 # {{run:...}} shows the run's number
