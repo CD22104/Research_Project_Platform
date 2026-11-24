@@ -307,7 +307,7 @@ class Pages(unittest.TestCase):
 
     def test_guide_and_entry_status(self):
         g = self.m("guide")
-        for s in ["新建项目", "暂停和恢复", "结束或放弃", "已归档", "待办怎么回复", "常用命令", "密钥和 token", "BOARD_FORMAT.md"]:
+        for s in ["新建项目", "一个项目怎么推进", "暂停、恢复、结束", "结束或放弃", "已归档", "待办怎么回复", "直接处理", "常用命令", "board task-start", "密钥和 token", "BOARD_FORMAT.md"]:
             self.assertIn(s, g)
         self.assertIn("! ~/bin/rc-start &lt;名字&gt;", g)
         self.assertIn("! tmux send-keys -t '=rc-&lt;名字&gt;:' y Enter", g)
