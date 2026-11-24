@@ -46,6 +46,24 @@ check('code block keeps text', sb.querySelector('pre code')?.textContent === 'if
 check('indented hash is a paragraph', [...sb.querySelectorAll('p')].some(p => p.textContent.includes('# indented')), doc);
 check('blockquote', sb.querySelector('blockquote p')?.textContent === 'quote', doc);
 check('unclosed fence does not hang', B.md('```\nno end').includes('no end'));
+
+// nested lists: an item owns the deeper lines under it (sub-lists, continuation lines); numbering keeps its start
+const nest = B.md('1. **写规范**：\n   - allow 的定义；\n   - 证据：\n   统一政策参照 JAB。\n2. **取数据**：\n   - AuthGateBench\n\n### 第二段\n8. 读回标注：\n   - 一致性\n9. 整理');
+sb.innerHTML = nest;
+const tops = [...sb.children].filter(x => x.tagName === 'OL');
+check('nested: two top-level lists, split by the heading', tops.length === 2, nest);
+check('nested: sub-items stay under their item', tops[0].children.length === 2 && tops[0].children[0].querySelectorAll(':scope > ul > li').length === 2
+  && tops[0].children[1].querySelectorAll(':scope > ul > li').length === 1, nest);
+check('nested: a lazy line continues the item above', tops[0].children[0].querySelectorAll('ul > li')[1].textContent.includes('统一政策参照 JAB'), nest);
+check('nested: the first item text keeps inline markup', tops[0].children[0].querySelector(':scope > strong')?.textContent === '写规范', nest);
+check('ordered list keeps its first number', tops[1].getAttribute('start') === '8' && tops[1].children.length === 2 && tops[0].getAttribute('start') === null, nest);
+sb.innerHTML = B.md('1. a\n\n2. b\n\n- c\n1. d\n- e\n  more\nafter');
+check('blank lines between items keep one list; a new kind starts a new list', sb.querySelectorAll('ol').length === 2 && sb.querySelector('ol').children.length === 2
+  && sb.querySelectorAll('ul').length === 2, sb.innerHTML);
+check('indented continuation joins the item', [...sb.querySelectorAll('ul li')].some(li => li.textContent === 'e\nmore' || li.textContent === 'e more'), sb.innerHTML);
+check('deep nesting does not hang', B.md(Array.from({length: 60}, (_, k) => ' '.repeat(k * 2) + '- x' + k).join('\n')).includes('x59'));
+sb.innerHTML = B.md('- ok\n   - <img src=x onerror="window.__pwned=1">\n     <script>window.__pwned=1<\/script>');
+check('nested items are escaped too', sb.querySelectorAll('img,script').length === 0 && window.__pwned === undefined, sb.innerHTML);
 check('empty input', B.md('') === '' && B.md(null) === '');
 
 // esc / num / time

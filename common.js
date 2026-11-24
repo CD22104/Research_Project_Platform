@@ -59,10 +59,40 @@ const Board = (() => {
   const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;  // ---, ***, ___ (checked before list items: "* * *")
   const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
   const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  const indentOf = l => l.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
   function md(src) {
     const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
     const isTable = i => /^\s*\|/.test(lines[i]) && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]);
     const startsBlock = i => FENCE.test(lines[i]) || RULE.test(lines[i]) || HEADING.test(lines[i]) || ITEM.test(lines[i]) || QUOTE.test(lines[i]) || isTable(i);
+    // A list is the items at the indent of its first line, of one kind (numbered or not). An item owns the lines
+    // under it that are indented deeper (sub-lists, more text, rendered by md() again) and, in a nested list, an
+    // indented line right after it ("   - 证据：\n   统一政策……"). Unindented text after a list is a paragraph.
+    function list(at) {
+      const base = indentOf(lines[at]), ordered = /\d/.test(ITEM.exec(lines[at])[1]);
+      const sameKind = l => ITEM.test(l) && indentOf(l) === base && /\d/.test(ITEM.exec(l)[1]) === ordered;
+      const items = [];
+      let j = at;
+      while (j < lines.length && sameKind(lines[j])) {
+        const text = [lines[j++].replace(ITEM, '')], rest = [];
+        while (j < lines.length) {
+          const l = lines[j];
+          if (!l.trim()) {  // a blank line: the item goes on if deeper lines follow, the list if another item does
+            let k = j;
+            while (k < lines.length && !lines[k].trim()) k++;
+            if (k < lines.length && indentOf(lines[k]) > base) { rest.push(...lines.slice(j, k)); j = k; continue; }
+            if (k < lines.length && sameKind(lines[k])) j = k;
+            break;
+          }
+          if (indentOf(l) <= base && (ITEM.test(l) || indentOf(l) === 0 || startsBlock(j))) break;
+          if (!rest.length && !ITEM.test(l) && !startsBlock(j)) text.push(l.trim());  // more text of the item itself
+          else rest.push(l);
+          j++;
+        }
+        items.push(`<li>${inline(text.join('\n'))}${rest.length ? md(rest.join('\n')) : ''}</li>`);
+      }
+      const n = ordered ? parseInt(ITEM.exec(lines[at])[1], 10) : 1;  // "8." after a heading keeps counting from 8
+      return {next: j, html: ordered ? `<ol${n !== 1 ? ` start="${n}"` : ''}>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`};
+    }
     const out = [];
     let i = 0, m;
     while (i < lines.length) {
@@ -89,14 +119,9 @@ const Board = (() => {
         out.push(`<div class="scroll"><table class="mdt"><thead><tr>${head.map((c, k) => td('th', c, k)).join('')}</tr></thead><tbody>` +
           rows.map(r => `<tr>${head.map((_, k) => td('td', r[k] ?? '', k)).join('')}</tr>`).join('') + '</tbody></table></div>');
       } else if (ITEM.test(l)) {
-        const ordered = /^\s*\d/.test(l), items = [];
-        while (i < lines.length && ITEM.test(lines[i])) {
-          let item = lines[i++].replace(ITEM, '');
-          while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !ITEM.test(lines[i])) item += '\n' + lines[i++].trim();
-          items.push(`<li>${inline(item)}</li>`);
-        }
-        const tag = ordered ? 'ol' : 'ul';
-        out.push(`<${tag}>${items.join('')}</${tag}>`);
+        const r = list(i);
+        out.push(r.html);
+        i = r.next;
       } else if (QUOTE.test(l)) {
         const buf = [];
         while (i < lines.length && QUOTE.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));

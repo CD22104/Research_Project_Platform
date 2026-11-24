@@ -261,7 +261,7 @@ function taskDetail(d, t) {
     ${kv('做过它的会话', sessHtml)}
     ${kv('时间', [m.created ? '建于 ' + esc(B.day(m.created) || m.created) : '', m.updated ? isoAgo(m.updated, d.now) + '更新' : ''].filter(Boolean).join(' · '))}
     ${runs.length ? kv('它的运行', runs.map(x => `<a href="${plink(name, 'runs', runKey(x))}">${esc(runKey(x))}</a> ${B.pill((x.run || {}).status)} ${statePill(x.state)}`).join('<br>')) : ''}
-    </div>${refs(body, d)}${stepRefs(d, 'k:' + m.id)}</div>`;
+    </div><div class="pad taskbody">${refs(body, d)}${stepRefs(d, 'k:' + m.id)}</div></div>`;
 }
 
 // ============================================================ 讨论与决定
