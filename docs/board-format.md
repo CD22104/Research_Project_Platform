@@ -199,7 +199,7 @@ with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
 ```
 正常结束记「完成」，抛异常记「失败」并写明错误，Ctrl-C 或 SIGTERM 记「被中断」。服务器、卡号、进程号、tmux 会话名、commit 自动填。不是 Python 的命令：`python -m boardrun run --attempt <尝试 id> --kind eval [--task <任务 id>] -- <命令>`，按退出码记状态并写下 `exit_code`。续跑用 `resumed_from=<上一次的运行编号>`，会得到新编号。
 
-- **每次运行绑定一个提交。** 代码有未提交的改动、或者还没有任何提交时，boardrun 拒绝启动（`DirtyCode`，命令行退出码 3），不会留下运行目录。先提交再跑；只有调试时才加 `allow_dirty=True`（`--allow-dirty`），这时 commit 带 `-dirty`。代码在项目里的另一个仓库（例如团队仓库的克隆、`.worktrees/<任务>`）时，从那个目录里启动，记的是那个仓库的提交，并写下 `code_dir`。
+- **每次运行绑定一个提交。** 代码有未提交的改动、或者还没有任何提交时，boardrun 拒绝启动。只看代码：`board/`、`NOTES.md`、`REPORT.md`、`CLAUDE.md` 是记录，运行期间会话会一直更新它们，改了不算「有改动」。拒绝时报 `DirtyCode`（命令行退出码 3），不会留下运行目录。先提交再跑；只有调试时才加 `allow_dirty=True`（`--allow-dirty`），这时 commit 带 `-dirty`。代码在项目里的另一个仓库（例如团队仓库的克隆、`.worktrees/<任务>`）时，从那个目录里启动，记的是那个仓库的提交，并写下 `code_dir`。
 - **心跳。** 运行期间每分钟写一次 `runs/<运行编号>/heartbeat`。控制台据此区分「运行中」和「状态未知」；收尾程序（a100 上每 5 分钟一次的 `board reconcile`）对心跳停了 5 分钟以上的运行去机器上查进程（每台机器一次 ssh），连续两次都查不到才把记录改成「被中断」，并写 `closed_by: board reconcile`。只处理有心跳的运行（boardrun 启动的）：手写的记录没有心跳，进程不在也可能是跑完了没写结果，收尾程序不改它们，控制台显示「状态未知」，由会话核对后收尾。
 - `task=<任务 id>`（`--task`）：这次运行属于哪张任务卡。任务卡是「等运行」时，它的运行都结束后，收尾程序把卡改成「可以继续」。
 

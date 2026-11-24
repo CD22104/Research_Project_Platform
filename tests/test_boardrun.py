@@ -33,6 +33,10 @@ def make_project(root):
                                {"id": "n", "name": "条数", "better": None}]}, f)
     with open(os.path.join(b, "attempts", "2026-11-22-a1.md"), "w") as f:
         f.write("---\nid: 2026-11-22-a1\ntrack: null\ndate: 2026-11-22\nstatus: 进行中\nruns: []\n---\n\n## 假设\nh\n\n## 预期\ne\n")
+    os.makedirs(os.path.join(root, "src"))
+    for name, text in [("src/train.py", "print('train')\n"), ("NOTES.md", "# 进度笔记\n"), ("CLAUDE.md", "# 规则\n")]:
+        with open(os.path.join(root, name), "w") as f:
+            f.write(text)
     git(root, "init", "-q")
     with open(os.path.join(root, ".gitignore"), "w") as f:
         f.write("board/runs/\nresults/\n")
@@ -238,9 +242,16 @@ class Boardrun(unittest.TestCase):
         self.assertEqual((bad["status"], bad["exit_code"], bad["error"]), ("失败", 4, "exit code 4"))
 
     # 9 ----------------------------------------------------------------- tied to a commit
+    def test_records_changing_is_not_a_code_change(self):
+        for name in ("board/project.json", "board/attempts/2026-11-22-a1.md", "NOTES.md", "CLAUDE.md"):
+            with open(os.path.join(self.proj, name), "a") as f:     # sessions update these while runs go on
+                f.write("\n")
+        rec = record(self.run_(heartbeat_s=0).dir)
+        self.assertFalse(rec["commit"].endswith("-dirty"), rec["commit"])
+
     def test_dirty_or_uncommitted_code_refuses_to_start(self):
-        with open(os.path.join(self.proj, "board", "project.json"), "a") as f:
-            f.write("\n")                                                  # a tracked file changed
+        with open(os.path.join(self.proj, "src", "train.py"), "a") as f:
+            f.write("\n")                                                  # a tracked code file changed
         before = sorted(os.listdir(os.path.join(self.proj, "board", "runs"))) if os.path.isdir(os.path.join(self.proj, "board", "runs")) else []
         with self.assertRaises(boardrun.DirtyCode):
             self.run_(run_id="refused")
@@ -261,7 +272,7 @@ class Boardrun(unittest.TestCase):
         os.makedirs(inner)
         git(inner, "init", "-q")
         git(inner, "commit", "-q", "--allow-empty", "-m", "team")
-        git(self.proj, "checkout", "-q", "--", "board/project.json")
+        git(self.proj, "checkout", "-q", "--", "src/train.py")
         old = os.getcwd()
         os.chdir(inner)
         try:

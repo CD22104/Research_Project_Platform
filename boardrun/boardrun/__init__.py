@@ -90,12 +90,18 @@ def _tmux():
     return _run(["tmux", "display-message", "-p", "#S"]) if os.environ.get("TMUX") else None
 
 
+# Records, not code: sessions update them while runs go on, so they never make the code count as changed.
+NOT_CODE = ("board", "NOTES.md", "REPORT.md", "CLAUDE.md")
+
+
 def _commit(code_dir):
-    """Short commit of the code, with -dirty when tracked files have uncommitted changes; None without a commit."""
+    """Short commit of the code, with -dirty when tracked code files have uncommitted changes (the records
+    in NOT_CODE do not count); None without a commit."""
     head = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=code_dir)
     if not head:
         return None
-    dirty = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=code_dir)
+    dirty = _run(["git", "status", "--porcelain", "--untracked-files=no", "--", "."]
+                 + [":(exclude)" + p for p in NOT_CODE], cwd=code_dir)
     return head + ("-dirty" if dirty else "")
 
 
