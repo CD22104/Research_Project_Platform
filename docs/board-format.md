@@ -37,6 +37,7 @@ board/
   tasks/<id>.md               任务卡：agent 要做的一件具体的事（工作视图）
   decisions/<id>.md           决定：用户定下的事，候选 → 用户在控制台采纳后生效
   docs/*.md                   文档：开头写 about（属于哪一步）和 kind（类型）；讨论纪要也在这里
+  figures/<名字>.html          图解：会话画的图，一个自包含的网页；开头写 title、about、question
   answers.jsonl  marks.jsonl  控制台写的：你的回复和文档标记（会话只读）
 ```
 
@@ -402,6 +403,42 @@ replaces: [options-v0]
 
 `plan.md` 自动算作「整个项目 · 方案」；根目录的 `NOTES.md`、`REPORT.md` 算作整个项目的笔记和报告。
 
+## figures/<名字>.html（图解）
+
+会话画图帮用户理解（一个流程、一组对比、一条曲线、一条样例走一遍）时，统一做成一个自包含的 HTML 放在这里。控制台把它作为一类文档「图解」显示在「文档」页，挂到它属于的那一步下；那一步的详情里「这一步的文档」也会列出它。
+
+```html
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>预热与不预热：开头 1000 步的训练损失</title>
+<meta name="about" content="a:2026-11-10-lr-sweep">
+<meta name="question" content="加 500 步预热，训练开头的损失尖峰还在不在？">
+<style>/* 颜色、布局都写在这里 */</style>
+</head>
+<body>……</body>
+</html>
+```
+- 一张图一个文件，文件名用英文短名。只认 `figures/` 下一层的 `.html`；子目录里的、`board/` 其他位置的 HTML 都不显示。
+- `<head>` 最前面写三项（控制台只读文件开头 8 KB）：
+  - `<title>`：标题，必写。
+  - `<meta name="about">`：属于哪一步，写法同文档的 `about`（`v:` / `t:` / `a:` / `m:` / `k:` / `d:` 加 id）；不写表示属于整个项目。
+  - `<meta name="question">`：这张图回答什么问题，一句话。
+- **自包含**：样式、脚本、数据都写在文件里，图片用 `data:` 地址。不引用任何外部网址（CDN 上的库、字体、图片都不行）：控制台不让图解联网，引用了也加载不出来。要用画图库就把库的代码内联进去，或者直接用 SVG / Canvas 画。
+- **内容**：
+  1. 开头一句话：这张图回答什么，答案是什么。
+  2. 先给一条真实样例（原始记录、模型看到的输入、输出、怎么计分），再讲抽象的结论。
+  3. 数字能对到运行编号（写明来自哪次运行，例如 r001），不写没有出处的数。图解是帮人看懂的说明，数字的出处仍是 `runs/` 里的记录。
+  4. 坐标轴写中文和单位；图例尽量直接标在线旁边。
+  5. 深色、浅色都能看：用 `@media (prefers-color-scheme: dark)` 定两套颜色，页面自己设背景色。
+  6. 手机宽度（约 390 px）不出现横向滚动条：SVG 用 `viewBox` 加 `width:100%`，表格过宽时放进可以横向滚动的容器。
+- 文件不超过 10 MB；数据多时先抽样或汇总。
+- **控制台怎么显示**：在隔离的框里运行：脚本可以运行，但读不到控制台的页面和数据，不能联网，不能弹窗。框高约一屏，另有「在新窗口打开」。控制台每分钟刷新时，图解文件没变就不重新加载，用户在图里的操作不会丢。
+- 用户可以像文档一样标「看过」「确认」（`marks.jsonl` 里 `file` 写 `figures/<名字>.html`）。被确认的图解，改之前先问用户，或者另画一张。
+- 已有的 HTML（例如旧的 `board/legacy-site/`）不用搬，控制台照旧不显示。
+
 ## marks.jsonl（用户对文档的标记）
 
 用户在控制台文档页把文档标为「看过」或「确认」，追加到 `board/marks.jsonl`。**只由控制台写，会话只读。**
@@ -409,7 +446,7 @@ replaces: [options-v0]
 ```
 {"file", "mark", "at", "mtime", "by"}
 ```
-- `file`：文档路径，例如 `docs/r1-review.md`、`plan.md`、`NOTES.md`。
+- `file`：文档路径，例如 `docs/r1-review.md`、`plan.md`、`NOTES.md`、`figures/lr-curve.html`。
 - `mark`：`"看过"`、`"确认"`，或 `null`（清除标记）。同一 `file` 以最后一行为准。
 - `mtime`：标记时文档的修改时间；之后文档又改过，控制台显示「有更新」。
 - 「确认」表示用户认可这篇的内容。被确认的文档，会话要改内容之前先问用户，或者新写一篇用 `replaces` 指向它。
@@ -456,6 +493,7 @@ replaces: [options-v0]
 - 尝试没有字段区，没有「例子」一节（计划中的除外），或者「一页纸」缺项、写得太长。
 - 任务卡、决定的字段写错（类型、状态不认识，指向的任务、决定、尝试不存在，文件名和 id 不一致），缺必需的一节；两条已采纳的决定替代同一条。
 - 文档没有 `kind` 或 `kind` 不认识；`about` 指向不存在的记录；纪要的 `decisions` 里有不存在的决定。
+- 图解开头 8 KB 里没有 `<title>`；`about` 指向不存在的记录；文件超过 10 MB；`figures/` 里的链接指向别处。
 - `setup.json` 的 `terms` 缺解释或解释太长。
 - `display.headline` 指向的分组和指标在运行记录里找不到。
 - 读不了的文件（JSON 写坏、待办行缺 `id` 或 `text` 等）。
