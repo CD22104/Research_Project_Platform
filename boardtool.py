@@ -4,7 +4,11 @@
   board check [DIR] [--file PATH] [--hook]
                                     record check; exit 2 with the problems (PostToolUse hook: only the edited file)
   board reconcile [--dry-run]       close runs whose process is gone, move waiting tasks on (cron, every 5 min)
-  board task-start PROJECT TASK     start the session of one task card (tmux task-<project>-<task>, Remote Control)
+  board task-begin TASK [--session ID]
+                                    the conversation the user opened in the project's folder takes this card:
+                                    same checks and worktree as task-start, prints the steps (exit 1 when refused)
+  board task-start PROJECT TASK     start the session of one task card in the background (tmux task-<project>-<task>,
+                                    Remote Control; for the dispatcher, or when the user asks for it)
   board task-stop PROJECT TASK      stop it
   board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
 
@@ -243,9 +247,10 @@ _handoff_next = P.handoff_next
 unprocessed_replies = P.unprocessed_replies
 
 
-def brief(project_dir, max_chars=6000, now=None):
+def brief(project_dir, max_chars=6000, now=None, session_id=None):
     """The facts pack: what a new session (or one just compacted) must know about the project, built
-    from board/ so it never disagrees with the console. Plain text, at most max_chars characters."""
+    from board/ so it never disagrees with the console. Plain text, at most max_chars characters.
+    session_id (from the SessionStart hook) is printed so the conversation can name itself on a task card."""
     now = time.time() if now is None else now
     board = os.path.join(project_dir, "board")
     d = P.scan_project(board)
@@ -256,6 +261,9 @@ def brief(project_dir, max_chars=6000, now=None):
             % (p.get("title") or name, name, utc(now)),
             "状态：%s；当前版本：%s。研究问题：%s" % (p.get("status") or "未写", p.get("current_version") or "未定",
                                           p.get("question") or "未写")]
+    sid = session_id if isinstance(session_id, str) and re.match(r"^[A-Za-z0-9-]{8,64}$", session_id) else None
+    if sid:
+        head.append("本会话 id：%s" % sid)
     sections = []
 
     rules = ""
@@ -321,6 +329,8 @@ def brief(project_dir, max_chars=6000, now=None):
     sections.append(("提醒", [
         "- 用户在对话里说的长期有效的话（要求、偏好、定下的做法），记成 board/decisions/ 里的「候选」，告诉用户「已记下，等你在控制台采纳」。",
         "- 一件具体的事开工前写任务卡（board/tasks/），做完写交接；实验最上面写「一页纸」。格式：/shared/ssd/dchen/_shared/BOARD_FORMAT.md。",
+        "- 用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 /home/dchen/bin/board task-begin <任务 id>%s，"
+        "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (" --session " + sid if sid else ""),
         "- 改 board/ 里的文件后，记录检查有问题会当场提示，照提示改掉。"]))
 
     def render(secs):
@@ -373,7 +383,7 @@ def hook_brief(root):
     data = _hook_input()
     proj = find_project(data.get("cwd") or os.getcwd(), root)
     if proj:
-        print(brief(proj))
+        print(brief(proj, session_id=data.get("session_id")))
     return 0
 
 
@@ -434,9 +444,121 @@ def _git(cwd, *args, run=subprocess.run):
     return p.returncode == 0, (p.stdout + p.stderr).strip()
 
 
-def task_prompt(project, task, kind, workdir, board):
+def live_sessions():
+    """Claude sessions alive on this machine (rows of `claude agents --json`: sessionId, name, cwd, ...), or None
+    when they cannot be read. Conversations opened in a project's folder in the App are among them."""
+    try:
+        p = subprocess.run([CLAUDE, "agents", "--json"], capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, NO_COLOR="1"))
+        rows = json.loads(p.stdout) if p.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return [r for r in rows if isinstance(r, dict) and isinstance(r.get("sessionId"), str)] if isinstance(rows, list) else None
+
+
+def _task_cards(root):
+    """{(project, task id): front matter} of every task card under root (only the front matter is read)."""
+    out = {}
+    for name, board in projects_under(root):
+        d = os.path.join(board, "tasks")
+        try:
+            files = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for fn in files:
+            if not fn.endswith(".md") or fn.startswith("."):
+                continue
+            try:
+                meta, _ = P.parse_front_matter(P.read_text(os.path.join(d, fn), 16 * 1024)[0])
+            except OSError:
+                continue
+            out[(name, meta["id"] if isinstance(meta.get("id"), str) else fn[:-3])] = meta
+    return out
+
+
+def busy_tasks(root, tmux_names, live):
+    """The sessions that count against MAX_SESSIONS, one key per card however it was started:
+    {"task-<project>-<task>" or "reply-<project>": [{"session": id or None, "label": text}]}.
+    - tmux sessions task-* and reply-* (started by task-start and dispatch) count as before;
+    - a live Claude session counts when a card that is 进行中 names it in sessions (by id or name), or when it
+      is called "<project>·<task>" after such a card. A finished card's idle conversation does not count."""
+    busy = {}
+    for n in tmux_names:
+        if SESSION_RE.match(n):
+            busy.setdefault(n, []).append({"session": None, "label": "tmux " + n})
+    if live:
+        refs = {}
+        for (proj, task), meta in _task_cards(root).items():
+            if meta.get("status") != "进行中":
+                continue
+            for r in ["%s·%s" % (proj, task)] + [str(x) for x in P._list(meta.get("sessions"))]:
+                refs.setdefault(r, (proj, task))
+        for x in live:
+            hit = refs.get(x["sessionId"]) or refs.get(x.get("name"))
+            if not hit:
+                continue
+            key = task_session_name(*hit)
+            if any(e["session"] == x["sessionId"] for e in busy.get(key, [])):
+                continue
+            if busy.get(key) and x.get("name") == "%s·%s" % hit:
+                continue  # the session task-start started, already counted through tmux
+            busy.setdefault(key, []).append({"session": x["sessionId"],
+                                             "label": "对话「%s」（%s）" % (x.get("name") or "", x["sessionId"][:8])})
+    return busy
+
+
+def _check_start(root, project, task, meta, busy, session_id=None):
+    """Raise TaskError when this card must not start now: its status, another session on it, the limit of
+    MAX_SESSIONS, or another code card being worked on in the same project. Shared by task_start and task_begin."""
+    board = os.path.join(root, project, "board")
+    if meta.get("status") not in STARTABLE:
+        raise TaskError("任务卡的状态是「%s」，只有 %s 的卡能开工" % (meta.get("status"), " / ".join(STARTABLE)))
+    me = task_session_name(project, task)
+    others = [e for e in busy.get(me, []) if not (session_id and e["session"] == session_id)]
+    if any(e["session"] is None for e in others):
+        raise TaskError("这张卡的会话已经在运行（tmux %s）；在 App 里点「%s·%s」接着说" % (me, project, task))
+    if others:
+        raise TaskError("这张卡已经有对话在做：%s。在那个对话里接着说，或者先结束它" % "、".join(e["label"] for e in others))
+    running = sorted(k for k in busy if k != me)
+    if len(running) >= MAX_SESSIONS:
+        raise TaskError("已经有 %d 个任务会话在运行（上限 %d）：%s。先等一个结束，或者 board task-stop 停掉一个"
+                        % (len(running), MAX_SESSIONS, "、".join(running)))
+    if meta.get("kind") in CODE_KINDS:
+        code = []
+        for k in running:
+            m = re.match(r"^task-%s-(.+)$" % re.escape(project), k)
+            if m:
+                try:
+                    if read_task(board, m.group(1))[0].get("kind") in CODE_KINDS:
+                        code.append(m.group(1))
+                except TaskError:
+                    pass
+        if code:
+            raise TaskError("这个项目已经有改代码的任务在做（%s）；同一个项目同时只做一张改代码的卡" % "、".join(code))
+
+
+def _prepare_worktree(proj, task, meta, run=subprocess.run):
+    """(workdir, worktree): a code card with a scope works in <project>/.worktrees/<task> on branch task/<task>."""
+    if not (meta.get("kind") in CODE_KINDS and P._list(meta.get("scope"))):
+        return proj, None
+    ok, _ = _git(proj, "rev-parse", "--verify", "HEAD", run=run)
+    if not ok:
+        return proj, None
+    worktree = os.path.join(proj, ".worktrees", task)
+    _exclude_worktrees(proj)
+    if not os.path.isdir(worktree):
+        ok, out = _git(proj, "worktree", "add", worktree, "-b", "task/" + task, run=run)
+        if not ok:
+            ok, out = _git(proj, "worktree", "add", worktree, "task/" + task, run=run)  # the branch exists already
+        if not ok:
+            raise TaskError("建 worktree 失败：%s" % out[-300:])
+    return worktree, worktree
+
+
+def task_prompt(project, task, kind, workdir, board, me):
+    """The steps of a task session. me: how the session names itself in the card's sessions."""
     lines = ["做任务 %s（%s）。" % (task, kind or "任务"),
-             "1. 先读任务卡 %s/tasks/%s.md、事实包和项目 CLAUDE.md；把自己的会话名「%s·%s」加进任务卡的 sessions，status 改成「进行中」。" % (board, task, project, task),
+             "1. 先读任务卡 %s/tasks/%s.md、事实包和项目 CLAUDE.md；把%s加进任务卡的 sessions，status 改成「进行中」。" % (board, task, me),
              "2. 只做这张卡写的事；范围外的发现写进交接，不要顺手做。需要用户决定的写进待办，然后把卡改成「等你」。",
              "3. 训练或评测用 boardrun 启动（--task %s）后，把卡改成「等运行」、写好交接就可以停下，不用守着。" % task,
              "4. 做完写交接（做了什么 / 证据在哪 / 没做完的 / 下一步 / 要你决定的），改状态，告诉用户结果。"]
@@ -446,55 +568,52 @@ def task_prompt(project, task, kind, workdir, board):
     return "\n".join(lines)
 
 
-def task_start(root, project, task, run=subprocess.run, model=None):
-    """Start the session of one task card. -> {"session", "dir", "worktree"}; raises TaskError when it must not start."""
+def task_start(root, project, task, run=subprocess.run, model=None, live=None):
+    """Start the session of one task card in the background (tmux, Remote Control). -> {"session", "dir", "worktree",
+    "name"}; raises TaskError when it must not start. live: rows of `claude agents --json` (None: read them)."""
     proj = os.path.join(root, project)
     board = os.path.join(proj, "board")
     if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
         raise TaskError("没有项目 %s" % project)
     meta, _ = read_task(board, task)
-    if meta.get("status") not in STARTABLE:
-        raise TaskError("任务卡的状态是「%s」，只有 %s 的卡能开工" % (meta.get("status"), " / ".join(STARTABLE)))
     names = tmux_sessions(run)
+    if meta.get("status") in STARTABLE:  # read the live sessions only when the card could start at all
+        live = (live_sessions() or []) if live is None else live
+    _check_start(root, project, task, meta, busy_tasks(root, names, live or []))
     name = task_session_name(project, task)
-    if name in names:
-        raise TaskError("这张卡的会话已经在运行（tmux %s）；在 App 里点「%s·%s」接着说" % (name, project, task))
-    busy = [n for n in names if SESSION_RE.match(n)]
-    if len(busy) >= MAX_SESSIONS:
-        raise TaskError("已经有 %d 个任务会话在运行（上限 %d）：%s。先等一个结束，或者 board task-stop 停掉一个" % (len(busy), MAX_SESSIONS, "、".join(busy)))
-    code = meta.get("kind") in CODE_KINDS
-    if code:
-        others = []
-        for n in busy:
-            m = re.match(r"^task-%s-(.+)$" % re.escape(project), n)
-            if m:
-                try:
-                    if read_task(board, m.group(1))[0].get("kind") in CODE_KINDS:
-                        others.append(m.group(1))
-                except TaskError:
-                    pass
-        if others:
-            raise TaskError("这个项目已经有改代码的任务在做（%s）；同一个项目同时只做一张改代码的卡" % "、".join(others))
-    workdir, worktree = proj, None
-    if code and P._list(meta.get("scope")):
-        ok, _ = _git(proj, "rev-parse", "--verify", "HEAD", run=run)
-        if ok:
-            worktree = os.path.join(proj, ".worktrees", task)
-            _exclude_worktrees(proj)
-            if not os.path.isdir(worktree):
-                ok, out = _git(proj, "worktree", "add", worktree, "-b", "task/" + task, run=run)
-                if not ok:
-                    ok, out = _git(proj, "worktree", "add", worktree, "task/" + task, run=run)  # the branch exists already
-                if not ok:
-                    raise TaskError("建 worktree 失败：%s" % out[-300:])
-            workdir = worktree
-    prompt = task_prompt(project, task, meta.get("kind"), workdir, board)
+    workdir, worktree = _prepare_worktree(proj, task, meta, run)
+    prompt = task_prompt(project, task, meta.get("kind"), workdir, board, "自己的会话名「%s·%s」" % (project, task))
     cmd = [CLAUDE, "--remote-control", "%s·%s" % (project, task)] + (["--model", model] if model else []) + [prompt]
     shell = "unset ANTHROPIC_API_KEY; exec " + " ".join(_q(x) for x in cmd)
     p = run(["tmux", "new-session", "-d", "-s", name, "-c", workdir, shell], capture_output=True, text=True, timeout=20)
     if p.returncode != 0:
         raise TaskError("tmux 启动失败：%s" % (p.stderr or p.stdout).strip()[-300:])
     return {"session": name, "dir": workdir, "worktree": worktree, "name": "%s·%s" % (project, task)}
+
+
+def task_begin(root, project, task, session_id=None, live=None, run=subprocess.run):
+    """The conversation the user opened in the project's folder in the App (they said 「做 <task>」) takes this card:
+    the same checks and worktree as task_start, and the same steps it would have been started with.
+    live: rows of `claude agents --json` (None: read them; when they cannot be read only tmux sessions count).
+    -> {"workdir", "worktree", "steps"}; raises TaskError when the card must not start now."""
+    proj = os.path.join(root, project)
+    board = os.path.join(proj, "board")
+    if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
+        raise TaskError("没有项目 %s" % project)
+    meta, _ = read_task(board, task)
+    note = None
+    if live is None and meta.get("status") in STARTABLE:
+        live = live_sessions()
+        if live is None:
+            note = "（读不到 claude agents，同时在做的任务只按 tmux 里的会话算了。）"
+    _check_start(root, project, task, meta, busy_tasks(root, tmux_sessions(run), live or []), session_id)
+    workdir, worktree = _prepare_worktree(proj, task, meta, run)
+    me = "本会话 id「%s」" % session_id if session_id else "本会话的 id（事实包开头有）"
+    steps = task_prompt(project, task, meta.get("kind"), workdir, board, me)
+    if worktree:
+        steps += "\n注意：这个对话开在项目主目录，改代码、跑测试和提交都要在上面的 worktree 里（cd 过去或用它的绝对路径）。"
+    head = "可以开工：%s（%s）。工作目录：%s" % (meta.get("title") or task, meta.get("kind") or "任务", workdir)
+    return {"workdir": workdir, "worktree": worktree, "steps": "\n".join(x for x in (head, note, steps) if x)}
 
 
 def _exclude_worktrees(proj):
@@ -526,7 +645,7 @@ def task_stop(project, task, run=subprocess.run):
     return name
 
 
-def dispatch(root, state_path, now, run=subprocess.run, dry_run=False):
+def dispatch(root, state_path, now, run=subprocess.run, dry_run=False, live=None):
     """Start one headless session per project for replies the user marked 直接处理 and no session has taken yet.
     A reply is taken once (state_path remembers it); at most MAX_SESSIONS sessions run at once. -> [started]"""
     try:
@@ -535,7 +654,7 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False):
     except (OSError, ValueError):
         taken = {}
     names = tmux_sessions(run)
-    running = len([n for n in names if SESSION_RE.match(n)])
+    running = None  # counted (busy_tasks) only when there is something to start
     started = []
     for name, board in projects_under(root):
         d = P.scan_project(board)
@@ -543,6 +662,9 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False):
                 if (d["answers"][rid].get("mode") == "直接处理") and taken.get("%s/%s" % (name, rid)) != d["answers"][rid].get("at")]
         if not want or "reply-" + name in names:
             continue
+        if running is None:
+            live = (live_sessions() or []) if live is None else live
+            running = len(busy_tasks(root, names, live))
         if running >= MAX_SESSIONS:
             break
         prompt = ("处理回复：只处理用户在控制台勾了「直接处理」的这几条：%s。按 /shared/ssd/dchen/_shared/BOARD_FORMAT.md 的「处理回复」做："
@@ -581,7 +703,11 @@ def main(argv=None):
     c.add_argument("--hook", action="store_true", help="read the PostToolUse hook input on stdin; never fail")
     r = sub.add_parser("reconcile", help="close dead runs, move waiting tasks on")
     r.add_argument("--dry-run", action="store_true")
-    ts = sub.add_parser("task-start", help="start the session of one task card")
+    tb = sub.add_parser("task-begin", help="this conversation takes a task card (run inside the project)")
+    tb.add_argument("task")
+    tb.add_argument("--session", help="this conversation's session id (the facts pack shows it)")
+    tb.add_argument("--dir", default=".", help="a directory inside the project (default: here)")
+    ts = sub.add_parser("task-start", help="start the session of one task card in the background")
     ts.add_argument("project")
     ts.add_argument("task")
     ts.add_argument("--model")
@@ -591,10 +717,16 @@ def main(argv=None):
     dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理")
     dp.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-    if a.cmd in ("task-start", "task-stop", "dispatch"):
+    if a.cmd in ("task-begin", "task-start", "task-stop", "dispatch"):
         cfg = load_config()
         try:
-            if a.cmd == "task-start":
+            if a.cmd == "task-begin":
+                root, here = os.path.realpath(cfg["root"]), os.path.realpath(a.dir)
+                project = here[len(root) + 1:].split(os.sep)[0] if here.startswith(root + os.sep) else ""
+                if not (P.valid_name(project) and os.path.isfile(os.path.join(root, project, "board", "project.json"))):
+                    raise TaskError("%s 不在任何项目里（%s 下面带 board/project.json 的目录）" % (here, root))
+                print(task_begin(root, project, a.task, session_id=a.session)["steps"])
+            elif a.cmd == "task-start":
                 x = task_start(cfg["root"], a.project, a.task, model=a.model)
                 print("已开工：tmux %s，目录 %s%s。在 App 里点「%s」可以接着说。" % (x["session"], x["dir"],
                       "（worktree，分支 task/%s）" % a.task if x["worktree"] else "", x["name"]))
