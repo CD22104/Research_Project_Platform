@@ -4,6 +4,7 @@ Read-only. Understands record format v0 (see a project's board/FORMAT.md) and is
 deliberately lenient: missing fields, extra fields and missing files must never
 raise; callers get empty values instead.
 """
+import html.parser
 import json
 import os
 import re
@@ -209,6 +210,48 @@ def read_jsonl_head(path, n=HEAD_ROWS):
         except ValueError:
             rows.append({"_raw": line.decode("utf-8", "replace").rstrip("\n")})
     return rows
+
+
+# figures/<name>.html: self-contained pages an agent draws to explain something. Only the top is read
+# here (title and two meta tags); the page itself is shown in an isolated iframe, never parsed further.
+FIGURE_HEAD = 8 * 1024
+FIGURE_META = ("about", "question")
+
+
+class _FigureHead(html.parser.HTMLParser):
+    """<title> and <meta name="about|question" content="..."> from the top of a figure, up to <body>."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.meta, self._title, self._in_title, self.done = {}, [], False, False
+
+    def handle_starttag(self, tag, attrs):
+        if self.done:
+            return
+        if tag in ("body", "svg"):  # the page's content starts: an <svg><title> is not the page's title
+            self.done = True
+        elif tag == "title" and "title" not in self.meta:
+            self._in_title = True
+        elif tag == "meta":
+            a = dict(attrs)
+            if a.get("name") in FIGURE_META and a["name"] not in self.meta and isinstance(a.get("content"), str):
+                self.meta[a["name"]] = " ".join(a["content"].split())[:300]
+
+    def handle_endtag(self, tag):
+        if tag == "title" and self._in_title:
+            self._in_title = False
+            self.meta["title"] = " ".join("".join(self._title).split())[:200]
+
+    def handle_data(self, data):
+        if self._in_title:
+            self._title.append(data)
+
+
+def read_figure_head(path, limit=FIGURE_HEAD):
+    """{"title", "about", "question"} found in the first `limit` bytes of a figure (missing ones left out)."""
+    p = _FigureHead()
+    p.feed(_read_bytes(path, limit).decode("utf-8", "replace"))
+    return {k: v for k, v in p.meta.items() if v}
 
 
 # ---------------------------------------------------------------- scanning
@@ -526,9 +569,18 @@ def scan_project(board, memo=None, new_memo=None):
         if r:
             bump("docs", r["mtime"])
             docs.append(r)
+    # figures (图解): board/figures/*.html, one level, only their title and meta are read
+    figures = []
+    for fn in b.listdir("figures"):
+        st = b.stat("figures/" + fn) if fn.lower().endswith(".html") and not fn.startswith(".") else None
+        if st:
+            bump("figures", st.st_mtime)
+            meta = b.cached("figures/" + fn, st, read_figure_head, {}) or {}
+            figures.append({"file": "figures/" + fn, "meta": meta, "mtime": st.st_mtime, "size": st.st_size})
 
     out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
-           "todos": todos["items"], "answers": answers, "marks": marks, "docs": docs, "updated": updated, "errors": b.errors}
+           "todos": todos["items"], "answers": answers, "marks": marks, "docs": docs, "figures": figures,
+           "updated": updated, "errors": b.errors}
     out.update(records)
     try:
         out["checks"] = check_project(out)
@@ -767,6 +819,17 @@ def check_project(d, limit=200):
         for x in _list(m.get("decisions")):
             if x not in dec_ids:
                 add(doc["file"], "decisions 里的决定「%s」不存在" % x)
+    for f in d.get("figures") or []:
+        m = f.get("meta") or {}
+        if not m.get("title"):
+            add(f["file"], "开头 %d KB 里没有 <title>：写在文件最前面，控制台用它作标题" % (FIGURE_HEAD // 1024))
+        if m.get("about"):
+            p = ref_problem(m["about"], d)
+            if p:
+                add(f["file"], "about " + p)
+        if (f.get("size") or 0) > MAX_FILE_BYTES:
+            add(f["file"], "文件有 %.1f MB，超过 %d MB，控制台不显示：数据抽样或少画几张再放进来"
+                % (f["size"] / 1024 / 1024, MAX_FILE_BYTES // 1024 // 1024))
 
     h = ((d.get("project") or {}).get("display") or {}).get("headline")
     if isinstance(h, dict) and h.get("group") and h.get("metric"):
@@ -808,7 +871,7 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [], "method": [],
             "tasks": [], "decisions": [], "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
-            "todos": [], "answers": {}, "marks": {}, "docs": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+            "todos": [], "answers": {}, "marks": {}, "docs": [], "figures": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 
 def with_answers(todos, answers):

@@ -76,7 +76,7 @@ class Scan(FixtureCase):
         self.assertIn("<script>", d["plan"]["body"])       # backend returns raw text; frontend escapes
         self.assertIn("<script>", d["example"]["walkthrough"]["body"])
         self.assertEqual(len(d["example"]["probe_head"]), 2)
-        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method", "tasks", "decisions"})
+        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method", "tasks", "decisions", "figures"})
 
     def test_runs(self):
         d = self.demo()
@@ -351,6 +351,35 @@ class FormatV2(FixtureCase):
         self.assertIn(("docs/odd.md", "about 「z:1」不是 v: / t: / a: / m: / k: / d: 加 id 的写法"), checks)
         self.assertIn(("docs/hparams.md", "没有 kind（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要）"), checks)
         self.assertFalse([c for c in checks if c[0] == "NOTES.md"])           # root notes need no front matter
+
+
+class Figures(FixtureCase):
+    """figures/*.html (图解): only the title and two meta tags at the top are read, and checked."""
+
+    def test_parsed(self):
+        d = self.demo()
+        self.assertEqual([f["file"] for f in d["figures"]], ["figures/lr-warmup.html", "figures/untitled.html"])  # not hidden, nested or .txt
+        self.assertEqual(d["figures"][0]["meta"], {"title": "预热 & 不预热：开头 1000 步的训练损失",        # entities decoded
+                                                   "about": "a:2026-11-10-lr-sweep", "question": "加 500 步预热，训练开头的损失尖峰还在不在？"})
+        self.assertIsInstance(d["figures"][0]["size"], int)
+        self.assertEqual(d["figures"][1]["meta"], {"about": "a:ghost"})          # an <svg><title> in the body is not the page's title
+        self.assertIn("figures", d["updated"])
+        self.assertNotIn("postMessage", repr(d))                                  # the page itself is never read into the scan
+        self.assertEqual(P.empty_project("x")["figures"], [])
+
+    def test_checks(self):
+        figs = os.path.join(self.root, "demo", "board", "figures")
+        with open(os.path.join(figs, "big.html"), "wb") as f:
+            f.write(b"<title>big</title>")
+            f.truncate(11 * 1024 * 1024)  # sparse, over the 10 MB limit
+        with open(os.path.join(figs, "late.html"), "w") as f:
+            f.write("<style>" + "x" * 9000 + "</style><title>too late</title>")
+        checks = {(c["where"], c["what"]) for c in self.demo()["checks"]}
+        no_title = "开头 8 KB 里没有 <title>：写在文件最前面，控制台用它作标题"
+        for want in [("figures/untitled.html", no_title), ("figures/untitled.html", "about 「a:ghost」指向的记录不存在"),
+                     ("figures/late.html", no_title), ("figures/big.html", "文件有 11.0 MB，超过 10 MB，控制台不显示：数据抽样或少画几张再放进来")]:
+            self.assertIn(want, checks)
+        self.assertFalse([c for c in checks if c[0] == "figures/lr-warmup.html"])
 
 
 class SafeFile(FixtureCase):

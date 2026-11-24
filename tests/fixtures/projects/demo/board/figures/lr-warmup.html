@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>预热 &amp; 不预热：开头 1000 步的训练损失</title>
+<meta name="about" content="a:2026-11-10-lr-sweep">
+<meta name="question" content="加 500 步预热，训练开头的损失尖峰还在不在？">
+<style>
+:root{--bg:#fff;--fg:#1f2328;--muted:#656d76;--a:#0969da;--b:#cf222e;--line:#d0d7de}
+@media (prefers-color-scheme: dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--a:#4493f8;--b:#f85149;--line:#30363d}}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,sans-serif}
+.q{font-weight:600}
+.sample{border-left:3px solid var(--line);padding-left:10px;color:var(--muted)}
+svg{width:100%;max-width:640px;height:auto;display:block}
+svg text{fill:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<p class="q">回答：加 500 步预热，训练开头的损失尖峰还在不在？不在了（运行 r001）。</p>
+<p class="sample">一条样例 probe-7：标签 allow；不预热时判 deny，预热后判 allow，判对。</p>
+<svg viewBox="0 0 400 220" role="img" aria-label="横轴是训练步数，纵轴是训练损失；不预热的曲线在第 100 步左右有尖峰，预热的曲线平滑下降">
+  <line x1="40" y1="190" x2="390" y2="190" stroke="var(--line)"/><line x1="40" y1="10" x2="40" y2="190" stroke="var(--line)"/>
+  <polyline fill="none" stroke="var(--b)" stroke-width="2" points="40,40 75,30 110,20 145,70 180,95 250,120 320,140 390,150"/>
+  <polyline fill="none" stroke="var(--a)" stroke-width="2" points="40,40 75,55 110,70 145,90 180,105 250,130 320,150 390,160"/>
+  <text x="215" y="212" text-anchor="middle">训练步数（步，0–1000）</text>
+  <text x="12" y="100" transform="rotate(-90 12 100)" text-anchor="middle">训练损失</text>
+  <text x="300" y="128">不预热</text><text x="300" y="170">预热 500 步（r001）</text>
+</svg>
+<script>
+// Isolation probe for the console's tests: scripts run, but the console's page, storage and API stay out of reach
+(async () => {
+  const probe = {ran: true};
+  try { probe.parent = parent.document.title ? 'readable' : 'readable'; } catch (e) { probe.parent = 'blocked'; }
+  try { localStorage.getItem('x'); probe.storage = 'readable'; } catch (e) { probe.storage = 'blocked'; }
+  try { await fetch('/api/projects'); probe.fetch = 'reachable'; } catch (e) { probe.fetch = 'blocked'; }
+  parent.postMessage({figureProbe: probe}, '*');
+})();
+</script>
+</body>
+</html>
