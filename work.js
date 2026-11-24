@@ -24,7 +24,7 @@ const taskPill = s => s ? `<span class="pill t-${TASK_TONE[s] || 'other'}">${esc
 const DEC_TONE = {'候选': 'todo', '采纳': 'ok', '不采纳': 'off', '已替代': 'off'};
 const decPill = s => s ? `<span class="pill t-${DEC_TONE[s] || 'other'}">${esc(s)}</span>` : '';
 const RUN_STATE = {'运行中': 'run', '状态未知': 'todo', '已结束': 'other', '已中断': 'bad'};
-const RUN_TIP = {'运行中': '心跳是新的，或者在显卡上看到了它的进程', '状态未知': '心跳停了或没有心跳，机器连不上或看不到进程；先别下结论',
+const RUN_TIP = {'运行中': '心跳是新的，或者在显卡上看到了它的进程', '状态未知': '心跳停了且机器连不上；或者是手写的记录（没有心跳），进程已经不在，但可能是跑完了没写结果。要会话核对后收尾',
   '已中断': '心跳停了，机器上也找不到它的进程；收尾程序会把记录改成被中断', '已结束': '记录写着已经结束'};
 const statePill = s => s && s !== '已结束' ? `<span class="pill t-${RUN_STATE[s] || 'other'}" title="${esc(RUN_TIP[s] || '')}">${esc(s)}</span>` : '';
 const isoT = iso => { if (typeof iso !== 'string' || !iso) return null; const t = Date.parse(iso.length === 10 ? iso + 'T00:00:00Z' : iso); return isNaN(t) ? null : t / 1000; };

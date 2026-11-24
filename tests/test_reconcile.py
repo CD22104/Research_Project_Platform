@@ -26,7 +26,7 @@ class RunState(unittest.TestCase):
         self.assertEqual(P.run_state(running, NOW - 900, None, NOW), "状态未知")         # stale alone is not enough
         self.assertEqual(P.run_state(running, NOW - 900, "running", NOW), "运行中")
         self.assertEqual(P.run_state(running, None, "running", NOW), "运行中")           # old runs: as before
-        self.assertEqual(P.run_state(running, None, "absent", NOW), "已中断")
+        self.assertEqual(P.run_state(running, None, "absent", NOW), "状态未知")          # may have finished without writing it
         self.assertEqual(P.run_state(running, None, None, NOW), "状态未知")
 
 
@@ -42,7 +42,7 @@ class Reconcile(unittest.TestCase):
             json.dump({"title": "p"}, f)
         self.mkrun("dead", {"status": "运行中", "server": "xtrah100", "pid": 11, "task": "train-9b"}, hb_age=900)
         self.mkrun("alive", {"status": "运行中", "server": "xtrah100", "pid": 12, "task": "eval-9b"}, hb_age=20)
-        self.mkrun("old", {"status": "运行中", "server": "xtrah200", "tmux": "proj-old"})          # no heartbeat, no pid
+        self.mkrun("old", {"status": "运行中", "server": "xtrah200", "tmux": "proj-old"})          # hand-written: no heartbeat
         self.mkrun("done", {"status": "完成", "server": "xtrah100", "task": "train-9b"})
         self.task("train-9b", "等运行")
         self.task("eval-9b", "等运行")
@@ -86,8 +86,8 @@ class Reconcile(unittest.TestCase):
         self.assertNotIn("alive", self.asked)                                # a fresh heartbeat needs no ssh
         second = T.reconcile(self.root, NOW + 300, self.probe, self.state)
         self.assertEqual({(c["file"], c["what"].split("：")[0]) for c in second},
-                         {("runs/dead/run.json", "标为被中断"), ("runs/old/run.json", "标为被中断"),
-                          ("tasks/train-9b.md", "等运行 → 可以继续（2 次运行都结束了）")})
+                         {("runs/dead/run.json", "标为被中断"), ("tasks/train-9b.md", "等运行 → 可以继续（2 次运行都结束了）")})
+        self.assertEqual(self.rec("old")["status"], "运行中")               # a hand-written record is never closed by the program
         dead = self.rec("dead")
         self.assertEqual((dead["status"], dead["closed_by"], dead["task"]), ("被中断", "board reconcile", "train-9b"))
         self.assertIn("心跳停在", dead["error"])
@@ -107,7 +107,7 @@ class Reconcile(unittest.TestCase):
     def test_dry_run_changes_nothing(self):
         T.reconcile(self.root, NOW, self.probe, self.state)
         changes = T.reconcile(self.root, NOW + 300, self.probe, self.state, dry_run=True)
-        self.assertEqual(len(changes), 3)
+        self.assertEqual(len(changes), 2)
         self.assertEqual(self.rec("dead")["status"], "运行中")
         self.assertEqual(self.meta("train-9b")["status"], "等运行")
 

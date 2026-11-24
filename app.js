@@ -255,7 +255,8 @@ function stuckItems(pj, now) {
       if (r.state === '已中断') out.push(`<li>${statePill(r.state)} <a href="${plink(p.name, 'runs', r.id)}">${esc(p.title)} · 运行 ${esc(r.id)}</a>
         <span class="small">机器上找不到它的进程，收尾程序会把记录改成被中断</span></li>`);
       else if (r.state === '状态未知') out.push(`<li>${statePill(r.state)} <a href="${plink(p.name, 'runs', r.id)}">${esc(p.title)} · 运行 ${esc(r.id)}</a>
-        <span class="small">${r.heartbeat ? '心跳 ' + B.ago(r.heartbeat, now) : '没有心跳'}，${esc(shortHost(r.server || '?'))} 上看不到进程或连不上</span></li>`);
+        <span class="small">${!r.heartbeat && r.liveness === 'absent' ? '手写的记录，进程已经不在，可能跑完了没写结果：让项目会话核对后收尾'
+          : (r.heartbeat ? '心跳 ' + B.ago(r.heartbeat, now) : '没有心跳') + '，' + esc(shortHost(r.server || '?')) + ' 上看不到进程或连不上'}</span></li>`);
     }
     for (const t of p.tasks_open || []) {
       if (t.status === '可以继续') out.push(`<li>${taskPill(t.status)} <a href="${plink(p.name, 'tasks', t.id)}">${esc(p.title)} · ${esc(t.title)}</a>

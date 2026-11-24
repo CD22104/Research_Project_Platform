@@ -902,7 +902,11 @@ def run_state(run, heartbeat_mtime, probe, now):
     probe            "running" (its process was seen), "absent" (the server answered and the process is
                      gone), "unreachable" (the server did not answer) or None (no way to look)
     Returns 运行中 / 状态未知 / 已结束 / 已中断. A run is never called 已中断 without a probe saying the
-    process is gone: a stale heartbeat alone may be a slow shared disk.
+    process is gone: a stale heartbeat alone may be a slow shared disk. And only a run that has a
+    heartbeat (started by boardrun) can be 已中断: boardrun writes the final status itself on a normal
+    exit, so a stopped heartbeat with no final status means the process died. A hand-written record
+    whose process is gone may just as well have finished without writing it (2026-11-24: three
+    jev-fraud runs had completed), so it stays 状态未知 for a session to check.
     """
     if (run or {}).get("status") != "运行中":
         return "已结束"
@@ -910,7 +914,7 @@ def run_state(run, heartbeat_mtime, probe, now):
         return "运行中"
     if probe == "running":
         return "运行中"
-    if probe == "absent":
+    if probe == "absent" and heartbeat_mtime is not None:
         return "已中断"
     return "状态未知"
 
