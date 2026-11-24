@@ -179,7 +179,7 @@ function render() {
   else if (r.page === 'design') html = pageDesign();
   else if (r.page === 'project') html = pageProject(r);
   else html = pageOverview();
-  $('main').innerHTML = html;
+  setMain(html);
   for (const id of open) { const el = document.getElementById(id); if (el) el.open = true; }
   if (sameView) document.querySelectorAll('#main .items').forEach((x, i) => { if (scrolls[i]) x.scrollTop = scrolls[i]; });
   fitExample();
@@ -197,6 +197,33 @@ function render() {
   }
   document.title = titleFor(r);
 }
+// Put html into #main without reloading an open figure: when the new page shows the same figure (same file,
+// same mtime), everything around its frame is replaced level by level and the frame itself stays where it is,
+// so whatever the user did inside it survives the minutely refresh. Otherwise the page is simply replaced.
+function setMain(html) {
+  const main = $('main'), old = main.querySelector('iframe.figframe');
+  if (!old) { main.innerHTML = html; return; }
+  const tpl = document.createElement('div');
+  tpl.innerHTML = html;
+  const neu = tpl.querySelector('iframe.figframe');
+  const path = (el, top) => { const p = []; for (; el && el !== top; el = el.parentNode) p.unshift(el); return p; };
+  const po = path(old, main), pn = neu ? path(neu, tpl) : [];
+  if (!neu || neu.dataset.key !== old.dataset.key || po.length !== pn.length || po.some((x, i) => x.tagName !== pn[i].tagName)) {
+    main.innerHTML = html; return;
+  }
+  let po_ = main, pn_ = tpl;
+  po.forEach((keep, i) => {
+    const from = pn[i], kids = [...pn_.childNodes], at = kids.indexOf(from);
+    for (const c of [...po_.childNodes]) if (c !== keep) c.remove();
+    keep.before(...kids.slice(0, at));
+    keep.after(...kids.slice(at + 1));
+    if (keep !== old) {  // an ancestor of the frame takes the new attributes; the frame keeps its own (same src)
+      for (const a of [...keep.attributes]) if (!from.hasAttribute(a.name)) keep.removeAttribute(a.name);
+      for (const a of [...from.attributes]) keep.setAttribute(a.name, a.value);
+    }
+    po_ = keep; pn_ = from;
+  });
+}
 function titleFor(r) {
   const app = B.APP_NAME;
   if (r.page === 'gpu') return (S.status ? `(${B.freeCount(S.status)} 空) ` : '') + app;
@@ -210,7 +237,7 @@ function titleFor(r) {
 }
 
 // ============================================================ 今天: what waits for you, what is stuck, what is moving
-const UPDATE_KIND = {plan: '方案', versions: '版本', tracks: '支线', attempts: '实验', runs: '运行', docs: '文档', todos: '待办', setup: '实验设置', method: '方法', tasks: '任务', decisions: '决定'};
+const UPDATE_KIND = {plan: '方案', versions: '版本', tracks: '支线', attempts: '实验', runs: '运行', docs: '文档', figures: '图解', todos: '待办', setup: '实验设置', method: '方法', tasks: '任务', decisions: '决定'};
 function projectCard(p, now) {
   const act = p.active_runs || [], tasks = p.tasks_open || [];
   const seen = lastSeenOf(p.name), upd = Object.entries(p.updated_kinds || {}).filter(([, t]) => seen != null && t > seen).map(([k]) => UPDATE_KIND[k]).filter(Boolean);
@@ -1345,12 +1372,14 @@ function fitExample() {
 
 // ------------------------------------------------------------ 文档: general documents (version and track notes live in the roadmap)
 // documents with where they belong in the flow (front matter about: v:/t:/a:), their kind, what they replace,
-// and the user's mark (看过 / 确认; 有更新 when the file changed after the mark)
-const DOC_KINDS = ['方案', '观察', '复盘', '报告', '说明', '笔记'];
+// and the user's mark (看过 / 确认; 有更新 when the file changed after the mark). Figures (board/figures/*.html,
+// 图解) are one kind: their title and about come from the page's <title> and <meta>, and they are shown in a frame.
+const DOC_KINDS = ['方案', '观察', '复盘', '报告', '说明', '笔记', '图解'];
+const FIGURE_MAX = 10 * 1024 * 1024;  // the server does not serve larger files
 function docItems(d) {
   if (d._docs) return d._docs;
   const out = [], marks = d.marks || {};
-  const base = x => x.file.split('/').pop().replace(/\.md$/, '');
+  const base = x => x.file.split('/').pop().replace(/\.(md|html)$/, '');
   const add = (x, extra) => {
     const m = x.meta || {}, mark = marks[x.file] || null;
     const changed = !!(mark && typeof mark.mtime === 'number' && x.mtime > mark.mtime + 1);
@@ -1366,6 +1395,8 @@ function docItems(d) {
     if (root) Object.assign(out[out.length - 1], {title: (x.meta || {}).title || (x.file === 'NOTES.md' ? '进度笔记' : x.file === 'REPORT.md' ? '总报告' : x.file),
       kind: (x.meta || {}).kind || (x.file === 'NOTES.md' ? '笔记' : '报告')});
   }
+  for (const x of d.figures || []) add(x, {id: x.file.slice('figures/'.length), kind: '图解', figure: true,
+    question: typeof (x.meta || {}).question === 'string' ? x.meta.question : null, size: x.size});
   // replaces: a document names older ones by file name (with or without .md) or by its id here
   for (const x of out) for (const r of x.replaces) {
     const old = out.find(y => y !== x && (y.id === r || y.file === r || base(y) === r.replace(/\.md$/, '') || y.file === 'docs/' + r));
@@ -1398,7 +1429,7 @@ function docsOfStep(d, key) {
 }
 function tabDocs(d, r) {
   const all = docItems(d), name = d.name, q = r.query || {};
-  if (!all.length) return '<div class="card"><div class="empty">还没有文档（board/plan.md、board/docs/*.md、项目根目录的 NOTES.md 和 REPORT.md）。各版本的方案在「流程」里，点版本节点就能看到。</div></div>';
+  if (!all.length) return '<div class="card"><div class="empty">还没有文档（board/plan.md、board/docs/*.md、board/figures/*.html 图解、项目根目录的 NOTES.md 和 REPORT.md）。各版本的方案在「流程」里，点版本节点就能看到。</div></div>';
   const f = q.f || '', k = q.k || '';
   const pass = x => (!f || x.state === f) && (!k || x.kind === k);
   const docs = all.filter(pass);
@@ -1429,13 +1460,25 @@ function tabDocs(d, r) {
     ...sel.replaces.map(x => { const o = all.find(y => y.replacedBy === sel && (y.id === x || y.file === x || y.file.endsWith('/' + x.replace(/\.md$/, '') + '.md')));
       return o ? `取代了 <a href="${plink(name, 'docs', o.id, qs)}">${esc(o.title)}</a>` : `取代了 ${esc(x)}`; })].filter(Boolean);
   return `<div class="md2"><div class="list">${filters}<div class="items">${items || '<div class="empty">没有符合条件的文档。</div>'}</div>
-      <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），这里就按流程归类，格式见 BOARD_FORMAT.md。</div></div>
+      <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），图解写在 &lt;meta name="about"&gt; 里，这里就按流程归类，格式见 BOARD_FORMAT.md。</div></div>
     <div class="detail"><h2>${esc(sel.title)} ${sel.kind ? `<span class="tag2">${esc(sel.kind)}</span>` : ''}${docBadge(sel)}</h2>
       <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${sel.about.startsWith('m:') ? plink(name, 'method', sel.about.slice(2)) : plink(name, 'flow', sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
-        <span>${esc(sel.file)}</span><span>${B.ago(sel.mtime, d.now)}更新</span>${rel.map(x => `<span>${x}</span>`).join('')}</div>
+        <span>${esc(sel.file)}</span>${sel.figure ? `<span>${sizeText(sel.size)}</span>` : ''}<span>${B.ago(sel.mtime, d.now)}更新</span>${rel.map(x => `<span>${x}</span>`).join('')}</div>
       <div class="marks">${mk('看过', '看过')}${mk('确认', '确认内容')}${sel.mark ? '<button class="mk" data-mark="" data-file="' + esc(sel.file) + '">清除标记</button>' : ''}
         <span class="small">「确认」表示你认可这篇的内容，会话改它之前会先问你</span></div>${markNote}
-      <div class="md">${refs(B.md(sel.body), d)}</div></div></div>`;
+      ${sel.figure ? figureView(d, sel) : `<div class="md">${refs(B.md(sel.body), d)}</div>`}</div></div>`;
+}
+const sizeText = n => typeof n !== 'number' ? '' : n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+// A figure is a page an agent wrote: it runs in a frame with scripts but without an origin (sandbox="allow-scripts",
+// never allow-same-origin), and the server adds a CSP that keeps it off the network. data-key lets setMain keep it.
+function figureView(d, x) {
+  const url = fileUrl(d.name, x.file);
+  const frame = x.size > FIGURE_MAX
+    ? `<div class="notice">文件有 ${sizeText(x.size)}，超过 10 MB，控制台不显示。请会话把数据抽样或少画几张。</div>`
+    : `<iframe class="figframe" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(x.title)}" data-key="${esc(x.file + '@' + x.mtime)}"></iframe>`;
+  return `${x.question ? `<p class="figq">回答：${esc(x.question)}</p>` : ''}
+    <div class="figbar"><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">在新窗口打开 ↗</a>
+      <span class="small">会话画的网页，在隔离的框里运行：读不到控制台的内容，也不能联网</span></div>${frame}`;
 }
 
 // ============================================================ events

@@ -87,7 +87,7 @@ ROUTES = {
     "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
-    "p_doc_review": "#/p/demo/docs/focal-review.md", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
+    "p_doc_review": "#/p/demo/docs/focal-review.md", "p_doc_fig": "#/p/demo/docs/lr-warmup.html", "p_doc_untitled": "#/p/demo/docs/untitled.html", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
     "p_method_ramp": "#/p/demo/method/warmup-ramp",
     "p_home": "#/p/demo/home", "p_tasks": "#/p/demo/tasks", "p_task": "#/p/demo/tasks/f1-metric", "p_decisions": "#/p/demo/decisions",
     "p_decision": "#/p/demo/decisions/scale-later", "p_minutes": "#/p/demo/decisions/doc:2026-11-20-discussion.md",
@@ -301,12 +301,13 @@ class Pages(unittest.TestCase):
         self.assertIn("观察样例", ex)
         docs = self.m("p_docs")
         groups = re.findall(r'<div class="tgroup">(.*?)</div>', docs)               # grouped by where they belong in the flow
-        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "版本 v2 · 加入学习率预热", "损失函数 › 尝试 · focal"])
+        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "学习率调度 › 尝试 · lr-sweep",
+                                                                       "版本 v2 · 加入学习率预热", "损失函数 › 尝试 · focal", "找不到的位置：a:ghost"])
         self.assertIn('<a class="li old" href="#/p/demo/docs/lr-plan-v0.md', docs)      # replaced documents are greyed
         self.assertIn("已被「学习率方案」取代", docs)
         self.assertIn('<span class="pill t-other">未看</span>', docs)
         self.assertIn('data-mark="确认"', docs)
-        self.assertIn('>未看 8</a>', docs)                                                 # filter chips
+        self.assertIn('>未看 10</a>', docs)                                                # filter chips (8 documents, 2 figures)
         review = self.m("p_doc_review")
         self.assertRegex(review, r'属于：<a href="#/p/demo/flow/a%3A2026-11-15-focal">[^<]*尝试 · focal</a>')
         self.assertIn('<a class="ref" href="#/p/demo/runs/r002"', review)                 # {{run:...}} shows the run's number
@@ -314,6 +315,23 @@ class Pages(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
+
+    def test_figures(self):
+        fig = self.m("p_doc_fig")
+        self.assertIn('<h2>预热 &amp; 不预热：开头 1000 步的训练损失 <span class="tag2">图解</span>', fig)   # <title>, entities decoded once
+        self.assertRegex(fig, r'属于：<a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">[^<]*尝试 · lr-sweep</a>')   # <meta name="about">
+        self.assertIn('<p class="figq">回答：加 500 步预热，训练开头的损失尖峰还在不在？</p>', fig)              # <meta name="question">
+        frames = re.findall(r"<iframe\b[^>]*>", fig)
+        self.assertEqual(len(frames), 1)
+        self.assertIn('src="/files/demo/figures/lr-warmup.html" sandbox="allow-scripts"', frames[0])     # isolated: scripts, no origin
+        self.assertNotIn("same-origin", frames[0])
+        self.assertIn('<a href="/files/demo/figures/lr-warmup.html" target="_blank" rel="noopener noreferrer">在新窗口打开', fig)
+        self.assertIn('data-mark="确认" data-file="figures/lr-warmup.html"', fig)                       # marked like a document
+        self.assertIn('<a class="chip" href="#/p/demo/docs/lr-warmup.html?k=%E5%9B%BE%E8%A7%A3">图解</a>', fig)   # a kind of its own
+        self.assertNotIn("postMessage", fig)                                                           # the page is not inlined
+        self.assertIn('<span class="tag2">图解</span><a href="#/p/demo/docs/lr-warmup.html">预热 &amp; 不预热', self.m("p_road_a"))  # on its step
+        self.assertIn("<h2>untitled <span", self.m("p_doc_untitled"))                                   # no <title>: the file name
+        self.assertIn("找不到 a:ghost", self.m("p_doc_untitled"))
 
     def test_guide_and_entry_status(self):
         g = self.m("guide")
@@ -400,6 +418,14 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   location.hash = '#/p/demo/docs/lr-plan-v1.md'; await wait(500);
   document.querySelector('[data-mark="确认"]').click(); await wait(900);
   out.marked = (document.querySelector('#main .li.on .pill') || {}).textContent || '';
+  const probes = [];   // the figure reports what it could reach, once per load
+  window.addEventListener('message', e => { if (e.data && e.data.figureProbe) probes.push(e.data.figureProbe); });
+  location.hash = '#/p/demo/docs/lr-warmup.html'; await wait(1500);
+  const frame = document.querySelector('#main iframe.figframe');
+  document.querySelector('[data-mark="看过"]').click(); await wait(1200);
+  out.fig_kept = !!frame && frame.isConnected && document.querySelector('#main iframe.figframe') === frame;
+  out.fig_marked = (document.querySelector('#main .li.on .pill') || {}).textContent || '';
+  out.fig_probes = probes;
   location.hash = '#/gpu'; await wait(300);
   out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
   const pre = document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
@@ -426,7 +452,7 @@ class Interactions(unittest.TestCase):
                 f.write(text.replace("</body>", CLICKS.replace("<\\/script>", "</" + "script>"), 1))
             proc, base, log = start_server(repo, tmp)
             try:
-                dom, errors = dump(base + "#/overview", 17000)
+                dom, errors = dump(base + "#/overview", 22000)
             finally:
                 stop_server(proc, log)
         finally:
@@ -449,6 +475,9 @@ class Interactions(unittest.TestCase):
         self.assertIn("等你说「处理回复」", out["answered"])            # answered items are grouped by where they stand
         self.assertEqual(out["renamed"], "演示|演示")                   # header and sidebar use the new name
         self.assertEqual(out["marked"], "已确认")                       # marking a document shows at once
+        self.assertEqual(out["fig_marked"], "看过")                     # a figure is marked the same way
+        self.assertTrue(out["fig_kept"])                                # re-rendering the page keeps the open figure's frame
+        self.assertEqual(out["fig_probes"], [{"ran": True, "parent": "blocked", "storage": "blocked", "fetch": "blocked"}])  # loaded once, isolated
 
 
 if __name__ == "__main__":
