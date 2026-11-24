@@ -231,8 +231,9 @@ def _utc_now():
 def post_answer(body):
     """Append one reply to a to-do or to a 待确认 attempt. -> (http code, response object)"""
     name, tid, answer, text = body.get("project"), body.get("id"), body.get("answer"), body.get("text") or ""
+    mode = body.get("mode")
     if not (isinstance(name, str) and isinstance(tid, str) and 0 < len(tid) <= 200 and isinstance(text, str)
-            and (answer is None or isinstance(answer, str))):
+            and (answer is None or isinstance(answer, str)) and mode in (None, "直接处理")):
         return 400, {"error": "请求格式不对"}
     text = _clean(text, True)
     if len(text) > MAX_REPLY:
@@ -260,6 +261,8 @@ def post_answer(body):
     if answer is not None and answer not in choices:
         return 400, {"error": "选项不在这条待办的选项里"}
     row = {"id": tid, "answer": answer, "text": text, "at": _utc_now(), "by": "console"}
+    if mode and name != projects.SHARED:  # 直接处理: board dispatch starts a session for it within minutes
+        row["mode"] = mode
     err = append_row(name, "answers", row)
     return (503, {"error": err}) if err else (200, {"ok": True, "row": row})
 

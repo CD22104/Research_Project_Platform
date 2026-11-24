@@ -4,6 +4,9 @@
   board check [DIR] [--file PATH] [--hook]
                                     record check; exit 2 with the problems (PostToolUse hook: only the edited file)
   board reconcile [--dry-run]       close runs whose process is gone, move waiting tasks on (cron, every 5 min)
+  board task-start PROJECT TASK     start the session of one task card (tmux task-<project>-<task>, Remote Control)
+  board task-stop PROJECT TASK      stop it
+  board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
 
 The record format is docs/board-format.md. Only `reconcile` writes into project boards, and only two
 things: the status of a run that is recorded as 运行中 but whose process is gone, and the status of
@@ -393,6 +396,178 @@ def hook_check(root):
     return 2
 
 
+# ------------------------------------------------------------------ task sessions and the dispatcher
+MAX_SESSIONS = 4                  # task and reply sessions running at once, all projects together
+CODE_KINDS = ("执行", "调试")       # task kinds that change code: one at a time per project, in a worktree
+STARTABLE = ("待开始", "可以继续", "进行中")
+CLAUDE = os.path.expanduser("~/.local/bin/claude")
+SESSION_RE = re.compile(r"^(task|reply)-([A-Za-z0-9][A-Za-z0-9._-]*)$")
+
+
+class TaskError(Exception):
+    """Why a task session was not started (shown to whoever asked)."""
+
+
+def tmux_sessions(run=subprocess.run):
+    try:
+        p = run(["tmux", "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return p.stdout.split() if p.returncode == 0 else []
+
+
+def task_session_name(project, task):
+    return "task-%s-%s" % (project, task)
+
+
+def read_task(board, task):
+    path = os.path.join(board, "tasks", task + ".md")
+    if not (P.valid_name(task) and os.path.isfile(path)):
+        raise TaskError("没有任务卡 board/tasks/%s.md" % task)
+    text, _ = P.read_text(path)
+    meta, body = P.parse_front_matter(text)
+    return meta, P.split_sections(body)
+
+
+def _git(cwd, *args, run=subprocess.run):
+    p = run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()
+
+
+def task_prompt(project, task, kind, workdir, board):
+    lines = ["做任务 %s（%s）。" % (task, kind or "任务"),
+             "1. 先读任务卡 %s/tasks/%s.md、事实包和项目 CLAUDE.md；把自己的会话名「%s·%s」加进任务卡的 sessions，status 改成「进行中」。" % (board, task, project, task),
+             "2. 只做这张卡写的事；范围外的发现写进交接，不要顺手做。需要用户决定的写进待办，然后把卡改成「等你」。",
+             "3. 训练或评测用 boardrun 启动（--task %s）后，把卡改成「等运行」、写好交接就可以停下，不用守着。" % task,
+             "4. 做完写交接（做了什么 / 证据在哪 / 没做完的 / 下一步 / 要你决定的），改状态，告诉用户结果。"]
+    if workdir != os.path.dirname(board):
+        lines.append("5. 代码在这个 worktree（%s，分支 task/%s）里改和提交；记录一律写到项目主目录的 %s。收尾时先 rebase 到主线、跑测试，"
+                     "没动核心代码且没有冲突就合并回主线并删掉 worktree；动了核心代码或有冲突，把卡改成「等你」并在待办里请用户决定合并。" % (workdir, task, board))
+    return "\n".join(lines)
+
+
+def task_start(root, project, task, run=subprocess.run, model=None):
+    """Start the session of one task card. -> {"session", "dir", "worktree"}; raises TaskError when it must not start."""
+    proj = os.path.join(root, project)
+    board = os.path.join(proj, "board")
+    if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
+        raise TaskError("没有项目 %s" % project)
+    meta, _ = read_task(board, task)
+    if meta.get("status") not in STARTABLE:
+        raise TaskError("任务卡的状态是「%s」，只有 %s 的卡能开工" % (meta.get("status"), " / ".join(STARTABLE)))
+    names = tmux_sessions(run)
+    name = task_session_name(project, task)
+    if name in names:
+        raise TaskError("这张卡的会话已经在运行（tmux %s）；在 App 里点「%s·%s」接着说" % (name, project, task))
+    busy = [n for n in names if SESSION_RE.match(n)]
+    if len(busy) >= MAX_SESSIONS:
+        raise TaskError("已经有 %d 个任务会话在运行（上限 %d）：%s。先等一个结束，或者 board task-stop 停掉一个" % (len(busy), MAX_SESSIONS, "、".join(busy)))
+    code = meta.get("kind") in CODE_KINDS
+    if code:
+        others = []
+        for n in busy:
+            m = re.match(r"^task-%s-(.+)$" % re.escape(project), n)
+            if m:
+                try:
+                    if read_task(board, m.group(1))[0].get("kind") in CODE_KINDS:
+                        others.append(m.group(1))
+                except TaskError:
+                    pass
+        if others:
+            raise TaskError("这个项目已经有改代码的任务在做（%s）；同一个项目同时只做一张改代码的卡" % "、".join(others))
+    workdir, worktree = proj, None
+    if code and P._list(meta.get("scope")):
+        ok, _ = _git(proj, "rev-parse", "--verify", "HEAD", run=run)
+        if ok:
+            worktree = os.path.join(proj, ".worktrees", task)
+            _exclude_worktrees(proj)
+            if not os.path.isdir(worktree):
+                ok, out = _git(proj, "worktree", "add", worktree, "-b", "task/" + task, run=run)
+                if not ok:
+                    ok, out = _git(proj, "worktree", "add", worktree, "task/" + task, run=run)  # the branch exists already
+                if not ok:
+                    raise TaskError("建 worktree 失败：%s" % out[-300:])
+            workdir = worktree
+    prompt = task_prompt(project, task, meta.get("kind"), workdir, board)
+    cmd = [CLAUDE, "--remote-control", "%s·%s" % (project, task)] + (["--model", model] if model else []) + [prompt]
+    shell = "unset ANTHROPIC_API_KEY; exec " + " ".join(_q(x) for x in cmd)
+    p = run(["tmux", "new-session", "-d", "-s", name, "-c", workdir, shell], capture_output=True, text=True, timeout=20)
+    if p.returncode != 0:
+        raise TaskError("tmux 启动失败：%s" % (p.stderr or p.stdout).strip()[-300:])
+    return {"session": name, "dir": workdir, "worktree": worktree, "name": "%s·%s" % (project, task)}
+
+
+def _exclude_worktrees(proj):
+    """Keep .worktrees/ out of git status through .git/info/exclude (local; the tracked .gitignore stays clean)."""
+    path = os.path.join(proj, ".git", "info", "exclude")
+    try:
+        with open(path, encoding="utf-8") as f:
+            if ".worktrees/" in f.read().split():
+                return
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n.worktrees/\n")
+    except OSError:
+        pass
+
+
+def _q(s):
+    return "'" + str(s).replace("'", "'\\''") + "'"
+
+
+def task_stop(project, task, run=subprocess.run):
+    name = task_session_name(project, task)
+    p = run(["tmux", "kill-session", "-t", "=" + name], capture_output=True, text=True, timeout=10)
+    if p.returncode != 0:
+        raise TaskError("没有在运行的会话 %s" % name)
+    return name
+
+
+def dispatch(root, state_path, now, run=subprocess.run, dry_run=False):
+    """Start one headless session per project for replies the user marked 直接处理 and no session has taken yet.
+    A reply is taken once (state_path remembers it); at most MAX_SESSIONS sessions run at once. -> [started]"""
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            taken = json.load(f).get("taken") or {}
+    except (OSError, ValueError):
+        taken = {}
+    names = tmux_sessions(run)
+    running = len([n for n in names if SESSION_RE.match(n)])
+    started = []
+    for name, board in projects_under(root):
+        d = P.scan_project(board)
+        want = [rid for rid in P.unprocessed_replies(d)
+                if (d["answers"][rid].get("mode") == "直接处理") and taken.get("%s/%s" % (name, rid)) != d["answers"][rid].get("at")]
+        if not want or "reply-" + name in names:
+            continue
+        if running >= MAX_SESSIONS:
+            break
+        prompt = ("处理回复：只处理用户在控制台勾了「直接处理」的这几条：%s。按 /shared/ssd/dchen/_shared/BOARD_FORMAT.md 的「处理回复」做："
+                  "每条先在 todos.jsonl 追加一行 state: 已领取，做完写 done 和 result；回复有歧义或和现状冲突时不要猜，"
+                  "写 state: 受阻 和原因，并留一条待办问用户。其他回复不要动。" % "、".join(want))
+        cmd = [CLAUDE, "-p", "--permission-mode", "auto", "--name", "%s·处理回复" % name, prompt]
+        log = os.path.join(os.path.dirname(state_path), "dispatch-%s.log" % name)
+        shell = "unset ANTHROPIC_API_KEY; %s >> %s 2>&1" % (" ".join(_q(x) for x in cmd), _q(log))
+        started.append({"project": name, "replies": want})
+        if dry_run:
+            continue
+        p = run(["tmux", "new-session", "-d", "-s", "reply-" + name, "-c", os.path.dirname(board), shell],
+                capture_output=True, text=True, timeout=20)
+        if p.returncode != 0:
+            started[-1]["error"] = (p.stderr or p.stdout).strip()[-200:]
+            continue
+        running += 1
+        for rid in want:
+            taken["%s/%s" % (name, rid)] = d["answers"][rid].get("at")
+    if not dry_run:
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        write_atomic(state_path, json.dumps({"taken": taken, "at": utc(now)}, ensure_ascii=False))
+    return started
+
+
 # ------------------------------------------------------------------ command line
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="board", description=__doc__.split("\n\n")[0])
@@ -406,7 +581,33 @@ def main(argv=None):
     c.add_argument("--hook", action="store_true", help="read the PostToolUse hook input on stdin; never fail")
     r = sub.add_parser("reconcile", help="close dead runs, move waiting tasks on")
     r.add_argument("--dry-run", action="store_true")
+    ts = sub.add_parser("task-start", help="start the session of one task card")
+    ts.add_argument("project")
+    ts.add_argument("task")
+    ts.add_argument("--model")
+    tp = sub.add_parser("task-stop", help="stop the session of one task card")
+    tp.add_argument("project")
+    tp.add_argument("task")
+    dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理")
+    dp.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd in ("task-start", "task-stop", "dispatch"):
+        cfg = load_config()
+        try:
+            if a.cmd == "task-start":
+                x = task_start(cfg["root"], a.project, a.task, model=a.model)
+                print("已开工：tmux %s，目录 %s%s。在 App 里点「%s」可以接着说。" % (x["session"], x["dir"],
+                      "（worktree，分支 task/%s）" % a.task if x["worktree"] else "", x["name"]))
+            elif a.cmd == "task-stop":
+                print("已停止 %s" % task_stop(a.project, a.task))
+            else:
+                for x in dispatch(cfg["root"], os.path.join(cfg["state_dir"], "dispatch.json"), time.time(), dry_run=a.dry_run):
+                    print("%s %s%s: %s%s" % (utc(time.time()), "(dry run) " if a.dry_run else "", x["project"], "、".join(x["replies"]),
+                                             " 失败：" + x["error"] if x.get("error") else ""))
+        except TaskError as e:
+            print("board: %s" % e, file=sys.stderr)
+            return 1
+        return 0
     if getattr(a, "hook", False):
         try:
             cfg = load_config()

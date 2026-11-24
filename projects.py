@@ -357,7 +357,7 @@ def read_answers(path, limit=20000):
             continue
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             out.pop(row["id"], None)
-            out[row["id"]] = {k: row.get(k) for k in ("id", "answer", "text", "at")}
+            out[row["id"]] = {k: row.get(k) for k in ("id", "answer", "text", "at", "mode")}
     return out
 
 

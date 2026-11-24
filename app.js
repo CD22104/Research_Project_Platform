@@ -7,7 +7,7 @@ const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 // ============================================================ data
 const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
 const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
-  pick: {}, draft: {}, editing: {}, err: {}, renaming: false};                   // replies being written, the rename box
+  pick: {}, draft: {}, editing: {}, err: {}, direct: {}, renaming: false};                   // replies being written, the rename box
 // the console's only writes: replies (board/answers.jsonl) and display names; the server checks they come from this page
 const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Board-Write': '1'},
   body: JSON.stringify(body)}).then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status); return d; });
@@ -308,7 +308,8 @@ function replyBox(project, id, choices, recommend, answer, now, progress) {
   const key = project + '|' + id;
   if (answer && !ui.editing[key]) {
     const stage = progress && progress.state === '已领取' ? '<span class="pill t-run">会话已领取，正在处理</span>'
-      : progress && progress.state === '受阻' ? `<span class="pill t-bad">受阻</span> ${esc(progress.result || '')}` : '';
+      : progress && progress.state === '受阻' ? `<span class="pill t-bad">受阻</span> ${esc(progress.result || '')}`
+      : answer.mode === '直接处理' ? '<span class="pill t-run" title="a100 上的派活程序每 5 分钟看一次，会起一个会话专门处理这条">几分钟内自动处理</span>' : '';
     return `<div class="ans"><span class="pill t-run">已回复</span> ${answer.answer ? `<b>${esc(answer.answer)}</b>` : ''}` +
       `${answer.text ? `<span class="atext">${answer.answer ? '　' : ''}${esc(answer.text)}</span>` : ''}${stage ? ' ' + stage : ''}
       <div class="small">${isoAgo(answer.at, now)}回复 · ${stage ? '' : '等会话处理：在这个项目的会话里说「处理回复」 · '}<a href="#" data-edit="${esc(key)}">改回复</a></div></div>`;
@@ -320,6 +321,7 @@ function replyBox(project, id, choices, recommend, answer, now, progress) {
       `${o === recommend ? '<span class="rec">建议</span>' : ''}</button>`).join('')}</div>` : ''}
     <textarea rows="2" data-draft="${esc(key)}" placeholder="${choices.length ? '补充说明（可选）' : '写下你的回复'}">${esc(draft)}</textarea>
     <div class="ract"><button class="send" data-send="${esc(key)}">提交回复</button>
+      ${project !== '_shared' ? `<label class="direct" title="不勾：等你在项目会话里说「处理回复」。勾上：几分钟内由一个会话自动处理这条，结果写回待办"><input type="checkbox" data-direct="${esc(key)}"${ui.direct[key] ? ' checked' : ''}> 直接处理</label>` : ''}
       ${answer ? `<a href="#" data-cancel="${esc(key)}">取消</a>` : ''}<span class="rerr">${esc(ui.err[key] || '')}</span></div></div>`;
 }
 function todoItem(t, project, now) {
@@ -1376,8 +1378,9 @@ async function sendReply(key) {
   const btn = box.querySelector('.send');
   btn.disabled = true; btn.textContent = '提交中…';
   try {
-    await postJSON('/api/answer', {project: box.dataset.p, id: box.dataset.id, answer, text});
-    delete ui.pick[key]; delete ui.draft[key]; delete ui.editing[key]; delete ui.err[key];
+    const direct = !!(box.querySelector('[data-direct]') || {}).checked;
+    await postJSON('/api/answer', {project: box.dataset.p, id: box.dataset.id, answer, text, ...(direct ? {mode: '直接处理'} : {})});
+    delete ui.pick[key]; delete ui.draft[key]; delete ui.editing[key]; delete ui.err[key]; delete ui.direct[key];
     await refreshAfterWrite(box.dataset.p);
   } catch (err) {
     ui.err[key] = err.message; btn.disabled = false; btn.textContent = '提交回复';
@@ -1400,6 +1403,8 @@ async function saveName(name, value) {
 document.addEventListener('input', e => {
   const ta = e.target.closest('textarea[data-draft]');
   if (ta) ui.draft[ta.dataset.draft] = ta.value;
+  const dc = e.target.closest('input[data-direct]');
+  if (dc) ui.direct[dc.dataset.direct] = dc.checked;
 });
 document.addEventListener('keydown', e => {
   if (e.target.id === 'rename-input' && e.key === 'Enter') { e.preventDefault(); saveName(e.target.dataset.p, e.target.value); }
