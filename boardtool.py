@@ -1,5 +1,8 @@
 """board: command-line tools around the project boards (run on xtraa100; standard library only).
 
+  board brief [DIR] [--hook]        the facts pack of the project at or above DIR (SessionStart hook)
+  board check [DIR] [--file PATH] [--hook]
+                                    record check; exit 2 with the problems (PostToolUse hook: only the edited file)
   board reconcile [--dry-run]       close runs whose process is gone, move waiting tasks on (cron, every 5 min)
 
 The record format is docs/board-format.md. Only `reconcile` writes into project boards, and only two
@@ -213,13 +216,246 @@ def reconcile(root, now, probe, state_path=None, dry_run=False):
     return changes
 
 
+# ------------------------------------------------------------------ facts pack
+def find_project(start, root=None):
+    """The project directory at or above start (it has board/project.json), or None.
+    With root, only projects inside root count (the fixtures of this repository are not projects)."""
+    here = os.path.realpath(start)
+    if os.path.isfile(here):
+        here = os.path.dirname(here)
+    root = os.path.realpath(root) if root else None
+    while True:
+        if os.path.isfile(os.path.join(here, "board", "project.json")):
+            if root is None or here.startswith(root + os.sep):
+                return here
+            return None
+        up = os.path.dirname(here)
+        if up == here:
+            return None
+        here = up
+
+
+def _first_line(text, n=120):
+    for line in (text or "").split("\n"):
+        line = line.strip().lstrip("-*").strip().replace("**", "")
+        if line and not line.startswith("|") and not line.startswith("#"):
+            return line[:n] + ("…" if len(line) > n else "")
+    return ""
+
+
+def _handoff_next(sections):
+    for line in (sections.get("交接") or "").split("\n"):
+        m = re.match(r"^\s*[-*]?\s*下一步\s*[:：]\s*(.+)$", line)
+        if m:
+            return m.group(1).strip()[:120]
+    return ""
+
+
+def unprocessed_replies(d):
+    """Replies in answers.jsonl that no session has acted on yet: [id]."""
+    todos = {str(t.get("id")): t for t in d.get("todos") or []}
+    attempts = {a["meta"].get("id"): a for a in d.get("attempts") or [] if isinstance(a["meta"].get("id"), str)}
+    decisions = {r["meta"].get("id"): r for r in d.get("decisions") or [] if isinstance(r["meta"].get("id"), str)}
+    out = []
+    for rid in d.get("answers") or {}:
+        if rid.startswith("a:"):
+            a = attempts.get(rid[2:])
+            if a and a["meta"].get("status") == "待确认":
+                out.append(rid)
+        elif rid.startswith("d:"):
+            r = decisions.get(rid[2:])
+            if r and r["meta"].get("status") in (None, "候选"):
+                out.append(rid)
+        elif rid in todos and not todos[rid].get("done"):
+            out.append(rid)
+    return out
+
+
+def brief(project_dir, max_chars=6000, now=None):
+    """The facts pack: what a new session (or one just compacted) must know about the project, built
+    from board/ so it never disagrees with the console. Plain text, at most max_chars characters."""
+    now = time.time() if now is None else now
+    board = os.path.join(project_dir, "board")
+    d = P.scan_project(board)
+    p = d.get("project") or {}
+    name = os.path.basename(os.path.normpath(project_dir))
+    states = P.decision_states(d.get("decisions") or [], d.get("answers") or {})
+    head = ["【事实包】%s（%s）· board brief 生成于 %s。状态以 board/ 为准，这里是摘要；控制台上看得到同样的内容。"
+            % (p.get("title") or name, name, utc(now)),
+            "状态：%s；当前版本：%s。研究问题：%s" % (p.get("status") or "未写", p.get("current_version") or "未定",
+                                          p.get("question") or "未写")]
+    sections = []
+
+    rules = ""
+    try:
+        with open(os.path.join(project_dir, "CLAUDE.md"), encoding="utf-8") as f:
+            rules = P.split_sections(f.read()).get("长期约束", "")
+    except OSError:
+        pass
+    sections.append(("项目规则", [rules.strip()] if rules.strip() else
+                     ["见项目 CLAUDE.md（在项目目录里开会话时会自动读入；不在项目目录时先读它）。"]))
+
+    adopted = []
+    for r in d.get("decisions") or []:
+        i = r["meta"].get("id")
+        if states.get(i) == "采纳":
+            adopted.append("- [%s] %s：%s" % (i, r["meta"].get("title") or i, _first_line((r.get("sections") or {}).get("决定"))))
+    sections.append(("已采纳的决定（照此执行；要改先问用户）", adopted or ["（还没有）"]))
+
+    tasks = []
+    for t in d.get("tasks") or []:
+        m = t["meta"]
+        if m.get("status") in P.TASK_OPEN:
+            nxt = _handoff_next(t.get("sections") or {})
+            tasks.append("- [%s] %s · %s：%s%s" % (m.get("id"), m.get("status"), m.get("kind") or "?", m.get("title") or "",
+                                                 ("。下一步：" + nxt) if nxt else ""))
+    sections.append(("进行中的任务（tasks/）", tasks or ["（没有）"]))
+
+    runs = []
+    for r in d.get("runs") or []:
+        rec = r.get("run") or {}
+        if rec.get("status") == "运行中":
+            st = P.run_state(rec, r.get("heartbeat"), None, now)
+            runs.append("- %s @%s 卡 %s（%s%s）：%s" % (rec.get("id") or r["id"], rec.get("server") or "?", rec.get("gpus"),
+                                                   rec.get("attempt") or "-", (" / 任务 " + rec["task"]) if rec.get("task") else "",
+                                                   "心跳正常" if st == "运行中" else "心跳停了，可能已结束"))
+    sections.append(("在跑的运行", runs or ["（没有）"]))
+
+    waiting = []
+    cands = [r["meta"]["id"] for r in d.get("decisions") or [] if states.get(r["meta"].get("id")) == "候选"]
+    if cands:
+        waiting.append("- 候选决定，等用户在控制台采纳：" + "、".join(cands))
+    conf = [a["meta"].get("id") for a in d.get("attempts") or [] if a["meta"].get("status") == "待确认"]
+    if conf:
+        waiting.append("- 结论等用户确认的尝试：" + "、".join(str(x) for x in conf))
+    todos = [t for t in d.get("todos") or [] if not t.get("done")]
+    if todos:
+        waiting.append("- 未完成的待办 %d 条：%s" % (len(todos), "；".join("%s（%s）" % (t["id"], str(t.get("text"))[:40]) for t in todos[:8])
+                                                 + ("……" if len(todos) > 8 else "")))
+    replies = unprocessed_replies(d)
+    if replies:
+        waiting.append("- 未处理的回复 %d 条（%s）：开场提一句；用户说「处理回复」才处理。" % (len(replies), "、".join(replies)))
+    sections.append(("等用户的", waiting or ["（没有）"]))
+
+    recent = []
+    for a in sorted(d.get("attempts") or [], key=lambda a: str(a["meta"].get("date") or ""), reverse=True):
+        so = ((a.get("onepager") or {}).get("所以") or {}).get("text") or _first_line((a.get("sections") or {}).get("结论和原因"))
+        if so:
+            recent.append("- [%s] %s：%s" % (a["meta"].get("id"), a["meta"].get("status") or "", so))
+        if len(recent) >= 3:
+            break
+    sections.append(("最近的结论", recent or ["（还没有）"]))
+
+    sections.append(("提醒", [
+        "- 用户在对话里说的长期有效的话（要求、偏好、定下的做法），记成 board/decisions/ 里的「候选」，告诉用户「已记下，等你在控制台采纳」。",
+        "- 一件具体的事开工前写任务卡（board/tasks/），做完写交接；实验最上面写「一页纸」。格式：/shared/ssd/dchen/_shared/BOARD_FORMAT.md。",
+        "- 改 board/ 里的文件后，记录检查有问题会当场提示，照提示改掉。"]))
+
+    def render(secs):
+        out = list(head)
+        for title, items in secs:
+            out.append("")
+            out.append("## " + title)
+            out.extend(items)
+        return "\n".join(out)
+
+    text = render(sections)
+    order = ["最近的结论", "等用户的", "进行中的任务（tasks/）", "已采纳的决定（照此执行；要改先问用户）", "在跑的运行", "项目规则"]
+    for title in order:  # shorten the least important lists first
+        while len(text) > max_chars:
+            sec = next(s for s in sections if s[0] == title)
+            if len(sec[1]) <= 1:
+                break
+            sec[1].pop()
+            if not sec[1][-1].endswith("（更多见控制台）"):
+                sec[1][-1] += "（更多见控制台）"
+            text = render(sections)
+    if len(text) > max_chars:
+        text = text[:max_chars - 8] + "…（已截断）"
+    return text
+
+
+# ------------------------------------------------------------------ record check
+def check(project_dir, only_file=None):
+    """Record-check problems of a project: [{"where", "what"}]. With only_file (a path inside board/),
+    only that file's problems, unreadable-file errors included."""
+    board = os.path.join(project_dir, "board")
+    d = P.scan_project(board)
+    out = list(d.get("checks") or []) + [{"where": e.get("file"), "what": e.get("error")} for e in d.get("errors") or []]
+    if only_file is not None:
+        rel = os.path.relpath(os.path.realpath(only_file), os.path.realpath(board))
+        out = [c for c in out if c["where"] == rel]
+    return out
+
+
+def _hook_input():
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        return {}
+
+
+def hook_brief(root):
+    """SessionStart: print the facts pack when the session starts inside a project (nothing otherwise)."""
+    data = _hook_input()
+    proj = find_project(data.get("cwd") or os.getcwd(), root)
+    if proj:
+        print(brief(proj))
+    return 0
+
+
+def hook_check(root):
+    """PostToolUse (Write/Edit): when the edited file is in a project's board/, report its problems to the
+    session (exit 2 puts stderr in front of Claude); silent otherwise."""
+    data = _hook_input()
+    path = (data.get("tool_input") or {}).get("file_path") or ""
+    if not path or "/board/" not in path.replace(os.sep, "/"):
+        return 0
+    proj = find_project(path, root)
+    if not proj or not os.path.realpath(path).startswith(os.path.realpath(os.path.join(proj, "board")) + os.sep):
+        return 0
+    probs = check(proj, path)
+    if not probs:
+        return 0
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(proj))
+    print("记录检查：%s 有 %d 个问题，请照格式（/shared/ssd/dchen/_shared/BOARD_FORMAT.md）改掉：\n%s"
+          % (rel, len(probs), "\n".join("- " + c["what"] for c in probs[:20])), file=sys.stderr)
+    return 2
+
+
 # ------------------------------------------------------------------ command line
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="board", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("brief", help="facts pack of a project")
+    b.add_argument("dir", nargs="?", default=".")
+    b.add_argument("--hook", action="store_true", help="read the SessionStart hook input on stdin; never fail")
+    c = sub.add_parser("check", help="record check of a project")
+    c.add_argument("dir", nargs="?", default=".")
+    c.add_argument("--file")
+    c.add_argument("--hook", action="store_true", help="read the PostToolUse hook input on stdin; never fail")
     r = sub.add_parser("reconcile", help="close dead runs, move waiting tasks on")
     r.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
+    if getattr(a, "hook", False):
+        try:
+            cfg = load_config()
+            return hook_brief(cfg["root"]) if a.cmd == "brief" else hook_check(cfg["root"])
+        except Exception:  # a hook must never get in the way of a session
+            return 0
+    if a.cmd in ("brief", "check"):
+        proj = find_project(a.dir)
+        if not proj:
+            print("board: no board/project.json at or above %s" % os.path.abspath(a.dir), file=sys.stderr)
+            return 1
+        if a.cmd == "brief":
+            print(brief(proj))
+            return 0
+        probs = check(proj, a.file)
+        for x in probs:
+            print("%s: %s" % (x["where"], x["what"]))
+        return 2 if probs else 0
     if a.cmd == "reconcile":
         cfg = load_config()
         changes = reconcile(cfg["root"], time.time(), make_probe(cfg["servers"]),
