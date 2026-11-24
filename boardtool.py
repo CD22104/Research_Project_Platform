@@ -392,9 +392,9 @@ def check(project_dir, only_file=None):
     board = os.path.join(project_dir, "board")
     d = P.scan_project(board)
     out = list(d.get("checks") or []) + [{"where": e.get("file"), "what": e.get("error")} for e in d.get("errors") or []]
-    if only_file is not None:
+    if only_file is not None:  # a file's own problems, and those of its rows ("papers.jsonl · <id>")
         rel = os.path.relpath(os.path.realpath(only_file), os.path.realpath(board))
-        out = [c for c in out if c["where"] == rel]
+        out = [c for c in out if c["where"] == rel or str(c["where"]).startswith(rel + " · ")]
     return out
 
 
@@ -429,8 +429,9 @@ def hook_check(root):
     if not probs:
         return 0
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(proj))
+    row = lambda c: str(c["where"]).partition(" · ")[2]  # which row of the file, e.g. the paper's id
     print("记录检查：%s 有 %d 个问题，请照格式（/shared/ssd/dchen/_shared/BOARD_FORMAT.md）改掉：\n%s"
-          % (rel, len(probs), "\n".join("- " + c["what"] for c in probs[:20])), file=sys.stderr)
+          % (rel, len(probs), "\n".join("- " + (row(c) + "：" if row(c) else "") + c["what"] for c in probs[:20])), file=sys.stderr)
     return 2
 
 

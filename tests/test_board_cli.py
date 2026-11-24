@@ -127,6 +127,17 @@ class Hooks(Base):
         only = T.check(self.proj, os.path.join(self.proj, "board", "tasks", "broken-task.md"))
         self.assertEqual({c["where"] for c in only}, {"tasks/broken-task.md"})
 
+    def test_post_edit_check_of_papers(self):
+        papers = os.path.join(self.proj, "board", "papers.jsonl")
+        self.assertEqual(self.hook("check", {"tool_name": "Edit", "tool_input": {"file_path": papers}})[:3], (0, "", ""))
+        with open(papers, "a", encoding="utf-8") as f:   # a paper's problems are filed as "papers.jsonl · <id>"
+            f.write(json.dumps({"id": "nowhy", "title": "T", "url": "https://x.org/1"}) + "\nnot json\n")
+        code, _, err, _ = self.hook("check", {"tool_name": "Write", "tool_input": {"file_path": papers}})
+        self.assertEqual(code, 2)
+        self.assertIn("记录检查：board/papers.jsonl 有 2 个问题", err)
+        self.assertIn("- nowhy：缺 why：一句话写为什么读、和本项目什么关系", err)
+        self.assertIn("- 1 行无法解析或缺少 id", err)
+
 
 if __name__ == "__main__":
     unittest.main()
