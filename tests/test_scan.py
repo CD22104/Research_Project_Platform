@@ -1,5 +1,6 @@
 """Scanner, cache and file-lookup tests for projects.py. Run: python3 -m unittest -v"""
 import errno
+import json
 import os
 import shutil
 import sys
@@ -76,7 +77,7 @@ class Scan(FixtureCase):
         self.assertIn("<script>", d["plan"]["body"])       # backend returns raw text; frontend escapes
         self.assertIn("<script>", d["example"]["walkthrough"]["body"])
         self.assertEqual(len(d["example"]["probe_head"]), 2)
-        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method", "tasks", "decisions", "figures"})
+        self.assertEqual(set(d["updated"]), {"project", "plan", "versions", "tracks", "attempts", "runs", "examples", "setup", "todos", "docs", "method", "tasks", "decisions", "figures", "papers"})
 
     def test_runs(self):
         d = self.demo()
@@ -387,6 +388,68 @@ class Figures(FixtureCase):
         d = self.demo()
         self.assertNotIn("figures/via-link.html", [f["file"] for f in d["figures"]])   # /files/ would refuse it too
         self.assertIn({"file": "figures/via-link.html", "error": "指向 figures/ 之外的链接，控制台不显示"}, d["errors"])
+
+
+class Papers(FixtureCase):
+    """board/papers.jsonl: the project's reading list, checked; 读过 comes from marks.jsonl."""
+
+    def append(self, project, which, rows):
+        with open(os.path.join(self.root, project, "board", which), "a", encoding="utf-8") as f:
+            f.write("".join((r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)) + "\n" for r in rows))
+
+    def test_scanned_and_counted(self):
+        d = self.demo()
+        self.assertEqual([p["id"] for p in d["papers"]], ["goyal-large-batch", "radam", "focal-loss", "mixup", "f-score", "sgdr"])
+        self.assertEqual(d["papers"][1]["key"], "arxiv:1908.03265")
+        self.assertEqual(d["papers"][4]["key"], "doi:10.1007/978-3-540-31865-1_25")
+        self.assertEqual(set(d["paper_marks"]), {"focal-loss"})            # goyal's mark was cleared
+        self.assertEqual(d["marks"], {})                                     # paper rows are not document marks
+        self.assertEqual(P.paper_counts(d), {"n": 6, "read": 1, "must_unread": 2})
+        self.assertEqual(P.summary(d)["papers"], {"n": 6, "read": 1, "must_unread": 2})
+        self.assertIn("papers", d["updated"])
+        self.assertFalse([c for c in d["checks"] if c["where"].startswith("papers.jsonl")])
+        self.append("demo", "marks.jsonl", [{"paper": "radam", "mark": "读过"},
+                                            {"paper": "old-survey", "mark": "读过"}])   # dropped from the list: not counted
+        self.assertEqual(P.paper_counts(self.demo()), {"n": 6, "read": 2, "must_unread": 1})
+        e = P.empty_project("x")
+        self.assertEqual((e["papers"], e["paper_marks"], P.paper_counts(e)), ([], {}, {"n": 0, "read": 0, "must_unread": 0}))
+
+    def test_checks(self):
+        self.append("demo", "papers.jsonl", [
+            {"id": "no-why", "title": "T", "url": "https://x.org/1"},
+            {"id": "js", "title": "T", "url": "javascript:alert(1)", "why": "w"},
+            {"id": "no-url", "title": "T", "why": "w"},
+            {"id": "pri", "title": "T", "url": "https://x.org/2", "why": "w", "priority": "重要"},
+            {"id": "ghost", "title": "T", "url": "https://x.org/3", "why": "w", "about": "a:nope"},
+            {"id": "a b/c", "title": "T", "url": "https://x.org/4", "why": "w"},
+            {"id": "no-title", "url": "https://x.org/5", "why": " "},
+            "not json"])
+        d = self.demo()
+        got = {(c["where"], c["what"]) for c in d["checks"] if c["where"].startswith("papers.jsonl")}
+        self.assertEqual(got, {
+            ("papers.jsonl · no-why", "缺 why：一句话写为什么读、和本项目什么关系"),
+            ("papers.jsonl · js", "url 要是 http(s) 链接：写 arXiv 摘要页、DOI 或论文主页"),
+            ("papers.jsonl · no-url", "缺 url：写 arXiv 摘要页、DOI 或论文主页"),
+            ("papers.jsonl · pri", "priority「重要」不认识（必读 / 选读）"),
+            ("papers.jsonl · ghost", "about 「a:nope」指向的记录不存在"),
+            ("papers.jsonl · a b/c", "id「a b/c」只能用英文字母、数字和 . _ -（会出现在控制台的链接里）"),
+            ("papers.jsonl · no-title", "缺 title"),
+            ("papers.jsonl · no-title", "缺 why：一句话写为什么读、和本项目什么关系")})   # no `checked` is not a problem
+        self.assertIn({"file": "papers.jsonl", "error": "1 行无法解析或缺少 id"}, d["errors"])
+
+    def test_read_elsewhere(self):
+        self.append("minimal", "papers.jsonl", [
+            {"id": "liu-radam", "title": "RAdam", "url": "http://arxiv.org/pdf/1908.03265.pdf", "why": "w"},   # demo's radam
+            {"id": "focal", "title": "Focal", "url": "https://arxiv.org/abs/1708.02002v3", "why": "w"},          # demo's focal-loss
+            {"id": "other", "title": "O", "url": "https://x.org/o", "why": "w"}])
+        self.append("minimal", "marks.jsonl", [{"paper": "liu-radam", "mark": "读过"}, {"paper": "other", "mark": "读过"}])
+        snap = P.scan_root(self.root)
+        self.assertEqual(P.papers_read_elsewhere(snap, "demo"), {"radam": ["minimal"]})
+        self.assertEqual(P.papers_read_elsewhere(snap, "minimal"), {"focal": ["demo"]})   # its own marks are not listed
+        self.assertEqual(P.papers_read_elsewhere(snap, "broken"), {})
+        self.assertEqual(P.papers_read_elsewhere(snap, "nope"), {})
+        self.append("minimal", "marks.jsonl", [{"paper": "liu-radam", "mark": None}])
+        self.assertEqual(P.papers_read_elsewhere(P.scan_root(self.root), "demo"), {})
 
 
 class SafeFile(FixtureCase):

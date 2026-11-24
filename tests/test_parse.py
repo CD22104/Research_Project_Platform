@@ -107,5 +107,57 @@ class Text(unittest.TestCase):
         self.assertTrue(text.startswith("�"))
 
 
+class Papers(unittest.TestCase):
+    """papers.jsonl (written by sessions) and the 读过 rows of marks.jsonl (written by the console)."""
+
+    def write(self, rows):
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("".join((r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)) + "\n" for r in rows))
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_last_row_of_an_id_wins_and_dropped_takes_it_off(self):
+        path = self.write([
+            {"id": "a", "title": "A", "url": "https://arxiv.org/abs/2610.27548", "why": "w", "venue": "NeurIPS"},
+            {"id": "b", "title": "B", "url": "https://x.org/b", "why": "w"},
+            {"id": "a", "title": "A2", "url": "https://arxiv.org/abs/2610.27548v2", "why": "w2"},  # replaces a as a whole
+            {"id": "b", "dropped": True},
+            {"id": "c", "title": "C", "url": "https://x.org/c", "why": "w"},
+            {"id": "c", "dropped": True},
+            {"id": "c", "title": "C again", "url": "https://x.org/c", "why": "w"},                # back on the list
+            "not json", {"title": "no id"}, "", [1, 2], {"id": 2610.27548, "title": "number id"}])
+        r = P.read_papers(path)
+        self.assertEqual([(p["id"], p["title"]) for p in r["items"]], [("a", "A2"), ("c", "C again")])
+        self.assertIsNone(r["items"][0]["venue"])                       # only in the replaced row
+        self.assertEqual(r["items"][0]["key"], "arxiv:2610.27548")
+        self.assertEqual(set(r["items"][0]), set(P.PAPER_KEYS) | {"key"})
+        self.assertEqual(r["bad"], 4)                                   # bad json, no id, not an object, id not a string
+
+    def test_paper_key(self):
+        K = P.paper_key
+        self.assertEqual(K("https://arxiv.org/abs/2610.27548v2"), "arxiv:2610.27548")
+        self.assertEqual(K("http://www.arxiv.org/pdf/2610.27548.pdf"), "arxiv:2610.27548")
+        self.assertEqual(K("https://arxiv.org/abs/hep-th/9901001v1"), "arxiv:hep-th/9901001")
+        self.assertEqual(K("https://doi.org/10.1145/ABC.1"), "doi:10.1145/abc.1")
+        self.assertEqual(K("https://dx.doi.org/10.1145/abc.1/"), "doi:10.1145/abc.1")
+        self.assertEqual(K("https://openreview.net/forum?id=Xy/"), "openreview.net/forum?id=Xy")
+        self.assertEqual(K("HTTPS://WWW.Example.org/Paper/#sec2"), "example.org/Paper")
+        for bad in ("javascript:alert(1)", "ftp://x.org/a", "https://", "arxiv.org/abs/2610.27548", None, 42):
+            with self.subTest(url=bad):
+                self.assertIsNone(K(bad))
+
+    def test_marks_of_papers_and_documents_are_apart(self):
+        path = self.write([
+            {"file": "docs/a.md", "mark": "看过", "at": "t1", "mtime": 1.0},
+            {"paper": "a", "mark": "读过", "at": "t2", "by": "console"},
+            {"paper": "b", "mark": "读过", "at": "t3"},
+            {"paper": "b", "mark": None, "at": "t4"},                       # cleared
+            {"paper": "c", "mark": "看过", "at": "t5"},                     # a paper is only 读过
+            {"file": "docs/b.md", "mark": "确认", "at": "t6", "mtime": 2.0}])
+        self.assertEqual(set(P.read_marks(path)), {"docs/a.md", "docs/b.md"})
+        self.assertEqual(P.read_paper_marks(path), {"a": {"paper": "a", "mark": "读过", "at": "t2"}})
+
+
 if __name__ == "__main__":
     unittest.main()

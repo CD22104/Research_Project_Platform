@@ -327,9 +327,10 @@ class _Board:
             return None
         return st
 
-    def cached(self, rel, st, fn, default=None):
-        """fn(path), reusing the previous scan's result if size and mtime are unchanged."""
-        key, sig = self.path(rel), (st.st_mtime_ns, st.st_size)
+    def cached(self, rel, st, fn, default=None, tag=""):
+        """fn(path), reusing the previous scan's result if size and mtime are unchanged.
+        tag tells apart two readings of the same file (marks.jsonl: documents and papers)."""
+        key, sig = self.path(rel) + tag, (st.st_mtime_ns, st.st_size)
         hit = self.memo.get(key)
         if hit is not None and hit[0] == sig:
             self.new_memo[key] = hit
@@ -337,7 +338,7 @@ class _Board:
                 self.errors.append(hit[2])
             return hit[1]
         try:
-            val, err = fn(key), None
+            val, err = fn(self.path(rel)), None
         except MISSING:
             return default
         except OSError:
@@ -448,6 +449,106 @@ def read_todos(path, limit=2000):
     return {"items": list(items.values()), "bad": bad}
 
 
+# ---------------------------------------------------------------- papers (reading list)
+PAPER_KEYS = ("id", "title", "url", "why", "authors", "year", "venue", "about",
+              "priority", "added", "by", "checked", "summary")
+PAPER_PRIORITY = ("必读", "选读")
+PAPER_MARKS = ("读过",)  # what the user can tick a paper as in the console
+_ARXIV = re.compile(r"^arxiv\.org/(?:abs|pdf|html)/(\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?/\d{7})(?:v\d+)?(?:\.pdf)?$", re.I)
+_DOI = re.compile(r"^(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
+
+
+def paper_key(url):
+    """Identity of a paper across projects: "arxiv:2610.27548" (version dropped), "doi:<lower case>",
+    else the url without scheme, "www.", "#..." and a trailing "/". None unless http(s)."""
+    if not isinstance(url, str):
+        return None
+    m = re.match(r"^\s*https?://([^/?#]+)([^#]*)", url, re.I)
+    if not m:
+        return None
+    host, rest = m.group(1).lower(), m.group(2).strip().rstrip("/")
+    if host.startswith("www."):
+        host = host[4:]
+    u = host + rest
+    a = _ARXIV.match(u)
+    if a:
+        return "arxiv:" + a.group(1).lower()
+    d = _DOI.match(u)
+    if d:
+        return "doi:" + d.group(1).lower()
+    return u
+
+
+def read_papers(path, limit=5000):
+    """papers.jsonl -> {"items": [...], "bad": n}. Sessions append rows; the last row of an id wins as
+    a whole (like todos.jsonl), and a last row with "dropped": true takes the paper off the list.
+    A paper keeps the place of its first row. Each item: PAPER_KEYS plus "key" (paper_key of its url)."""
+    items, bad = {}, 0
+    for i, line in enumerate(_complete_lines(path)):
+        if i >= limit:
+            break
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"].strip():
+            bad += 1
+            continue
+        if row.get("dropped") is True:
+            items.pop(row["id"], None)
+            continue
+        p = {k: row.get(k) for k in PAPER_KEYS}
+        p["key"] = paper_key(p["url"])
+        items[row["id"]] = p
+    return {"items": list(items.values()), "bad": bad}
+
+
+def read_paper_marks(path, limit=20000):
+    """The rows of marks.jsonl that carry "paper" -> {paper id: latest row}. Only the console writes
+    them; the last row of an id wins and "mark": null (or anything but 读过) clears the tick.
+    read_marks (documents) ignores these rows, and this ignores the "file" rows."""
+    out = {}
+    for i, line in enumerate(_complete_lines(path)):
+        if i >= limit:
+            break
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("paper"), str):
+            out.pop(row["paper"], None)
+            if row.get("mark") in PAPER_MARKS:
+                out[row["paper"]] = {k: row.get(k) for k in ("paper", "mark", "at")}
+    return out
+
+
+def paper_counts(data):
+    """{"n": papers on the list, "read": ticked 读过, "must_unread": 必读 not yet ticked}."""
+    papers, marks = data.get("papers") or [], data.get("paper_marks") or {}
+    read = [p for p in papers if p["id"] in marks]
+    return {"n": len(papers), "read": len(read),
+            "must_unread": sum(1 for p in papers if p.get("priority") == "必读" and p["id"] not in marks)}
+
+
+def papers_read_elsewhere(snap, name):
+    """{paper id: [other projects]}: papers of project `name` that another project in `snap`
+    has ticked 读过 (the same paper by paper_key). Shown as a hint; it does not tick the paper here."""
+    mine = [p for p in (snap.get(name) or {}).get("papers") or [] if p.get("key")]
+    want = {p["key"] for p in mine}
+    seen = {}
+    for other in sorted(snap):
+        if other == name or not want:
+            continue
+        marks = snap[other].get("paper_marks") or {}
+        for p in snap[other].get("papers") or []:
+            if p.get("key") in want and p["id"] in marks and other not in seen.setdefault(p["key"], []):
+                seen[p["key"]].append(other)
+    return {p["id"]: seen[p["key"]] for p in mine if seen.get(p["key"])}
+
+
 def scan_project(board, memo=None, new_memo=None):
     """Parse one project's board/ dir. Raises only OSError (I/O trouble)."""
     b = _Board(board, memo if memo is not None else {}, new_memo if new_memo is not None else {})
@@ -553,10 +654,18 @@ def scan_project(board, memo=None, new_memo=None):
     if st:
         bump("todos", st.st_mtime)
         answers = b.cached("answers.jsonl", st, read_answers, {}) or {}
-    marks = {}
+    marks, paper_marks = {}, {}
     st = b.stat("marks.jsonl")
     if st:
         marks = b.cached("marks.jsonl", st, read_marks, {}) or {}
+        paper_marks = b.cached("marks.jsonl", st, read_paper_marks, {}, tag="#papers") or {}
+    papers = {"items": [], "bad": 0}
+    st = b.stat("papers.jsonl")
+    if st:
+        bump("papers", st.st_mtime)
+        papers = b.cached("papers.jsonl", st, read_papers, papers) or papers
+        if papers["bad"]:
+            b.errors.append({"file": "papers.jsonl", "error": "%d 行无法解析或缺少 id" % papers["bad"]})
 
     # general documents: board/plan.md is above; board/docs/*.md and two fixed files in the project root
     docs = []
@@ -584,7 +693,7 @@ def scan_project(board, memo=None, new_memo=None):
 
     out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
            "todos": todos["items"], "answers": answers, "marks": marks, "docs": docs, "figures": figures,
-           "updated": updated, "errors": b.errors}
+           "papers": papers["items"], "paper_marks": paper_marks, "updated": updated, "errors": b.errors}
     out.update(records)
     try:
         out["checks"] = check_project(out)
@@ -835,6 +944,28 @@ def check_project(d, limit=200):
             add(f["file"], "文件有 %.1f MB，超过 %d MB，控制台不显示：数据抽样或少画几张再放进来"
                 % (f["size"] / 1024 / 1024, MAX_FILE_BYTES // 1024 // 1024))
 
+    def blank(x):
+        return not (isinstance(x, str) and x.strip())
+
+    for p in d.get("papers") or []:
+        where = "papers.jsonl · " + p["id"]
+        if not NAME_RE.match(p["id"]):
+            add(where, "id「%s」只能用英文字母、数字和 . _ -（会出现在控制台的链接里）" % p["id"])
+        if blank(p.get("title")):
+            add(where, "缺 title")
+        if blank(p.get("url")):
+            add(where, "缺 url：写 arXiv 摘要页、DOI 或论文主页")
+        elif not p.get("key"):
+            add(where, "url 要是 http(s) 链接：写 arXiv 摘要页、DOI 或论文主页")
+        if blank(p.get("why")):
+            add(where, "缺 why：一句话写为什么读、和本项目什么关系")
+        if p.get("priority") is not None and p["priority"] not in PAPER_PRIORITY:
+            add(where, "priority「%s」不认识（%s）" % (p["priority"], " / ".join(PAPER_PRIORITY)))
+        if p.get("about"):
+            q = ref_problem(p["about"], d)
+            if q:
+                add(where, "about " + q)
+
     h = ((d.get("project") or {}).get("display") or {}).get("headline")
     if isinstance(h, dict) and h.get("group") and h.get("metric"):
         seen = any(isinstance((r["run"].get("metrics") or {}).get(h["group"]), dict)
@@ -875,7 +1006,8 @@ def scan_root(root, prev=None, memo=None, new_memo=None, log=None):
 def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [], "method": [],
             "tasks": [], "decisions": [], "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
-            "todos": [], "answers": {}, "marks": {}, "docs": [], "figures": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+            "todos": [], "answers": {}, "marks": {}, "docs": [], "figures": [], "papers": [], "paper_marks": {},
+            "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 
 def with_answers(todos, answers):
@@ -1027,7 +1159,7 @@ def summary(data):
             "scanned_at": data.get("scanned_at"),
             "n_tracks": len(data.get("tracks") or []), "track_status": count(data.get("tracks") or []),
             "n_attempts": len(attempts), "attempt_status": count(attempts),
-            "n_runs": len(data.get("runs") or []), "pending": pending,
+            "n_runs": len(data.get("runs") or []), "pending": pending, "papers": paper_counts(data),
             "question": p.get("question"), "updated_kinds": data.get("updated") or {}, **work_summary(data),
             "todos": with_answers([t for t in data.get("todos") or [] if not t.get("done")], answers),
             "todos_done": with_answers(sorted((t for t in data.get("todos") or [] if t.get("done")),
