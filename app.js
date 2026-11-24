@@ -130,7 +130,8 @@ function placeOfRun(d, r) {
 function todoCount() {
   const pj = S.projects;
   if (!pj) return null;
-  return pj.projects.reduce((n, p) => n + (p.pending || []).length + (p.todos || []).length + (p.decisions_candidate || []).length, 0) + openTodos(pj.todos).length;
+  const unanswered = xs => (xs || []).filter(x => !x.answer).length;  // what still needs your reply
+  return pj.projects.reduce((n, p) => n + unanswered(p.pending) + unanswered(p.todos) + unanswered(p.decisions_candidate), 0) + unanswered(openTodos(pj.todos));
 }
 // projects by status: 进行中 first, then 暂停, then 已归档 (anything else counts as 进行中)
 const STAGE = {'暂停': 1, '已归档': 2};
@@ -341,40 +342,100 @@ function confirmItem(p, a, now) {
     ${a.conclusion ? `<div class="ctx md">${B.md(a.conclusion)}</div>` : ''}
     ${replyBox(p.name, 'a:' + a.id, ['成功', '部分成功', '失败', '放弃'], a.proposed, a.answer, now)}</li>`;
 }
-function doneItems(list, now) {
-  const week = now - 7 * 86400;
-  const done = (list || []).filter(t => t.done && Date.parse(t.done) / 1000 >= week).sort((a, b) => String(b.done).localeCompare(String(a.done)));
-  return done.length ? `<details class="done" id="done-${esc(done[0].id)}"><summary>最近 7 天办完 ${done.length} 条</summary><ul class="tlist">` +
-    done.map(t => `<li><s>${esc(t.text)}</s>${t.answer ? `<div class="small">你的回复：${esc([t.answer.answer, t.answer.text].filter(Boolean).join('　'))}</div>` : ''}` +
-      `${t.result ? `<div class="res">结果：${esc(t.result)}</div>` : ''}<div class="small">${isoAgo(t.done, now)}办完</div></li>`).join('') + '</ul></details>' : '';
+// every item that waits for (or got) a reply: to-dos, conclusions to confirm, candidate decisions
+function todoEntries(pj) {
+  const out = [];
+  const add = (p, type, id, text, extra) => out.push({p, type, id, key: (p ? p.name : '_shared') + '|' + id, text, ...extra});
+  for (const p of pj.projects) {
+    for (const t of p.todos || []) add(p, 'todo', String(t.id), t.text, {t, answer: t.answer, rank: kindRank(t), href: linkFor(p.name, t.link)});
+    for (const a of (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string'))
+      add(p, 'confirm', 'a:' + a.id, `尝试「${a.title || a.id}」的结论`, {a, answer: a.answer, rank: 1, href: plink(p.name, 'flow', 'a:' + a.id)});
+    for (const x of p.decisions_candidate || [])
+      add(p, 'decision', 'd:' + x.id, `决定「${x.title}」`, {x, answer: x.answer, rank: 1, href: plink(p.name, 'decisions', x.id)});
+  }
+  for (const t of openTodos(pj.todos)) add(null, 'todo', String(t.id), t.text, {t, answer: t.answer, rank: kindRank(t), href: null});
+  return out;
+}
+const ENTRY_LABEL = {confirm: ['确认结论', 'todo'], decision: ['采纳决定', 'todo']};
+function entryPill(e) {
+  if (e.type !== 'todo') return `<span class="pill t-${ENTRY_LABEL[e.type][1]}">${ENTRY_LABEL[e.type][0]}</span>`;
+  return e.t.kind && KIND[e.t.kind] ? `<span class="pill t-${e.t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[e.t.kind]}</span>` : '<span class="pill t-other">待办</span>';
+}
+// where an answered item stands: 受阻 / 会话已领取 / 自动处理 / waiting for "处理回复"
+function entryStage(e) {
+  const st = e.type === 'todo' ? e.t.state : null;
+  if (st === '受阻') return {k: 'blocked', html: `<span class="pill t-bad">受阻</span> <span class="small">${esc(e.t.result || '')}</span>`};
+  if (st === '已领取') return {k: 'taken', html: '<span class="pill t-run">会话已领取，正在处理</span>'};
+  if (e.answer && e.answer.mode === '直接处理') return {k: 'auto', html: '<span class="pill t-run">几分钟内自动处理</span>'};
+  return {k: 'wait', html: '<span class="pill t-other">等你说「处理回复」</span>'};
+}
+const STAGES = [['blocked', '受阻'], ['taken', '会话正在处理'], ['auto', '自动处理中'], ['wait', '等你说「处理回复」']];
+function entryFull(e, now) {
+  if (e.type === 'confirm') return confirmItem(e.p, e.a, now);
+  if (e.type === 'decision') return decisionItem(e.p, e.x, now);
+  return todoItem(e.t, e.p, now);
+}
+function answeredRow(e, now) {
+  if (ui.editing[e.key]) return entryFull(e, now);
+  const a = e.answer, st = entryStage(e);
+  return `<li class="arow"><div>${entryPill(e)} <span class="ttext">${esc(e.text)}</span>${e.href ? ` <a class="more" href="${e.href}">相关记录 →</a>` : ''}</div>
+    <div class="ans">你的回复：${a.answer ? `<b>${esc(a.answer)}</b>` : ''}${a.text ? `${a.answer ? '　' : ''}${esc(a.text)}` : ''}
+      <span class="small">· ${isoAgo(a.at, now)}回复 · <a href="#" data-edit="${esc(e.key)}">改回复</a></span> ${st.html}</div></li>`;
 }
 function pageTodo() {
   const pj = S.projects;
   if (!pj) return '<div class="empty">加载中…</div>';
-  const now = pj.now, tally = {blocking: 0, decision: 0, whenever: 0};
-  const count = ts => { for (const t of ts) tally[t.kind in tally ? t.kind : 'whenever']++; return ts; };
-  const groups = pj.projects.map(p => {
-    const todos = count([...(p.todos || [])].sort((a, b) => kindRank(a) - kindRank(b)));
-    const confirm = (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string');
-    const missing = (p.pending || []).length - confirm.length, cands = p.decisions_candidate || [];
-    tally.decision += confirm.length + cands.length;
-    const items = cands.map(x => decisionItem(p, x, now)).concat(todos.map(t => todoItem(t, p, now)), confirm.map(a => confirmItem(p, a, now)));
-    if (missing) items.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'flow', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
+  const now = pj.now, q = route().query || {}, f = q.s || '';
+  const all = todoEntries(pj);
+  const open = all.filter(e => !e.answer || ui.editing[e.key]), answered = all.filter(e => e.answer && !ui.editing[e.key]);
+  const tally = {blocking: 0, decision: 0, whenever: 0};
+  for (const e of open) tally[e.type !== 'todo' ? 'decision' : e.t.kind in tally ? e.t.kind : 'whenever']++;
+  const byStage = k => answered.filter(e => entryStage(e).k === k);
+  const doneList = [...pj.projects.flatMap(p => (p.todos_done || []).map(t => ({t, p}))), ...(pj.todos || []).filter(t => t.done).map(t => ({t, p: null}))]
+    .filter(x => Date.parse(x.t.done) / 1000 >= now - 7 * 86400).sort((a, b) => String(b.t.done).localeCompare(String(a.t.done)));
+  const chip = (label, val, n) => `<a class="chip${f === val ? ' on' : ''}" href="#/todo${val ? '?s=' + val : ''}">${label}${n != null ? ' ' + n : ''}</a>`;
+  const chips = `<div class="chips filters2">${chip('全部', '', null)}${chip('还没回复', 'open', open.length)}${chip('已回复', 'answered', answered.length)}` +
+    STAGES.map(([k, l]) => byStage(k).length ? chip(l, k, byStage(k).length) : '').join('') + chip('最近 7 天办完', 'done', doneList.length) + '</div>';
+  // 1. still waiting for your reply, by project, most urgent first
+  const groups = [];
+  for (const p of [...pj.projects, null]) {
+    const items = open.filter(e => e.p === p).sort((a, b) => a.rank - b.rank);
+    const missing = p ? (p.pending || []).filter(x => !x.needs.includes('结论待确认')).length : 0;
+    if (!items.length && !missing) continue;
+    const html = items.map(e => entryFull(e, now));
+    if (missing) html.push(`<li><span class="pill t-other">缺结论</span> <a href="${plink(p.name, 'flow', null, {todo: 1})}">${missing} 条尝试缺「结论和原因」</a>
       <div class="where2">这要由会话补写，在项目会话里说「补写结论」</div></li>`);
-    const n = items.length;
-    return {p, items, n, top: Math.min(todos.length ? kindRank(todos[0]) : 9, confirm.length || cands.length ? 1 : 9), done: doneItems(p.todos_done, now)};
-  }).filter(g => g.n || g.done).sort((a, b) => a.top - b.top || b.n - a.n);
-  const shared = count(openTodos(pj.todos).sort((a, b) => kindRank(a) - kindRank(b)));
-  const card = (title, meta, items, done) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>` +
-    (items.length ? `<ul class="tlist">${items.join('')}</ul>` : '<div class="empty">没有要处理的。</div>') + done + '</div>';
-  const html = groups.map(g => card(`<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>`, g.n ? `${g.n} 条` : '', g.items, g.done)).join('') +
-    (shared.length || (pj.todos || []).some(t => t.done) ? card('跨项目', shared.length ? `${shared.length} 条` : '', shared.map(t => todoItem(t, null, now)), doneItems(pj.todos, now)) : '');
+    groups.push({p, html, top: items.length ? items[0].rank : 9});
+  }
+  groups.sort((a, b) => (a.p === null) - (b.p === null) || a.top - b.top || b.html.length - a.html.length);
+  const card = (title, meta, body) => `<div class="card"><h2>${title} <span class="meta">${meta}</span></h2>${body}</div>`;
+  const openHtml = groups.length ? groups.map(g => card(g.p ? `<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>` : '跨项目', `${g.html.length} 条`,
+    `<ul class="tlist">${g.html.join('')}</ul>`)).join('') : '<div class="card"><div class="empty">没有等你回复的事。</div></div>';
+  // 2. answered, waiting for a session: by project, then by where each one stands
+  const ansGroups = [...pj.projects, null].map(p => ({p, items: answered.filter(e => e.p === p && (!STAGES.some(([k]) => k === f) || entryStage(e).k === f))})).filter(g => g.items.length);
+  const ansHtml = ansGroups.length ? ansGroups.map(g => {
+    const rows = STAGES.map(([k, l]) => { const xs = g.items.filter(e => entryStage(e).k === k);
+      return xs.length ? `<li class="sub">${l} · ${xs.length}</li>` + xs.map(e => answeredRow(e, now)).join('') : ''; }).join('');
+    const waiting = g.items.filter(e => entryStage(e).k === 'wait').length;
+    return card(g.p ? `<a href="${plink(g.p.name)}">${esc(g.p.title)}</a>` : '跨项目', `${g.items.length} 条已回复` +
+      (waiting && g.p ? ` · 在这个项目的会话里说「处理回复」处理 ${waiting} 条` : ''), `<ul class="tlist">${rows}</ul>`);
+  }).join('') : '<div class="card"><div class="empty">没有已回复、等会话处理的事。</div></div>';
+  // 3. done in the last 7 days, newest first
+  const doneHtml = doneList.length ? `<div class="card"><ul class="tlist">${doneList.map(({t, p}) => `<li><div><span class="small faint">${p ? esc(p.title) : '跨项目'}</span>　<s>${esc(t.text)}</s></div>` +
+    `${t.answer ? `<div class="small">你的回复：${esc([t.answer.answer, t.answer.text].filter(Boolean).join('　'))}</div>` : ''}` +
+    `${t.result ? `<div class="res">结果：${esc(t.result)}</div>` : ''}<div class="small">${isoAgo(t.done, now)}办完</div></li>`).join('')}</ul></div>`
+    : '<div class="card"><div class="empty">最近 7 天没有办完的待办。</div></div>';
+  const show = k => !f || f === k || (k === 'answered' && STAGES.some(([s]) => s === f));
   return `<h1 class="pt">待办</h1>
     <div class="summary">${[['blocking', '卡着进度'], ['decision', '等你决定'], ['whenever', '不急']].map(([k, l]) =>
-      `<div class="stat"><div class="k">${l}</div><div class="v">${tally[k]}</div></div>`).join('')}</div>
-    ${html || '<div class="card"><div class="empty">没有待办。</div></div>'}
-    <p class="small">在这里选好或写好回复，然后去项目会话里说「处理回复」，会话逐条执行并标记完成，办完的移到「最近 7 天办完」并写明结果。
-      回复存在项目的 board/answers.jsonl；待办由会话写在 board/todos.jsonl，控制台每分钟读一次。</p>`;
+      `<div class="stat"><div class="k">${l}</div><div class="v">${tally[k]}</div><div class="s">还没回复</div></div>`).join('')}
+      <a class="stat" href="#/todo?s=answered"><div class="k">已回复、等会话处理</div><div class="v">${answered.length}</div>
+        <div class="s">${STAGES.filter(([k]) => byStage(k).length).map(([k, l]) => `${l} <b>${byStage(k).length}</b>`).join(' · ') || '—'}</div></a></div>
+    ${chips}
+    ${show('open') ? `<h3 class="gh">还没回复 · ${open.length}</h3>${openHtml}` : ''}
+    ${show('answered') ? `<h3 class="gh">已回复，等会话处理 · ${answered.length}</h3>${ansHtml}` : ''}
+    ${show('done') ? `<h3 class="gh">最近 7 天办完 · ${doneList.length}</h3>${doneHtml}` : ''}
+    <p class="small">回复存在项目的 board/answers.jsonl。不勾「直接处理」的，等你在项目会话里说「处理回复」；勾了的，a100 的派活程序几分钟内起一个会话处理。处理完的移到「最近 7 天办完」并写明结果。</p>`;
 }
 
 function pageNew() {

@@ -436,6 +436,7 @@ class Interactions(unittest.TestCase):
         self.assertGreater(out["examples_scroll"], 0)
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
         self.assertIn("下周再说", out["answered"])
+        self.assertIn("等你说「处理回复」", out["answered"])            # answered items are grouped by where they stand
         self.assertEqual(out["renamed"], "演示|演示")                   # header and sidebar use the new name
         self.assertEqual(out["marked"], "已确认")                       # marking a document shows at once
 
