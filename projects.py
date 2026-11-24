@@ -271,7 +271,8 @@ DOC_KINDS = ("方案", "观察", "复盘", "报告", "说明", "纪要")
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg")
 TEXT = "text/plain; charset=utf-8"  # raw records are shown as text, never rendered
 FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-              ".svg": "image/svg+xml", ".json": TEXT, ".jsonl": TEXT, ".md": TEXT}
+              ".svg": "image/svg+xml", ".json": TEXT, ".jsonl": TEXT, ".md": TEXT,
+              ".html": "text/html; charset=utf-8"}  # .html only as figures/<name>.html, see safe_board_file
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MISSING = (FileNotFoundError, NotADirectoryError)
 SHARED = "_shared"  # cross-project directory under the root; not a project
@@ -573,6 +574,9 @@ def scan_project(board, memo=None, new_memo=None):
     figures = []
     for fn in b.listdir("figures"):
         st = b.stat("figures/" + fn) if fn.lower().endswith(".html") and not fn.startswith(".") else None
+        if st and os.path.dirname(os.path.realpath(b.path("figures/" + fn))) != os.path.join(b.real, "figures"):
+            b.errors.append({"file": "figures/" + fn, "error": "指向 figures/ 之外的链接，控制台不显示"})
+            st = None  # the same rule as safe_board_file: a figure is served only from figures/ itself
         if st:
             bump("figures", st.st_mtime)
             meta = b.cached("figures/" + fn, st, read_figure_head, {}) or {}
@@ -1145,4 +1149,9 @@ def safe_board_file(root, name, relpath):
     for p in (relpath, full):
         if os.path.splitext(p)[1].lower() not in FILE_TYPES:
             return None
+    # HTML is served only as a figure (board/figures/<name>.html), never from anywhere else in board/
+    # (older hand-made sites such as board/legacy-site/ stay unserved)
+    if (os.path.splitext(relpath)[1].lower() == ".html" or os.path.splitext(full)[1].lower() == ".html") and not (
+            len(parts) == 2 and parts[0] == "figures" and os.path.dirname(full) == os.path.join(board, "figures")):
+        return None
     return full

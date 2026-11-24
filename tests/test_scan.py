@@ -381,12 +381,20 @@ class Figures(FixtureCase):
             self.assertIn(want, checks)
         self.assertFalse([c for c in checks if c[0] == "figures/lr-warmup.html"])
 
+    def test_links_out_of_figures_are_not_listed(self):
+        figs = os.path.join(self.root, "demo", "board", "figures")
+        os.symlink("../legacy-site/index.html", os.path.join(figs, "via-link.html"))   # inside board/, but not a figure
+        d = self.demo()
+        self.assertNotIn("figures/via-link.html", [f["file"] for f in d["figures"]])   # /files/ would refuse it too
+        self.assertIn({"file": "figures/via-link.html", "error": "指向 figures/ 之外的链接，控制台不显示"}, d["errors"])
+
 
 class SafeFile(FixtureCase):
     def test_allowed(self):
         p = P.safe_board_file(self.root, "demo", "runs/r001/curve.svg")
         self.assertEqual(p, os.path.realpath(os.path.join(self.root, "demo/board/runs/r001/curve.svg")))
         self.assertTrue(P.safe_board_file(self.root, "demo", "attempts/2026-11-15-focal.md"))
+        self.assertTrue(P.safe_board_file(self.root, "demo", "figures/lr-warmup.html"))
 
     def test_rejected(self):
         bad = [("../x", "plan.md"), (".hidden", "project.json"), ("_shared", "project.json"),
@@ -395,7 +403,9 @@ class SafeFile(FixtureCase):
                ("demo", "/etc/passwd"), ("demo", ""), ("demo", "runs//r001/curve.svg"),
                ("demo", "runs/./r001/curve.svg"), ("demo", "legacy-site/index.html"),
                ("demo", "runs/r001/leak.png"), ("demo", "attempts/notes.txt"),
-               ("demo", "a\\b.md"), ("demo", "x\0.md"), ("demo", ".secret.md")]
+               ("demo", "a\\b.md"), ("demo", "x\0.md"), ("demo", ".secret.md"),
+               ("demo", "figures/sub/nested.html"), ("demo", "figures/.draft.html"), ("demo", "figures/readme.txt"),
+               ("demo", "examples/page.html")]
         for name, rel in bad:
             with self.subTest(name=name, rel=rel):
                 self.assertIsNone(P.safe_board_file(self.root, name, rel))

@@ -103,6 +103,11 @@ class Http(unittest.TestCase):
         os.symlink(secret, os.path.join(r001, "leak.png"))
         with open(os.path.join(r001, "big.png"), "wb") as f:
             f.truncate(11 * 1024 * 1024)  # sparse, over the 10 MB limit
+        figs = os.path.join(cls.root, "demo", "board", "figures")
+        os.symlink("../legacy-site/index.html", os.path.join(figs, "via-link.html"))  # inside board/, but not a figure
+        with open(os.path.join(figs, "big.html"), "wb") as f:
+            f.write(b"<title>big</title>")
+            f.truncate(11 * 1024 * 1024)
         cfg = write_config(cls.tmp, cls.root)
         cls.sock = os.path.join(cls.tmp, "run", "t.sock")
         cls.log = open(os.path.join(cls.tmp, "server.log"), "w")
@@ -202,6 +207,13 @@ class Http(unittest.TestCase):
         self.assertIn(b"<script>", body)  # served as inert text
         quoted = "/files/demo/attempts/2026-11-15-focal.md".replace("-", "%2D")
         self.assertEqual(self.get(quoted)[0], 200)  # percent-encoded paths are decoded first
+        status, h, body = self.get("/files/demo/figures/lr-warmup.html")      # a figure is a page that may run its own scripts
+        self.assertEqual((status, h["Content-Type"]), (200, "text/html; charset=utf-8"))
+        self.assertEqual(h["Content-Security-Policy"], "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                                                       "img-src data: blob:; font-src data:; sandbox allow-scripts")
+        self.assertNotIn("same-origin", h["Content-Security-Policy"])         # no origin: the console's page, storage and API stay out of reach
+        self.assertEqual(h["X-Content-Type-Options"], "nosniff")
+        self.assertIn(b"postMessage", body)
 
     def test_files_rejected(self):
         for p in ["/files/demo/../minimal/board/project.json",
@@ -209,10 +221,13 @@ class Http(unittest.TestCase):
                   "/files/demo/runs/r001/..%2F..%2F..%2Fminimal%2Fboard%2Fproject.json",
                   "/files/demo/runs/r001/leak.png", "/files/demo/legacy-site/index.html",
                   "/files/demo/attempts/notes.txt", "/files/_shared/project.json",
-                  "/files/demo//etc/passwd", "/files/demo/runs/r001/missing.png", "/files/demo"]:
+                  "/files/demo//etc/passwd", "/files/demo/runs/r001/missing.png", "/files/demo",
+                  "/files/demo/figures/sub/nested.html", "/files/demo/figures/.draft.html", "/files/demo/figures/readme.txt",
+                  "/files/demo/figures/via-link.html", "/files/demo/docs/lr-plan-v1.html"]:
             with self.subTest(p=p):
                 self.assertEqual(self.get(p)[0], 404)
         self.assertEqual(self.get("/files/demo/runs/r001/big.png")[0], 413)
+        self.assertEqual(self.get("/files/demo/figures/big.html")[0], 413)
 
     def test_guide_and_entries(self):
         status, h, body = self.get("/guide.md")
@@ -303,6 +318,9 @@ class Http(unittest.TestCase):
         self.assertNotIn("docs/lr-plan-v1.md", self.get_json("/api/project/demo")["marks"])   # cleared
         self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "NOTES.md", "mark": "看过"})[0], 200)
         self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "plan.md", "mark": "看过"})[0], 200)
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "figures/lr-warmup.html", "mark": "确认"})[0], 200)   # figures too
+        self.assertEqual(self.get_json("/api/project/demo")["marks"]["figures/lr-warmup.html"]["mark"], "确认")
+        self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "figures/readme.txt", "mark": "看过"})[0], 404)
         for body, code in [({"file": "docs/nope.md", "mark": "看过"}, 404), ({"file": "../demo/board/project.json", "mark": "看过"}, 404),
                            ({"file": "NOTES.md", "mark": "喜欢"}, 400), ({"project": "nope", "file": "NOTES.md", "mark": "看过"}, 404)]:
             with self.subTest(body=body):

@@ -296,7 +296,7 @@ def post_mark(body):
     if not (projects.valid_name(name) and name in snap):
         return 404, {"error": "没有这个项目"}
     data = snap[name]
-    docs = ([data["plan"]] if data.get("plan") else []) + list(data.get("docs") or [])
+    docs = ([data["plan"]] if data.get("plan") else []) + list(data.get("docs") or []) + list(data.get("figures") or [])
     doc = next((x for x in docs if x.get("file") == rel), None)
     if doc is None:
         return 404, {"error": "没有这篇文档，刷新看看"}
@@ -401,6 +401,11 @@ STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
 # Served board files must never run code, even when opened directly (SVG can carry scripts)
 FILE_HEADERS = {"X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"}
+# Figures (board/figures/*.html) may run their own inline scripts, but in a sandbox without an origin:
+# they cannot read the console's page or storage, call its API, or load anything from the network
+FIGURE_HEADERS = {"X-Content-Type-Options": "nosniff",
+                  "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                                             "img-src data: blob:; font-src data:; sandbox allow-scripts"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -432,8 +437,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(503, "text/plain", ("read failed: %s" % e).encode())
         if len(data) > projects.MAX_FILE_BYTES:
             return self.send(413, "text/plain", b"file too large")
-        ctype = projects.FILE_TYPES[os.path.splitext(path)[1].lower()]
-        self.send(200, ctype, data, FILE_HEADERS)
+        ext = os.path.splitext(path)[1].lower()
+        self.send(200, projects.FILE_TYPES[ext], data, FIGURE_HEADERS if ext == ".html" else FILE_HEADERS)
 
     def do_GET(self):
         path = unquote(self.path.split("?")[0])
