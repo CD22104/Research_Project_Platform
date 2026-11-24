@@ -131,7 +131,8 @@ function todoCount() {
   const pj = S.projects;
   if (!pj) return null;
   const unanswered = xs => (xs || []).filter(x => !x.answer).length;  // what still needs your reply
-  return pj.projects.reduce((n, p) => n + unanswered(p.pending) + unanswered(p.todos) + unanswered(p.decisions_candidate), 0) + unanswered(openTodos(pj.todos));
+  return pj.projects.filter(p => stageOf(p) === 0)  // paused and archived projects are set aside
+    .reduce((n, p) => n + unanswered(p.pending) + unanswered(p.todos) + unanswered(p.decisions_candidate), 0) + unanswered(openTodos(pj.todos));
 }
 // projects by status: 进行中 first, then 暂停, then 已归档 (anything else counts as 进行中)
 const STAGE = {'暂停': 1, '已归档': 2};
@@ -234,7 +235,7 @@ function inboxItems(pj, now) {
   const line = (p, pill, text, href, go) => `<li><span class="ip" title="${esc(p ? p.title : '跨项目')}">${esc(p ? p.title : '跨项目')}</span>` +
     `<span class="it">${pill} ${esc(text)}</span><a class="ig" href="${href}">${go} →</a></li>`;
   for (const p of pj.projects) {
-    if (stageOf(p) === 2) continue;
+    if (stageOf(p) > 0) continue;  // paused or archived: set aside until resumed
     for (const x of p.decisions_candidate || [])
       out.push({rank: x.answer ? 5 : 1, html: line(p, '<span class="pill t-todo">采纳决定</span>', x.title, plink(p.name, 'decisions', x.id), '采纳或不采纳')});
     for (const a of (p.pending || []).filter(x => x.needs.includes('结论待确认') && typeof x.id === 'string'))
@@ -251,6 +252,7 @@ function inboxItems(pj, now) {
 function stuckItems(pj, now) {
   const out = [];
   for (const p of pj.projects) {
+    const aside = stageOf(p) > 0;  // a paused or archived project only shows runs that still claim to be running
     for (const r of p.active_runs || []) {
       if (r.state === '已中断') out.push(`<li>${statePill(r.state)} <a href="${plink(p.name, 'runs', r.id)}">${esc(p.title)} · 运行 ${esc(r.id)}</a>
         <span class="small">机器上找不到它的进程，收尾程序会把记录改成被中断</span></li>`);
@@ -258,13 +260,13 @@ function stuckItems(pj, now) {
         <span class="small">${!r.heartbeat && r.liveness === 'absent' ? '手写的记录，进程已经不在，可能跑完了没写结果：让项目会话核对后收尾'
           : (r.heartbeat ? '心跳 ' + B.ago(r.heartbeat, now) : '没有心跳') + '，' + esc(shortHost(r.server || '?')) + ' 上看不到进程或连不上'}</span></li>`);
     }
-    for (const t of p.tasks_open || []) {
+    for (const t of aside ? [] : p.tasks_open || []) {
       if (t.status === '可以继续') out.push(`<li>${taskPill(t.status)} <a href="${plink(p.name, 'tasks', t.id)}">${esc(p.title)} · ${esc(t.title)}</a>
         <span class="small">等的东西到了，开一个会话说「做 ${esc(t.id)}」</span></li>`);
       else if (t.status === '等你') out.push(`<li>${taskPill(t.status)} <a href="${plink(p.name, 'tasks', t.id)}">${esc(p.title)} · ${esc(t.title)}</a>
         <span class="small">${t.next ? esc(t.next) : '卡在你这里，看任务卡的交接'}</span></li>`);
     }
-    if ((p.unprocessed || []).length) out.push(`<li><span class="pill t-todo">回复未处理</span> <a href="#/todo">${esc(p.title)} · ${p.unprocessed.length} 条回复</a>
+    if (!aside && (p.unprocessed || []).length) out.push(`<li><span class="pill t-todo">回复未处理</span> <a href="#/todo">${esc(p.title)} · ${p.unprocessed.length} 条回复</a>
       <span class="small">在项目会话里说「处理回复」</span></li>`);
     if (p.stale) out.push(`<li><span class="pill t-bad">读取失败</span> <a href="${plink(p.name)}">${esc(p.title)}</a> <span class="small">数据是 ${B.ago(p.scanned_at, now)}的</span></li>`);
   }
@@ -390,7 +392,8 @@ function pageTodo() {
   const pj = S.projects;
   if (!pj) return '<div class="empty">加载中…</div>';
   const now = pj.now, q = route().query || {}, f = q.s || '';
-  const all = todoEntries(pj);
+  const every = todoEntries(pj), setAside = every.filter(e => e.p && stageOf(e.p) > 0);
+  const all = every.filter(e => !(e.p && stageOf(e.p) > 0));  // paused and archived projects are folded away below
   const open = all.filter(e => !e.answer || ui.editing[e.key]), answered = all.filter(e => e.answer && !ui.editing[e.key]);
   const tally = {blocking: 0, decision: 0, whenever: 0};
   for (const e of open) tally[e.type !== 'todo' ? 'decision' : e.t.kind in tally ? e.t.kind : 'whenever']++;
@@ -402,7 +405,7 @@ function pageTodo() {
     STAGES.map(([k, l]) => byStage(k).length ? chip(l, k, byStage(k).length) : '').join('') + chip('最近 7 天办完', 'done', doneList.length) + '</div>';
   // 1. still waiting for your reply, by project, most urgent first
   const groups = [];
-  for (const p of [...pj.projects, null]) {
+  for (const p of [...pj.projects.filter(x => stageOf(x) === 0), null]) {
     const items = open.filter(e => e.p === p).sort((a, b) => a.rank - b.rank);
     const missing = p ? (p.pending || []).filter(x => !x.needs.includes('结论待确认')).length : 0;
     if (!items.length && !missing) continue;
@@ -439,6 +442,9 @@ function pageTodo() {
     ${show('open') ? `<h3 class="gh">还没回复 · ${open.length}</h3>${openHtml}` : ''}
     ${show('answered') ? `<h3 class="gh">已回复，等会话处理 · ${answered.length}</h3>${ansHtml}` : ''}
     ${show('done') ? `<h3 class="gh">最近 7 天办完 · ${doneList.length}</h3>${doneHtml}` : ''}
+    ${setAside.length && !f ? `<details class="box" id="todo-aside"><summary>暂停或归档的项目 · ${setAside.length} 条 <span class="faint">先放着，恢复项目后再处理；不算在上面的数字里</span></summary>` +
+      [...new Set(setAside.map(e => e.p))].map(p => card(`<a href="${plink(p.name)}">${esc(p.title)}</a> ${B.pill(p.status)}`, `${setAside.filter(e => e.p === p).length} 条`,
+        `<ul class="tlist">${setAside.filter(e => e.p === p).map(e => e.answer && !ui.editing[e.key] ? answeredRow(e, now) : entryFull(e, now)).join('')}</ul>`)).join('') + '</details>' : ''}
     <p class="small">回复存在项目的 board/answers.jsonl。不勾「直接处理」的，等你在项目会话里说「处理回复」；勾了的，a100 的派活程序几分钟内起一个会话处理。处理完的移到「最近 7 天办完」并写明结果。</p>`;
 }
 
