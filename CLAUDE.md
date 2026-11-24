@@ -1,6 +1,6 @@
 # 控制台开发（a100 `~/gpu-board`）
 
-「CD的研究控制台」和周边工具的代码。常驻入口：tmux `rc-gpu-board`（`~/bin/rc-start gpu-board`），在 Claude App 里叫「控制台开发」。服务器、账号、规则分发、跨项目协调归「研究服务台」会话（tmux `rc-desk`，`~/desk`），不在这里做。
+「CD的研究控制台」和周边工具的代码。在 App 的 desk 文件夹里开对话；开场先读本文件和 NOTES.md，代码只在 ~/gpu-board 里改。服务器、账号、规则分发、跨项目协调归「研究服务台」会话（tmux `rc-desk`，`~/desk`），不在这里做。
 
 ## 组成
 | 文件 | 做什么 |

@@ -11,9 +11,20 @@
 - 页面：文档页的一类「图解」，id 是文件名；详情是 `sandbox="allow-scripts"` 的 iframe（固定高度约一屏）加「在新窗口打开」。`setMain` 在每分钟重画时保留同一张图（同文件、同 mtime）的 iframe，图里的操作不丢。
 - 测试夹具 `demo/board/figures/lr-warmup.html` 里有一段探测脚本，点击测试靠它验证读不到父页面、localStorage、API，且重画后只加载一次。
 
+### 任务会话改在项目文件夹里开（2026-11-24 做完，提交 42c4650、4fbdd47，格式和 boardtool 已发布）
+- 起因：App 按常驻入口分文件夹，`task-start` 开的会话落在「No folder」。用户要一个项目的对话都在项目文件夹里。
+- 现在：项目会话写好卡，请用户在项目文件夹里新开对话说「做 <任务 id>」。事实包开头有「本会话 id」（SessionStart 钩子的 session_id），提醒里写着先运行 `board task-begin <任务 id> --session <id>`。
+- `task_begin`：和 `task_start` 共用 `_check_start`（卡的状态、一张卡一个对话、最多 4 个、一个项目一张改代码的卡）和 `_prepare_worktree`，打印同一份 `task_prompt`（多一句：对话开在主目录，代码要在 worktree 里改）。不改任务卡。
+- 数上限的 `busy_tasks`：tmux 的 task-*/reply-*，加上 `claude agents --json` 里活着、且被一张「进行中」的卡的 sessions（id 或名字）点名的对话；同一张卡只算一次。`task_start`、`dispatch` 也用它。卡已完成的闲置对话不算。
+- 控制台任务卡详情有「开工」一行和复制「做 <任务 id>」的按钮。格式、使用说明、设计思路页都改了；全局规则「会话分工」那句的新原文已交给研究服务台（desk-bd），由它给用户看、再分发。
+- `task-start` 保留：自动派活、或用户明确要后台开时用。
+
+### 入口合并（2026-11-24，用户确认）
+- 只保留 desk 入口：控制台开发的对话也在 App 的 desk 文件夹里开，开场先读 ~/gpu-board/CLAUDE.md 和本文件，代码只在 ~/gpu-board 里改。`rc-gpu-board` 由研究服务台停掉、并从启动名单和规则里去掉。
+
 ### 要接着做的
-1. ~~告诉研究服务台分发图解那句规则~~：不用做了，研究服务台 2026-11-24 已把「画图做成自包含 HTML 放 board/figures/」发到 6 台（全局规则第 99 行，sha256 0ae77a8a…，已核对）。
-2. **boardrun 的「代码有没有改动」检查要排除记录**：现在用 `git status --porcelain --untracked-files=no` 看整个仓库，`board/` 里的记录（例如正在跑的运行的 `run.json`）、`NOTES.md`、`CLAUDE.md` 改了也算「有未提交改动」，项目记录一更新，下一次运行就被拒。改成只看代码：排除 `board`、`NOTES.md`、`REPORT.md`、`CLAUDE.md`（git pathspec `:(exclude)...`）。`tests/test_boardrun.py` 第 9 个测试现在靠改 `board/project.json` 制造改动，要改成改一个代码文件，并加一条「只改 board/ 不算改动」的断言。改完发布 boardrun。
+1. **boardrun 的「代码有没有改动」检查要排除记录**：现在用 `git status --porcelain --untracked-files=no` 看整个仓库，`board/` 里的记录（例如正在跑的运行的 `run.json`）、`NOTES.md`、`CLAUDE.md` 改了也算「有未提交改动」，项目记录一更新，下一次运行就被拒。改成只看代码：排除 `board`、`NOTES.md`、`REPORT.md`、`CLAUDE.md`（git pathspec `:(exclude)...`）。`tests/test_boardrun.py` 第 9 个测试现在靠改 `board/project.json` 制造改动，要改成改一个代码文件，并加一条「只改 board/ 不算改动」的断言。改完发布 boardrun。
+2. 原来就有的小问题：前端 `docItems` 只认 `about` 的 `v:/t:/a:/m:`，写 `k:`（任务）、`d:`（决定）的文档挂不到任务卡或决定下（任务卡详情的「这一步的文档」永远是空的）。要做先和用户说。
 3. 以后可以做的（设计思路页第 18 节）：会话页看到其他服务器的会话、手机上看进度、自动回收闲置会话、记录维护的定时轮次、模型分级、迁移辅助。都要先和用户确认。
 
 ### 踩过的坑
