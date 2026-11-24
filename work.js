@@ -261,7 +261,7 @@ function taskDetail(d, t) {
     ${kv('做过它的会话', sessHtml)}
     ${kv('时间', [m.created ? '建于 ' + esc(B.day(m.created) || m.created) : '', m.updated ? isoAgo(m.updated, d.now) + '更新' : ''].filter(Boolean).join(' · '))}
     ${runs.length ? kv('它的运行', runs.map(x => `<a href="${plink(name, 'runs', runKey(x))}">${esc(runKey(x))}</a> ${B.pill((x.run || {}).status)} ${statePill(x.state)}`).join('<br>')) : ''}
-    </div>${refs(body, d)}${docsOfStep(d, 'k:' + m.id)}</div>`;
+    </div>${refs(body, d)}${stepRefs(d, 'k:' + m.id)}</div>`;
 }
 
 // ============================================================ 讨论与决定
@@ -299,7 +299,7 @@ function tabDecisions(d, r) {
         ${src ? `<span>出处：${src}</span>` : ''}${rep ? `<span>替代了：${rep}</span>` : ''}${by ? `<span>被 <a href="${plink(name, 'decisions', by.meta.id)}">${esc(by.meta.title || by.meta.id)}</a> 替代</span>` : ''}<span>${esc(selDec.file)}</span></div>
       ${(m.status === '候选' || m.status == null) ? `<div class="sec first"><h3>采纳这条决定吗</h3>${replyBox(name, 'd:' + m.id, ['采纳', '不采纳'], null, ans || null, d.now)}
         <div class="small">点了「采纳」立即生效：之后每个新会话的事实包里都会有它。</div></div>` : ''}
-      ${refs(bodySections(selDec.body, ['决定', '理由', '影响']), d)}</div>`;
+      ${refs(bodySections(selDec.body, ['决定', '理由', '影响']), d)}${stepRefs(d, 'd:' + m.id)}</div>`;
   } else {
     detail = `<div class="detail"><h2>讨论与决定</h2><div class="pad md"><p>左边是这个项目定下的事。会话只能写「候选」；你点「采纳」才生效，生效的决定会写进每个新会话开头读到的事实包，所以不会被忘掉。</p>
       <p>新决定替代旧决定时，旧的会标成「已被替代」，文件保留。讨论纪要记的是怎么讨论到这个决定的。</p></div></div>`;

@@ -91,7 +91,8 @@ ROUTES = {
     "p_method_ramp": "#/p/demo/method/warmup-ramp",
     "p_home": "#/p/demo/home", "p_tasks": "#/p/demo/tasks", "p_task": "#/p/demo/tasks/f1-metric", "p_decisions": "#/p/demo/decisions",
     "p_decision": "#/p/demo/decisions/scale-later", "p_minutes": "#/p/demo/decisions/doc:2026-11-20-discussion.md",
-    "p_timeline": "#/p/demo/timeline", "p_upkeep": "#/p/demo/upkeep", "sessions": "#/sessions", "design": "#/design",
+    "p_timeline": "#/p/demo/timeline", "p_upkeep": "#/p/demo/upkeep",
+    "p_papers": "#/p/demo/papers", "p_papers_unread": "#/p/demo/papers?f=unread", "p_paper": "#/p/demo/papers/radam", "sessions": "#/sessions", "design": "#/design",
     "legacy_project": "project.html?p=demo", "legacy_projects": "#projects", "root": "", "guide": "#/guide",
 }
 
@@ -141,7 +142,7 @@ class Pages(unittest.TestCase):
     def test_tabs_follow_the_hierarchy(self):
         tabs = re.findall(r'<a class="ptab[^"]*" href="#/p/demo/(\w+)">([^<]+)', self.m("p_overview"))
         self.assertEqual(tabs, [("home", "概况"), ("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"),
-                                ("docs", "文档"), ("tasks", "任务"), ("decisions", "讨论与决定"), ("sessions", "会话"), ("timeline", "时间线"), ("upkeep", "记录维护")])
+                                ("docs", "文档"), ("papers", "论文"), ("tasks", "任务"), ("decisions", "讨论与决定"), ("sessions", "会话"), ("timeline", "时间线"), ("upkeep", "记录维护")])
         self.assertIn('<span class="pgrp">研究</span>', self.m("p_overview"))      # two views: research, then work
         self.assertIn('<span class="pgrp">工作</span>', self.m("p_overview"))
         self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m("p_road"))    # the old roadmap is the flow
@@ -334,6 +335,39 @@ class Pages(unittest.TestCase):
         self.assertIn("<h2>untitled <span", self.m("p_doc_untitled"))                                   # no <title>: the file name
         self.assertIn("找不到 a:ghost", self.m("p_doc_untitled"))
 
+    def test_papers(self):
+        m = self.m("p_papers")
+        groups = re.findall(r'<div class="tgroup">(.*?)</div>', m)
+        self.assertEqual(groups[0], "整个项目")                                         # then the flow's order, task cards last
+        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups[1:]],
+                         ["支线 · 学习率调度", "学习率调度 › 尝试 · lr-sweep", "数据增强 C# 实验 › 尝试 · aug-mixup", "支线 · 损失函数",
+                          "任务 · 加 F1 指标并重算旧结果"])
+        self.assertIn('<a href="#/p/demo/tasks/f1-metric">任务 · 加 F1 指标并重算旧结果</a>', groups[-1])
+        self.assertEqual(re.findall(r'<li class="paper[^"]*" data-anchor="([^"]+)"', m),
+                         ["sgdr", "goyal-large-batch", "radam", "mixup", "focal-loss", "f-score"])   # old-survey was dropped
+        self.assertIn('<a href="https://arxiv.org/abs/1706.02677" target="_blank" rel="noopener noreferrer">Accurate, Large Minibatch SGD', m)
+        self.assertEqual(m.count('<span class="pill t-todo">必读</span>'), 2)
+        self.assertEqual(m.count(">未核实</span>"), 1)                                   # radam has no `checked`
+        self.assertIn('<li class="paper read" data-anchor="focal-loss">', m)
+        self.assertIn('<input type="checkbox" data-paper="focal-loss" checked="">', m)
+        self.assertIn("读后要点：用 (1-p)^γ 压低易分样本的损失", m)
+        self.assertIn('<input type="checkbox" data-paper="radam">', m)
+        unread = self.m("p_papers_unread")
+        self.assertIn("On the Variance of the Adaptive Learning Rate", unread)
+        self.assertNotIn("Focal Loss", unread)                                           # the filter hides read ones
+        self.assertIn('<li class="paper flash" data-anchor="radam">', self.m("p_paper"))   # papers/<id> points at the row
+        head = self.pages["p_papers"][0]
+        self.assertIn('论文<span class="cnt">5 未读 / 6</span>', head)
+        self.assertIn('<a class="small" href="#/p/demo/papers">论文 6 篇 · 读过 1 · <b>必读未读 2</b></a>', head)
+        self.assertRegex(self.m("p_overview"), r'<div class="k">论文</div><div class="v">6</div>\s*<div class="s">读过 <b>1</b> · 必读未读 <b>2</b>')
+        att = self.m("p_road_a")                                                          # a step lists its papers
+        self.assertIn("这一步的论文", att)
+        self.assertIn('data-paper="radam"', att)
+        self.assertNotIn('data-paper="goyal-large-batch"', att)                          # that one sits on the track
+        task = self.m("p_task")
+        self.assertIn("这一步的论文", task)
+        self.assertIn("A Probabilistic Interpretation of Precision, Recall and F-Score", task)
+
     def test_guide_and_entry_status(self):
         g = self.m("guide")
         for s in ["新建项目", "一个项目怎么推进", "暂停、恢复、结束", "结束或放弃", "已归档", "待办怎么回复", "直接处理", "常用命令", "board task-start", "密钥和 token", "BOARD_FORMAT.md"]:
@@ -429,6 +463,24 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   out.fig_probes = probes;
   location.hash = '#/gpu'; await wait(300);
   out.sidebar_on = document.querySelector('#side a.sitem.on .lbl').textContent;
+  location.hash = '#/p/demo/papers'; await wait(600);
+  const pbox = () => document.querySelector('#main input[data-paper="radam"]');
+  pbox().click(); await wait(1200);
+  const after = await (await fetch('/api/project/demo')).json();
+  out.ticked = [pbox().checked, pbox().closest('li').className, (after.paper_marks.radam || {}).mark || null];
+  pbox().click(); await wait(1200);
+  out.unticked = [pbox().checked, 'radam' in (await (await fetch('/api/project/demo')).json()).paper_marks];
+  const fake = {name: 'demo', now: 0, papers: [
+      {id: 'bad', title: '<b>x</b>', url: 'javascript:alert(1)', why: 'w'},
+      {id: 'quote', title: 'q', url: 'https://x.org/a" onclick="alert(1)', why: 'w'},
+      {id: 'away', title: 'Away', url: 'https://x.org/away', why: 'w'}],
+    paper_marks: {}, papers_elsewhere: {away: ['jev-fraud']}};
+  const pdiv = document.createElement('div');
+  pdiv.innerHTML = '<ul>' + paperItems(fake).map(p => paperRow(fake, p)).join('') + '</ul>';
+  out.paper_links = [...pdiv.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.getAttribute('target'), a.getAttribute('rel')]);
+  out.paper_bold = pdiv.querySelectorAll('b').length;
+  out.paper_away = pdiv.querySelector('[data-anchor="away"]').textContent.replace(/\\s+/g, ' ');
+  out.doc_about = ['k:f1-metric', 'd:scale-later', 'x:nope'].map(a => docItems({docs: [{file: 'docs/z.md', meta: {about: a}, mtime: 1}], marks: {}})[0].about);
   const sess = document.createElement('div');   // a big context matters only while the session is open
   sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
                                 {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
@@ -474,7 +526,14 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["track_hash"], "#/p/demo/runs?track=t-loss")
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
-        self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])   # ended: greyed, no 建议换新
+        self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])
+        self.assertEqual(out["ticked"], [True, "paper read", "读过"])          # a tick is saved and shown at once
+        self.assertEqual(out["unticked"], [False, False])                        # and can be taken back
+        self.assertEqual(out["paper_links"], [["https://x.org/away", "_blank", "noopener noreferrer"],   # no javascript: or broken-out url
+                                              ["#/p/jev-fraud/papers", None, None]])                # the other project's list
+        self.assertEqual(out["paper_bold"], 0)                                     # titles are text
+        self.assertIn("在 jev-fraud 勾过", out["paper_away"])
+        self.assertEqual(out["doc_about"], ["k:f1-metric", "d:scale-later", None])  # documents can sit on task cards and decisions   # ended: greyed, no 建议换新
         self.assertGreater(out["examples_scroll"], 0)
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
         self.assertIn("下周再说", out["answered"])

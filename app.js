@@ -8,13 +8,14 @@ const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
 const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
   pick: {}, draft: {}, editing: {}, err: {}, direct: {}, renaming: false};                   // replies being written, the rename box
-// the console's only writes: replies (board/answers.jsonl) and display names; the server checks they come from this page
+// the console's only writes: replies (board/answers.jsonl), marks and paper ticks (board/marks.jsonl) and display names;
+// the server checks they come from this page
 const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Board-Write': '1'},
   body: JSON.stringify(body)}).then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status); return d; });
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
-const RESEARCH_TABS = [['home', '概况'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档']];
+const RESEARCH_TABS = [['home', '概况'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档'], ['papers', '论文']];
 const WORK_TABS = [['tasks', '任务'], ['decisions', '讨论与决定'], ['sessions', '会话'], ['timeline', '时间线'], ['upkeep', '记录维护']];
 const TABS = [...RESEARCH_TABS, ...WORK_TABS];
 const PAGES = ['overview', 'sessions', 'gpu', 'todo', 'guide', 'design', 'new'];
@@ -183,8 +184,8 @@ function render() {
   for (const id of open) { const el = document.getElementById(id); if (el) el.open = true; }
   if (sameView) document.querySelectorAll('#main .items').forEach((x, i) => { if (scrolls[i]) x.scrollTop = scrolls[i]; });
   fitExample();
-  // a linked setup entry is highlighted on every render and scrolled to once; other pages start at the top
-  const anchor = r.page === 'project' && r.tab === 'setup' && r.item != null && document.querySelector(`[data-anchor="${CSS.escape(r.item)}"]`);
+  // a linked setup entry or paper is highlighted on every render and scrolled to once; other pages start at the top
+  const anchor = r.page === 'project' && (r.tab === 'setup' || r.tab === 'papers') && r.item != null && document.querySelector(`[data-anchor="${CSS.escape(r.item)}"]`);
   if (anchor) anchor.classList.add('flash');
   if (location.hash !== lastHash && !(r.page === 'project' && !S.detail[r.name] && !S.missing[r.name])) {  // wait for the data before scrolling
     lastHash = location.hash;
@@ -237,7 +238,7 @@ function titleFor(r) {
 }
 
 // ============================================================ 今天: what waits for you, what is stuck, what is moving
-const UPDATE_KIND = {plan: '方案', versions: '版本', tracks: '支线', attempts: '实验', runs: '运行', docs: '文档', figures: '图解', todos: '待办', setup: '实验设置', method: '方法', tasks: '任务', decisions: '决定'};
+const UPDATE_KIND = {plan: '方案', versions: '版本', tracks: '支线', attempts: '实验', runs: '运行', docs: '文档', figures: '图解', todos: '待办', setup: '实验设置', method: '方法', tasks: '任务', decisions: '决定', papers: '论文'};
 function projectCard(p, now) {
   const act = p.active_runs || [], tasks = p.tasks_open || [];
   const seen = lastSeenOf(p.name), upd = Object.entries(p.updated_kinds || {}).filter(([, t]) => seen != null && t > seen).map(([k]) => UPDATE_KIND[k]).filter(Boolean);
@@ -618,7 +619,8 @@ function ensureDetail(name, force = false) {
     if (!res.ok) return;
     const d = await res.json(), old = S.detail[name];
     const same = k => JSON.stringify(old[k]) === JSON.stringify(d[k]);
-    changed = !old || old.scanned_at !== d.scanned_at || !same('stale') || !same('scan') || !same('project') || !same('answers') || !same('marks');
+    changed = !old || old.scanned_at !== d.scanned_at || !same('stale') || !same('scan') || !same('project') || !same('answers') || !same('marks')
+      || !same('paper_marks') || !same('papers_elsewhere');
     S.detail[name] = d; S.missing[name] = false;
   }).catch(() => {}).finally(() => {
     S.loading[name] = false; S.fetchedAt[name] = Date.now();
@@ -635,12 +637,14 @@ function pageProject(r) {
     : `<div class="empty">正在读取 ${esc(r.name)}…</div>`;
   const p = d.project || {};
   const unread = docItems(d).filter(x => x.state === 'unread' || x.state === 'changed').length;
+  const papers = paperItems(d), papersRead = papers.filter(p => p.read).length, mustUnread = papers.filter(p => p.must && !p.read).length;
   const W = work(d), since = lastSeenOf(d.name), fresh = since == null ? 0 : timelineOf(d).filter(e => e.t > since).length;
   const openTasks = W.tasks.filter(t => TASK_COLS.includes(t.meta.status)).length, cands = W.decisions.filter(x => x.state === '候选').length;
   const mySessions = S.sessions ? S.sessions.sessions.filter(x => x.project === d.name && x.live).length : null;
   const counts = {home: fresh ? fresh + ' 新' : null, method: methodIndex(d).steps.length || null, flow: d.attempts.length || null, setup: null, runs: d.runs.length,
     examples: (d.example.probe_head || []).length || null,
     docs: docItems(d).length ? (unread ? `${unread} 未看 / ${docItems(d).length}` : docItems(d).length) : null,
+    papers: papers.length ? (papers.length - papersRead ? `${papers.length - papersRead} 未读 / ${papers.length}` : papers.length) : null,
     tasks: openTasks || null, decisions: cands ? cands + ' 待采纳' : W.decisions.length || null, sessions: mySessions || null, timeline: null,
     upkeep: (d.checks || []).length + d.errors.length || null};
   const nameHtml = ui.renaming
@@ -650,6 +654,7 @@ function pageProject(r) {
     : `<h1>${esc(p.title || d.name)}</h1><button class="lnkbtn" id="rename-open" title="改控制台里显示的名字">改名</button>`;
   const head = `<div class="phead">${nameHtml}${B.pill(p.status)}
       ${p.current_version ? `<span class="small">当前版本 <b>${esc(p.current_version)}</b></span>` : ''}
+      ${papers.length ? `<a class="small" href="${plink(d.name, 'papers')}">论文 ${papers.length} 篇 · 读过 ${papersRead}${mustUnread ? ` · <b>必读未读 ${mustUnread}</b>` : ''}</a>` : ''}
       ${entryBadge(d.name)}
       <span class="small right">数据读取于 ${B.ago(d.scanned_at, d.now)} · 每分钟刷新</span></div>
     ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
@@ -657,7 +662,7 @@ function pageProject(r) {
     <nav class="ptabs">${[['研究', RESEARCH_TABS], ['工作', WORK_TABS]].map(([g, tabs]) => `<span class="pgrp">${g}</span>` +
       tabs.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}${k === 'upkeep' ? ' quiet' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')).join('<span class="psep"></span>')}</nav>`;
-  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs,
+  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs, papers: tabPapers,
     tasks: tabTasks, decisions: tabDecisions, sessions: tabSessions, timeline: tabTimeline, upkeep: tabUpkeep}[r.tab](d, r);
   return head + notices(d) + withTerms(body, d);
 }
@@ -715,6 +720,7 @@ function flowSummary(d) {
       ${bestCard}
       <a class="stat" href="${plink(name, 'runs')}"><div class="k">正在跑</div><div class="v">${active.length}</div>
         <div class="s">${active.length ? active.map(x => `${esc(c.label(x))} · ${esc((x.run || {}).server || '?')}${esc(gpusText(x.run || {}))} ${statePill(x.state)}`).join('<br>') : '没有正在跑的任务'}</div></a>
+      ${paperStat(d)}
     </div>
     ${recent.length ? `<div class="sec"><h3>最近定下的结论</h3><ul class="gists">${recent.map(a => `<li>${B.pill(a.meta.status)}
       <a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>：${esc(gistOf(d, a))}</li>`).join('')}</ul></div>` : ''}
@@ -730,6 +736,13 @@ function flowSummary(d) {
     ${(d.checks || []).length + d.errors.length ? `<div class="pad small"><a href="${plink(name, 'upkeep')}">记录维护：${(d.checks || []).length + d.errors.length} 条格式问题 →</a></div>` : ''}</div>`;
 }
 
+function paperStat(d) {
+  const ps = paperItems(d);
+  if (!ps.length) return '';
+  const read = ps.filter(p => p.read).length, must = ps.filter(p => p.must && !p.read).length;
+  return `<a class="stat" href="${plink(d.name, 'papers')}"><div class="k">论文</div><div class="v">${ps.length}</div>
+    <div class="s">读过 <b>${read}</b>${must ? ` · 必读未读 <b>${must}</b>` : ''}</div></a>`;
+}
 // one line per kind on the overview; every name links to its definition on the setup tab
 function setupSummary(d) {
   const c = ctx(d), s = c.setup, name = d.name;
@@ -1054,7 +1067,7 @@ function methodDetail(d, x, path) {
     <div class="dmeta"><span>${esc(x.file)}</span>${others.length ? `<span>同一步的其他做法：${others.map(o => `<a href="${plink(name, 'method', o.meta.id)}">${esc(M.title(o))}</a>`).join('、')}</span>` : ''}</div>
     ${gist(sec['一句话']) ? `<div class="oneline">${esc(plain(sec['一句话']).split('\n').filter(Boolean).join(' '))}</div>` : ''}
     ${box('输入和输出', sec['输入和输出'])}${box('怎么做', sec['怎么做'])}${box('关键设置', sec['关键设置'])}${box('例子', sec['例子'])}${extra}
-    ${exp}${setup}${docsOfStep(d, 'm:' + x.meta.id)}</div>`;
+    ${exp}${setup}${stepRefs(d, 'm:' + x.meta.id)}</div>`;
 }
 
 // the headline metric across some runs, as bars (names from setup.json)
@@ -1108,7 +1121,7 @@ function versionDetail(d, v) {
     ${branched.length ? `<div class="sec${merged.length ? '' : ' first'}"><h3>从这个版本分出的支线</h3><div class="chips">${branched.map(chip).join('')}</div></div>` : ''}
     <div class="sec"><h3>这个版本的方案</h3>${v.body.trim() ? `<div class="md">${B.md(v.body)}</div>` : '<div class="none">版本正文是空的</div>'}</div>
     ${runsMatrix(d, runs, '这个版本下各次运行')}
-    ${headlineBars(d, runs, '这个版本下各次运行')}${docsOfStep(d, 'v:' + vid)}</div>`;
+    ${headlineBars(d, runs, '这个版本下各次运行')}${stepRefs(d, 'v:' + vid)}</div>`;
 }
 
 function trackDetail(d, t) {
@@ -1133,7 +1146,7 @@ function trackDetail(d, t) {
     <div class="sec first"><h3>尝试的先后（${atts.length}）</h3>${steps ? `<ol class="steps">${steps}</ol>` : '<div class="none">还没有尝试</div>'}</div>
     ${runsMatrix(d, runs, '这条支线的各次运行')}
     ${headlineBars(d, runs, '这条支线的各次运行')}
-    ${bodySections(t.body, ['假设', '现状', '结局和原因']).replace('class="sec first"', 'class="sec"')}${docsOfStep(d, 't:' + tid)}</div>`;
+    ${bodySections(t.body, ['假设', '现状', '结局和原因']).replace('class="sec first"', 'class="sec"')}${stepRefs(d, 't:' + tid)}</div>`;
 }
 
 const SECTION_ORDER = ['一页纸', '假设', '预期', '改了什么', '结果', '例子', '结论和原因'];
@@ -1177,7 +1190,7 @@ function attemptDetail(d, a, L) {
     <div class="dmeta"><span>${esc(attDate(a)) || '没有日期'}</span>${k >= 0 ? `<span>这条支线的第 ${k + 1} / ${siblings.length} 次尝试</span>` : '<span>没有归属支线</span>'}<span>${esc(a.file)}</span></div>
     ${methodIndex(d).stepsOfAttempt(a).length ? `<div class="chips mstepsof"><span class="small">改的是方法里的：</span>${methodIndex(d).stepsOfAttempt(a).map(x => stepLink(d, x)).join('')}</div>` : ''}
     ${Object.keys(a.onepager || {}).length ? onepagerBox(a) : `<div class="oneline s-${tone}">${line}</div>${onepagerBox(a, {missing: true})}`}
-    ${confirm}${happened}${example}${data}${conclusion}${docsOfStep(d, 'a:' + attKey(a))}${rest}${nav}</div>`;
+    ${confirm}${happened}${example}${data}${conclusion}${stepRefs(d, 'a:' + attKey(a))}${rest}${nav}</div>`;
 }
 
 // numbers of an attempt's runs, following display (primary columns, numerator/denominator in one cell) and setup names
@@ -1384,7 +1397,7 @@ function docItems(d) {
     const m = x.meta || {}, mark = marks[x.file] || null;
     const changed = !!(mark && typeof mark.mtime === 'number' && x.mtime > mark.mtime + 1);
     out.push(Object.assign({file: x.file, body: x.body, mtime: x.mtime, title: m.title || base(x),
-      about: typeof m.about === 'string' && /^[vtam]:/.test(m.about) ? m.about : null,
+      about: typeof m.about === 'string' && ABOUT_RE.test(m.about) ? m.about : null,
       kind: typeof m.kind === 'string' ? m.kind : null, replaces: (Array.isArray(m.replaces) ? m.replaces : m.replaces ? [m.replaces] : []).map(String),
       mark, state: !mark ? 'unread' : changed ? 'changed' : mark.mark === '确认' ? 'ok' : 'seen'}, extra));
   };
@@ -1407,11 +1420,14 @@ function docItems(d) {
 const DOC_STATE = {unread: ['未看', 'other'], seen: ['看过', 'part'], ok: ['已确认', 'ok'], changed: ['有更新', 'todo']};
 const docBadge = x => `<span class="pill t-${DOC_STATE[x.state][1]}">${DOC_STATE[x.state][0]}</span>`;
 const docsAbout = (d, key) => docItems(d).filter(x => x.about === key);
-// where a document sits in the flow, as a label
+// where a document or paper sits: a flow step (v: t: a:), a method step (m:), a task card (k:) or a decision (d:)
+const ABOUT_RE = /^[vtamkd]:/;
 function placeLabel(d, key) {
   const c = ctx(d);
   if (!key) return '整个项目';
   const id = key.slice(2);
+  if (key.startsWith('k:')) { const t = work(d).task(id); return t ? '任务 · ' + taskTitle(t) : null; }
+  if (key.startsWith('d:')) { const x = work(d).decision(id); return x ? '决定 · ' + (x.meta.title || id) : null; }
   if (key.startsWith('m:')) { const M = methodIndex(d), x = M.byId.get(id); return x ? '方法 · ' + M.path(x).map(M.title).join(' › ') : null; }
   if (key.startsWith('v:')) { const v = c.verById.get(id); return v ? `版本 ${id}${v.meta.title ? ' · ' + v.meta.title : ''}` : null; }
   if (key.startsWith('t:')) { const t = c.trackById.get(id); return t ? '支线 · ' + (t.meta.title || id) : null; }
@@ -1427,25 +1443,32 @@ function docsOfStep(d, key) {
     `<li>${docBadge(x)}${x.kind ? `<span class="tag2">${esc(x.kind)}</span>` : ''}<a href="${plink(d.name, 'docs', x.id)}">${esc(x.title)}</a>` +
     `${x.replacedBy ? ` <span class="small">已被「${esc(x.replacedBy.title)}」取代</span>` : ''}</li>`).join('')}</ul></div>` : '';
 }
+// what a step's detail lists: its documents, then its papers
+const stepRefs = (d, key) => docsOfStep(d, key) + papersOfStep(d, key);
+// documents and papers are grouped by where they sit: the whole project first, then the method steps,
+// then the flow in its order, then task cards and decisions, then places that do not exist
+function groupByPlace(d, items) {
+  const L = d._flow || (d._flow = B.flowLayout(d)), order = new Map(L.nodes.map(n => [n.key, n.row]));
+  const mOrder = new Map(methodIndex(d).steps.map((x, i) => ['m:' + x.meta.id, i]));
+  const key = x => x.about && placeLabel(d, x.about) ? x.about : x.about ? '?' + x.about : '';
+  const rank = g => g === '' ? -1 : g.startsWith('?') ? 1e9 : g.startsWith('m:') ? -1 + (mOrder.get(g) + 1) / 1e4
+    : g.startsWith('k:') ? 1e8 : g.startsWith('d:') ? 1e8 + 1 : order.get(g) ?? 1e8 - 1;
+  return [...new Set(items.map(key))].sort((a, b) => rank(a) - rank(b)).map(g => [g, items.filter(x => key(x) === g)]);
+}
+const placeHead = (d, g) => g === '' ? '整个项目' : g.startsWith('?') ? '找不到的位置：' + esc(g.slice(1))
+  : `<a href="${refHref(d, g)}">${esc(placeLabel(d, g))}</a>`;
 function tabDocs(d, r) {
   const all = docItems(d), name = d.name, q = r.query || {};
   if (!all.length) return '<div class="card"><div class="empty">还没有文档（board/plan.md、board/docs/*.md、board/figures/*.html 图解、项目根目录的 NOTES.md 和 REPORT.md）。各版本的方案在「流程」里，点版本节点就能看到。</div></div>';
   const f = q.f || '', k = q.k || '';
   const pass = x => (!f || x.state === f) && (!k || x.kind === k);
   const docs = all.filter(pass);
-  // groups follow the flow: the whole project first, then the steps in the flow's order, then unknown places
-  const L = d._flow || (d._flow = B.flowLayout(d)), order = new Map(L.nodes.map(n => [n.key, n.row]));
-  const groupKey = x => x.about && placeLabel(d, x.about) ? x.about : x.about ? '?' + x.about : '';
-  const mOrder = new Map(methodIndex(d).steps.map((x, i) => [ 'm:' + x.meta.id, i]));
-  const rank = g => g === '' ? -1 : g.startsWith('?') ? 1e9 : g.startsWith('m:') ? -1 + (mOrder.get(g) + 1) / 1e4 : order.get(g) ?? 1e8;
-  const groups = [...new Set(docs.map(groupKey))].sort((a, b) => rank(a) - rank(b));
   const sel = all.find(x => x.id === r.item) || docs[0] || all[0];
   const qs = {f, k};
   const item = x => `<a class="li${x === sel ? ' on' : ''}${x.replacedBy ? ' old' : ''}" href="${plink(name, 'docs', x.id, qs)}">
       <div class="row1">${docBadge(x)}<span class="name">${esc(x.title)}</span>${x.kind ? `<span class="tag2">${esc(x.kind)}</span>` : ''}</div>
       <div class="row2"><span>${esc(x.file)}</span><span>${B.ago(x.mtime, d.now)}更新</span>${x.replacedBy ? `<span>已被「${esc(x.replacedBy.title)}」取代</span>` : ''}</div></a>`;
-  const items = groups.map(g => `<div class="tgroup">${g === '' ? '整个项目' : g.startsWith('?') ? '找不到的位置：' + esc(g.slice(1)) :
-      `<a href="${g.startsWith('m:') ? plink(name, 'method', g.slice(2)) : plink(name, 'flow', g)}">${esc(placeLabel(d, g))}</a>`}</div>` + docs.filter(x => groupKey(x) === g).map(item).join('')).join('');
+  const items = groupByPlace(d, docs).map(([g, xs]) => `<div class="tgroup">${placeHead(d, g)}</div>` + xs.map(item).join('')).join('');
   const count = st => all.filter(x => x.state === st).length;
   const chip = (label, nf, nk, n) => `<a class="chip${f === nf && k === nk ? ' on' : ''}" href="${plink(name, 'docs', r.item, {f: nf, k: nk})}">${label}${n != null ? ' ' + n : ''}</a>`;
   const kinds = DOC_KINDS.filter(x => all.some(y => y.kind === x));
@@ -1462,11 +1485,62 @@ function tabDocs(d, r) {
   return `<div class="md2"><div class="list">${filters}<div class="items">${items || '<div class="empty">没有符合条件的文档。</div>'}</div>
       <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），图解写在 &lt;meta name="about"&gt; 里，这里就按流程归类，格式见 BOARD_FORMAT.md。</div></div>
     <div class="detail"><h2>${esc(sel.title)} ${sel.kind ? `<span class="tag2">${esc(sel.kind)}</span>` : ''}${docBadge(sel)}</h2>
-      <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${sel.about.startsWith('m:') ? plink(name, 'method', sel.about.slice(2)) : plink(name, 'flow', sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
+      <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${refHref(d, sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
         <span>${esc(sel.file)}</span>${sel.figure ? `<span>${sizeText(sel.size)}</span>` : ''}<span>${B.ago(sel.mtime, d.now)}更新</span>${rel.map(x => `<span>${x}</span>`).join('')}</div>
       <div class="marks">${mk('看过', '看过')}${mk('确认', '确认内容')}${sel.mark ? '<button class="mk" data-mark="" data-file="' + esc(sel.file) + '">清除标记</button>' : ''}
         <span class="small">「确认」表示你认可这篇的内容，会话改它之前会先问你</span></div>${markNote}
       ${sel.figure ? figureView(d, sel) : `<div class="md">${refs(B.md(sel.body), d)}</div>`}</div></div>`;
+}
+
+// ============================================================ 论文: the project's reading list (board/papers.jsonl), ticked 读过 here
+// Sessions write the list; the only thing the page writes is the tick (a row of marks.jsonl, via /api/paper-mark).
+function paperItems(d) {
+  if (d._papers) return d._papers;
+  const marks = d.paper_marks || {}, away = d.papers_elsewhere || {};
+  return d._papers = (d.papers || []).map((p, i) => Object.assign({}, p, {i, mark: marks[p.id] || null, read: !!marks[p.id],
+    must: p.priority === '必读', elsewhere: marks[p.id] ? [] : away[p.id] || [],
+    about: typeof p.about === 'string' && ABOUT_RE.test(p.about) ? p.about : null}));
+}
+// unread before read, 必读 before 选读, then the order of the list
+const sortPapers = ps => [...ps].sort((a, b) => (a.read - b.read) || (b.must - a.must) || (a.i - b.i));
+const paperUrl = u => typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : null;  // never javascript: and the like
+const authorsText = a => Array.isArray(a) ? a.slice(0, 3).map(String).join('、') + (a.length > 3 ? ' 等' : '') : typeof a === 'string' ? a : '';
+function projectLabel(name) {
+  const p = S.projects && (S.projects.projects || []).find(x => x.name === name);
+  return (p && p.title) || name;
+}
+function paperRow(d, p, opts = {}) {
+  const url = paperUrl(p.url), title = esc(String(p.title || p.id));
+  const meta = [authorsText(p.authors), p.year, p.venue].filter(x => x != null && x !== '').map(x => esc(String(x))).join(' · ');
+  const foot = [opts.place && p.about ? `属于：<a href="${refHref(d, p.about)}">${esc(placeLabel(d, p.about) || p.about)}</a>` : '',
+    p.read ? `${isoAgo(p.mark.at, d.now)}勾了读过` : '',
+    p.elsewhere.length ? '在 ' + p.elsewhere.map(n => `<a href="${plink(n, 'papers')}">${esc(projectLabel(n))}</a>`).join('、') + ' 勾过' : ''].filter(Boolean);
+  return `<li class="paper${p.read ? ' read' : ''}" data-anchor="${esc(p.id)}">
+    <label class="pcheck" title="${p.read ? '取消「读过」' : '读完了就勾上'}"><input type="checkbox" data-paper="${esc(p.id)}"${p.read ? ' checked' : ''}></label>
+    <div class="pbody"><div class="ptitle">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}
+      ${p.must ? '<span class="pill t-todo">必读</span>' : ''}${p.checked ? '' : '<span class="pill t-other" title="会话还没有打开链接核对过标题">未核实</span>'}</div>
+      ${meta ? `<div class="small">${meta}</div>` : ''}
+      ${p.why ? `<div class="pwhy">${esc(String(p.why))}</div>` : ''}
+      ${p.summary ? `<div class="small psum">读后要点：${esc(String(p.summary))}</div>` : ''}
+      ${foot.length ? `<div class="small faint">${foot.join(' · ')}</div>` : ''}</div></li>`;
+}
+// 「这一步的论文」 under a flow step, a method step, a task card or a decision
+function papersOfStep(d, key) {
+  const ps = sortPapers(paperItems(d).filter(p => p.about === key));
+  return ps.length ? `<div class="sec"><h3>这一步的论文 <span class="faint">${ps.length}</span></h3><ul class="papers">${ps.map(p => paperRow(d, p)).join('')}</ul></div>` : '';
+}
+function tabPapers(d, r) {
+  const all = paperItems(d), name = d.name, f = (r.query || {}).f || '';
+  if (!all.length) return `<div class="card"><div class="empty">还没有论文清单。讨论方案时，会话会把用到的、建议你读的论文记进 board/papers.jsonl（每篇写为什么读、属于哪一步），这里就会列出来；读完了在这里打勾。</div></div>`;
+  const read = all.filter(p => p.read).length, must = all.filter(p => p.must && !p.read).length;
+  const list = all.filter(p => !f || (f === 'unread' ? !p.read : p.read));
+  const chip = (label, nf, n) => `<a class="chip${f === nf ? ' on' : ''}" href="${plink(name, 'papers', null, {f: nf})}">${label} ${n}</a>`;
+  const groups = groupByPlace(d, list).map(([g, ps]) => `<div class="tgroup">${placeHead(d, g)}</div><ul class="papers">${sortPapers(ps).map(p => paperRow(d, p)).join('')}</ul>`).join('');
+  return `<div class="card"><h2>论文 <span class="meta">${all.length} 篇 · 读过 ${read}${must ? ` · 必读未读 ${must}` : ''}</span></h2>
+    <div class="pad"><div class="chips">${chip('全部', '', all.length)}${chip('未读', 'unread', all.length - read)}${chip('读过', 'read', read)}</div></div>
+    ${groups || '<div class="empty">没有符合条件的论文。</div>'}
+    <div class="pad small">清单由会话在讨论方案时写进 board/papers.jsonl，每篇写为什么读、属于哪一步；读完了在这里打勾，会话下次开场就知道你读过哪些。
+      「未核实」表示会话还没打开链接核对过标题。别的项目里勾过的同一篇会注明，但这里不自动算读过。</div></div>`;
 }
 const sizeText = n => typeof n !== 'number' ? '' : n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
 // A figure is a page an agent wrote: it runs in a frame with scripts but without an origin (sandbox="allow-scripts",
@@ -1573,6 +1647,15 @@ document.addEventListener('click', e => {
   if (row && !t.closest('a')) location.hash = row.dataset.href;
 });
 document.addEventListener('change', e => {
+  const pc = e.target.closest('input[data-paper]');
+  if (pc) {
+    const r = route(), want = pc.checked;
+    pc.disabled = true; pc.blur();  // a focused input would hold off the refresh (busy)
+    postJSON('/api/paper-mark', {project: r.name, paper: pc.dataset.paper, mark: want ? '读过' : null})
+      .then(() => { S.fetchedAt[r.name] = 0; return refreshAfterWrite(r.name); })
+      .catch(err => { pc.checked = !want; pc.disabled = false; alert('没有保存：' + err.message); });
+    return;
+  }
   const sel = e.target.closest('select[data-view]');
   if (sel && sel.value.startsWith('g:')) { ui.runView[sel.dataset.view].group = sel.value.slice(2); render(); return; }
   const tr = e.target.closest('select[data-rtrack]');

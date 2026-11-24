@@ -299,6 +299,19 @@ table.setup code{white-space:normal;overflow-wrap:anywhere}
 .kv2>span{color:var(--muted);font-size:13px}
 table.setup td:first-child{white-space:nowrap}
 [data-anchor].flash td{animation:flash 2.4s ease-out}
+/* ---------- papers (论文): a reading list with a tick per paper */
+ul.papers{list-style:none;margin:0;padding:0}
+li.paper{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid var(--line)}
+.sec ul.papers li.paper{padding:8px 0}
+li.paper.flash{animation:flash 2.4s ease-out}
+.pcheck{flex:none;padding-top:2px;cursor:pointer}
+.pcheck input{width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)}
+.pbody{flex:1;min-width:0;overflow-wrap:anywhere}
+.ptitle{font-size:14px;font-weight:600;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ptitle a{color:var(--text)}
+.pwhy{font-size:13px;margin-top:3px}
+.psum{margin-top:3px}
+li.paper.read .ptitle,li.paper.read .ptitle a,li.paper.read .pwhy{color:var(--muted);font-weight:normal}
 @keyframes flash{0%,40%{background:var(--busy-bg)}100%{background:transparent}}
 
 /* ---------- bars */
