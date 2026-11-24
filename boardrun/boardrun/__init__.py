@@ -12,6 +12,10 @@
 
 Commands that are not Python:  python -m boardrun run --attempt <id> --kind eval -- <command ...>
 
+While it runs, the run touches board/runs/<id>/heartbeat every minute, so the console can tell a
+live run from a dead one even when it cannot see the process. A run refuses to start from code with
+uncommitted changes (or no commit at all) unless allow_dirty=True: every run is tied to a commit.
+
 The record format is /shared/ssd/dchen/_shared/BOARD_FORMAT.md (run.json). Standard library only.
 """
 import datetime
@@ -29,7 +33,7 @@ import threading
 import time
 import warnings
 
-__all__ = ["Run", "find_project", "new_id", "RUNNING", "DONE", "FAILED", "INTERRUPTED"]
+__all__ = ["Run", "find_project", "new_id", "DirtyCode", "RUNNING", "DONE", "FAILED", "INTERRUPTED"]
 
 RUNNING, DONE, FAILED, INTERRUPTED = "运行中", "完成", "失败", "被中断"
 MAX_SAMPLES = 200                         # samples.jsonl rows kept per run (the console shows the first 20)
@@ -38,6 +42,11 @@ ARTIFACT_TYPES = {".png", ".jpg", ".jpeg", ".svg", ".json", ".md"}  # what the c
 MAX_PENDING = 20000                       # lines kept in memory while the shared disk refuses writes
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 FALLBACK_DIR = pathlib.Path.home() / ".local" / "state" / "boardrun"
+HEARTBEAT_S = 60                          # seconds between heartbeat touches
+
+
+class DirtyCode(RuntimeError):
+    """The code has uncommitted changes (or no commit): the run would not be reproducible."""
 
 
 def _now():
@@ -81,13 +90,27 @@ def _tmux():
     return _run(["tmux", "display-message", "-p", "#S"]) if os.environ.get("TMUX") else None
 
 
-def _commit(project):
-    """Short commit of the project's code, with -dirty when tracked files have uncommitted changes."""
-    head = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=project)
+def _commit(code_dir):
+    """Short commit of the code, with -dirty when tracked files have uncommitted changes; None without a commit."""
+    head = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=code_dir)
     if not head:
         return None
-    dirty = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=project)
+    dirty = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=code_dir)
     return head + ("-dirty" if dirty else "")
+
+
+def code_dir(project):
+    """Where the running code lives: when the current directory is inside the project and inside a git
+    work tree that is itself inside the project (a worktree under .worktrees/, or a repository cloned
+    into the project), that work tree; otherwise the project itself."""
+    cwd = pathlib.Path(os.getcwd()).resolve()
+    if cwd == project or project in cwd.parents:
+        top = _run(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+        if top:
+            t = pathlib.Path(top).resolve()
+            if t == project or project in t.parents:
+                return t
+    return project
 
 
 def _number(x):
@@ -103,16 +126,21 @@ class Run:
     resumed_from  id of the run this one continues (after moving servers or a crash)
     run_id        a readable id instead of the generated one; must not exist yet
     project_dir   the project directory; found from the current directory when omitted
+    task          the task card (board/tasks/<id>.md) this run belongs to, or None
+    allow_dirty   start even if the code has uncommitted changes or no commit (debugging only)
+    heartbeat_s   seconds between touches of runs/<id>/heartbeat (0 turns the heartbeat off)
     """
 
     def __init__(self, attempt, kind="eval", config=None, resumed_from=None, run_id=None, project_dir=None,
-                 max_samples=MAX_SAMPLES):
+                 max_samples=MAX_SAMPLES, task=None, allow_dirty=False, heartbeat_s=HEARTBEAT_S):
         if attempt is not None and not (isinstance(attempt, str) and attempt):
             raise ValueError("attempt must be an attempt id or None")
         if not (isinstance(kind, str) and kind):
             raise ValueError("kind must be a non-empty string")
         if config is not None and not isinstance(config, dict):
             raise TypeError("config must be a dict")
+        if task is not None and not (isinstance(task, str) and ID_RE.match(task)):
+            raise ValueError("task must be a task id (board/tasks/<id>.md) or None")
         json.dumps(config or {})  # fails early on settings that cannot be recorded
         self.project = pathlib.Path(project_dir).resolve() if project_dir else find_project()
         if not (self.project / "board" / "project.json").is_file():
@@ -120,18 +148,29 @@ class Run:
         self.id = run_id or new_id()
         if not ID_RE.match(self.id):
             raise ValueError("run id may only use letters, digits, '.', '_' and '-': %r" % self.id)
+        code = code_dir(self.project)
+        commit = _commit(code)
+        if not allow_dirty and (commit is None or commit.endswith("-dirty")):
+            raise DirtyCode("%s: %s. Commit first so the run is tied to a commit, or pass allow_dirty=True "
+                            "(--allow-dirty) for debugging." % (code, "no commit yet" if commit is None else "uncommitted changes"))
         self.dir = self.project / "board" / "runs" / self.id
         self.dir.mkdir(parents=True, exist_ok=False)  # a resumed run gets a new id; never overwrite a record
         self.record = {"id": self.id, "kind": kind, "attempt": attempt, "status": RUNNING,
                        "server": socket.gethostname().split(".")[0], "gpus": _gpus(), "pid": os.getpid(),
-                       "tmux": _tmux(), "started": _now(), "ended": None, "commit": _commit(self.project),
+                       "tmux": _tmux(), "started": _now(), "ended": None, "commit": commit, "task": task,
                        "resumed_from": resumed_from, "config": dict(config or {}), "metrics": {}, "artifacts": {}}
+        if code != self.project:
+            self.record["code_dir"] = str(code)
         self.max_samples, self.n_samples = max_samples, 0
         self._pending = {"metrics.jsonl": [], "samples.jsonl": []}
         self._dirty, self._warned, self._finished = False, set(), False
         self._lock = threading.RLock()
         self._old_sigterm = None
         self._write_record()  # the first write must succeed: better to fail before the work starts
+        self._stop = threading.Event()
+        if heartbeat_s and heartbeat_s > 0:
+            self._beat()
+            threading.Thread(target=self._heartbeat, args=(heartbeat_s,), name="boardrun-heartbeat", daemon=True).start()
 
     # ------------------------------------------------------------ what the run reports
     def log(self, step, **values):
@@ -189,13 +228,16 @@ class Run:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def finish(self, status=DONE, error=None):
+    def finish(self, status=DONE, error=None, exit_code=None):
         """Mark the run ended. Called by `with`; call it yourself when not using `with`."""
         with self._lock:
             if self._finished:
                 return
             self._finished = True
+            self._stop.set()
             self.record.update(status=status, ended=_now())
+            if exit_code is not None:
+                self.record["exit_code"] = exit_code
             if error:
                 self.record["error"] = str(error)[:2000]
             for attempt in range(3):  # the final state matters most: retry a soft-mounted disk a few times
@@ -234,6 +276,19 @@ class Run:
         if self._old_sigterm is not None:
             signal.signal(signal.SIGTERM, self._old_sigterm)
             self._old_sigterm = None
+
+    # ------------------------------------------------------------ heartbeat
+    def _beat(self):
+        try:
+            tmp = self.dir / (".heartbeat.tmp.%d" % os.getpid())
+            tmp.write_text(_now() + "\n", encoding="utf-8")
+            os.replace(tmp, self.dir / "heartbeat")
+        except OSError as e:
+            self._warn("heartbeat", "heartbeat not written (will retry): %s" % e)
+
+    def _heartbeat(self, every):
+        while not self._stop.wait(every):
+            self._beat()
 
     # ------------------------------------------------------------ writing (the shared disk may refuse)
     def _write_record(self):

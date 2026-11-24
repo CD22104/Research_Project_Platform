@@ -195,15 +195,19 @@ with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
     run.artifact("curve.png")                 # 小图复制到运行目录
     out = run.output_dir()                    # results/<运行编号>/：大输出，控制台不显示
 ```
-正常结束记「完成」，抛异常记「失败」并写明错误，Ctrl-C 或 SIGTERM 记「被中断」。服务器、卡号、进程号、tmux 会话名、commit（有未提交改动时带 `-dirty`）自动填。不是 Python 的命令：`python -m boardrun run --attempt <尝试 id> --kind eval -- <命令>`，按退出码记状态。续跑用 `resumed_from=<上一次的运行编号>`，会得到新编号。
+正常结束记「完成」，抛异常记「失败」并写明错误，Ctrl-C 或 SIGTERM 记「被中断」。服务器、卡号、进程号、tmux 会话名、commit 自动填。不是 Python 的命令：`python -m boardrun run --attempt <尝试 id> --kind eval [--task <任务 id>] -- <命令>`，按退出码记状态并写下 `exit_code`。续跑用 `resumed_from=<上一次的运行编号>`，会得到新编号。
+
+- **每次运行绑定一个提交。** 代码有未提交的改动、或者还没有任何提交时，boardrun 拒绝启动（`DirtyCode`，命令行退出码 3），不会留下运行目录。先提交再跑；只有调试时才加 `allow_dirty=True`（`--allow-dirty`），这时 commit 带 `-dirty`。代码在项目里的另一个仓库（例如团队仓库的克隆、`.worktrees/<任务>`）时，从那个目录里启动，记的是那个仓库的提交，并写下 `code_dir`。
+- **心跳。** 运行期间每分钟写一次 `runs/<运行编号>/heartbeat`。控制台据此区分「运行中」和「状态未知」；收尾程序（a100 上每 5 分钟一次的 `board reconcile`）对心跳停了 5 分钟以上的运行去机器上查进程（每台机器一次 ssh），连续两次都查不到才把记录改成「被中断」，并写 `closed_by: board reconcile`。
+- `task=<任务 id>`（`--task`）：这次运行属于哪张任务卡。任务卡是「等运行」时，它的运行都结束后，收尾程序把卡改成「可以继续」。
 
 运行记录了 `attempt`，尝试的 `runs` 列表就可以不写（控制台两边都认）。下面是字段说明；没接入模块的旧运行照这个格式手写。
 
 ```
-{"id", "kind", "attempt", "status", "server", "gpus", "pid", "tmux", "started", "ended", "commit", "resumed_from", "config", "metrics", "artifacts"}
+{"id", "kind", "attempt", "task", "status", "server", "gpus", "pid", "tmux", "started", "ended", "exit_code", "commit", "code_dir", "resumed_from", "config", "metrics", "artifacts"}
 ```
 - `kind`：train / eval / data / smoke / 其他。`kind` 为 data 的运行在运行页单独成表。
-- `status`：运行中 / 完成 / 失败 / 被中断。记录写着运行中、但目标机器上查不到进程时，控制台会标「可能已中断」。失败和被中断时可以有 `error`（一句话的原因）。
+- `status`：运行中 / 完成 / 失败 / 被中断。失败和被中断时可以有 `error`（一句话的原因）。控制台另外显示一个观测到的状态：运行中（心跳是新的或看到了进程）/ 状态未知（心跳停了、机器连不上，显示最后观测时间）/ 已结束 / 已中断（心跳停了、机器上也没有进程；收尾程序随后会把记录改成被中断）。手写的旧记录没有心跳，只能靠显卡上的进程判断。
 - `commit`：代码的提交号；末尾 `-dirty` 表示运行时有未提交的改动。
 - `metrics` 按「分组 → 指标」组织，分组通常是测试集，例如 `{"authz_test_iid": {"accuracy": 0.6, "correct": 361, "n": 602}}`。分组名和指标名要在 `setup.json` 里有定义。
 - `config`、`artifacts` 是对象，控制台显示成两列的键值表。

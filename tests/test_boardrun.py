@@ -1,4 +1,6 @@
 """The run-record module (boardrun/): the seven key cases agreed with the user. Run: python3 -m unittest -v"""
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -31,7 +33,24 @@ def make_project(root):
                                {"id": "n", "name": "条数", "better": None}]}, f)
     with open(os.path.join(b, "attempts", "2026-11-22-a1.md"), "w") as f:
         f.write("---\nid: 2026-11-22-a1\ntrack: null\ndate: 2026-11-22\nstatus: 进行中\nruns: []\n---\n\n## 假设\nh\n\n## 预期\ne\n")
+    git(root, "init", "-q")
+    with open(os.path.join(root, ".gitignore"), "w") as f:
+        f.write("board/runs/\nresults/\n")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "x")
     return root
+
+
+def make_project_nogit(root):
+    b = os.path.join(root, "board")
+    os.makedirs(b)
+    with open(os.path.join(b, "project.json"), "w") as f:
+        json.dump({"title": "没有提交的项目"}, f)
+    return root
+
+
+def git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=cwd, check=True)
 
 
 def record(run_dir):
@@ -57,13 +76,10 @@ class Boardrun(unittest.TestCase):
 
     # 1 -----------------------------------------------------------------
     def test_start_writes_a_complete_record_atomically(self):
-        subprocess.run(["git", "init", "-q"], cwd=self.proj, check=True)
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
-                       cwd=self.proj, check=True)
-        r = self.run_(kind="train", config={"lr": 1e-4})
+        r = self.run_(kind="train", config={"lr": 1e-4}, heartbeat_s=0)
         rec = record(r.dir)
         self.assertEqual(set(rec), {"id", "kind", "attempt", "status", "server", "gpus", "pid", "tmux", "started",
-                                    "ended", "commit", "resumed_from", "config", "metrics", "artifacts"})
+                                    "ended", "commit", "task", "resumed_from", "config", "metrics", "artifacts"})
         self.assertEqual((rec["status"], rec["kind"], rec["gpus"], rec["pid"]), ("运行中", "train", [2, 3], os.getpid()))
         self.assertEqual(rec["config"], {"lr": 1e-4})
         self.assertRegex(rec["commit"], r"^[0-9a-f]{12}$")
@@ -71,9 +87,9 @@ class Boardrun(unittest.TestCase):
         with open(os.path.join(self.proj, "tracked.txt"), "w") as f:
             f.write("x")
         subprocess.run(["git", "add", "tracked.txt"], cwd=self.proj, check=True)
-        self.assertTrue(record(self.run_().dir)["commit"].endswith("-dirty"))  # uncommitted changes are visible
+        self.assertTrue(record(self.run_(allow_dirty=True).dir)["commit"].endswith("-dirty"))  # uncommitted changes are visible
         with mock.patch.dict(os.environ, {"BOARD_PROJECT_DIR": self.proj}):  # found without project_dir
-            self.assertEqual(str(boardrun.Run("2026-11-22-a1").project), os.path.realpath(self.proj))
+            self.assertEqual(str(boardrun.Run("2026-11-22-a1", allow_dirty=True).project), os.path.realpath(self.proj))
 
     # 2 -----------------------------------------------------------------
     def test_status_on_normal_exit_error_and_interrupt(self):
@@ -199,6 +215,60 @@ class Boardrun(unittest.TestCase):
         self.assertEqual((code, rec["status"], rec["error"]), (3, "失败", "exit code 3"))
         code, rec = cli(sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)", rid="killed")
         self.assertEqual(rec["status"], "被中断")
+
+    # 8 ----------------------------------------------------------------- heartbeat and exit receipt
+    def test_heartbeat_advances_and_cli_records_exit_code(self):
+        r = self.run_(heartbeat_s=0.2)
+        hb = os.path.join(r.dir, "heartbeat")
+        t0 = os.stat(hb).st_mtime_ns
+        time.sleep(0.6)
+        self.assertGreater(os.stat(hb).st_mtime_ns, t0)                    # touched while running
+        r.finish()
+        t1 = os.stat(hb).st_mtime_ns
+        time.sleep(0.5)
+        self.assertEqual(os.stat(hb).st_mtime_ns, t1)                     # and no longer after the end
+        from boardrun.__main__ import main
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["run", "--attempt", "2026-11-22-a1", "--project", self.proj, "--id", "ok",
+                                   "--task", "f1-metric", "--", sys.executable, "-c", "pass"]), 0)
+            self.assertEqual(main(["run", "--attempt", "2026-11-22-a1", "--project", self.proj, "--id", "bad",
+                                   "--", sys.executable, "-c", "raise SystemExit(4)"]), 4)
+        ok, bad = record(os.path.join(self.proj, "board", "runs", "ok")), record(os.path.join(self.proj, "board", "runs", "bad"))
+        self.assertEqual((ok["status"], ok["exit_code"], ok["task"]), ("完成", 0, "f1-metric"))
+        self.assertEqual((bad["status"], bad["exit_code"], bad["error"]), ("失败", 4, "exit code 4"))
+
+    # 9 ----------------------------------------------------------------- tied to a commit
+    def test_dirty_or_uncommitted_code_refuses_to_start(self):
+        with open(os.path.join(self.proj, "board", "project.json"), "a") as f:
+            f.write("\n")                                                  # a tracked file changed
+        before = sorted(os.listdir(os.path.join(self.proj, "board", "runs"))) if os.path.isdir(os.path.join(self.proj, "board", "runs")) else []
+        with self.assertRaises(boardrun.DirtyCode):
+            self.run_(run_id="refused")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "board", "runs", "refused")))   # no run dir left
+        from boardrun.__main__ import main
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(main(["run", "--attempt", "2026-11-22-a1", "--project", self.proj, "--", "true"]), 3)
+        self.assertIn("uncommitted changes", err.getvalue())
+        after = sorted(os.listdir(os.path.join(self.proj, "board", "runs"))) if os.path.isdir(os.path.join(self.proj, "board", "runs")) else []
+        self.assertEqual(before, after)
+        rec = record(self.run_(allow_dirty=True, heartbeat_s=0).dir)        # debugging can opt out, and it shows
+        self.assertTrue(rec["commit"].endswith("-dirty"))
+        fresh = make_project_nogit(os.path.join(self.tmp, "nogit"))
+        with self.assertRaises(boardrun.DirtyCode):
+            boardrun.Run("2026-11-22-a1", project_dir=fresh)
+        # a repository cloned inside the project is the code when the run starts from inside it
+        inner = os.path.join(self.proj, "team")
+        os.makedirs(inner)
+        git(inner, "init", "-q")
+        git(inner, "commit", "-q", "--allow-empty", "-m", "team")
+        git(self.proj, "checkout", "-q", "--", "board/project.json")
+        old = os.getcwd()
+        os.chdir(inner)
+        try:
+            rec = record(self.run_(heartbeat_s=0).dir)
+        finally:
+            os.chdir(old)
+        self.assertEqual(rec["code_dir"], os.path.realpath(inner))
 
 
 if __name__ == "__main__":

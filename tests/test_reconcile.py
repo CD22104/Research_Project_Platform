@@ -1,0 +1,146 @@
+"""Run states and the reconcile pass (boardtool.py). Run: python3 -m unittest -v"""
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+import boardtool as T  # noqa: E402
+import projects as P  # noqa: E402
+
+NOW = 1_800_000_000.0
+
+
+class RunState(unittest.TestCase):
+    """Agreed case 3: a fresh heartbeat wins; a dead run needs a probe saying the process is gone."""
+
+    def test_states(self):
+        running = {"status": "运行中"}
+        self.assertEqual(P.run_state({"status": "完成"}, None, None, NOW), "已结束")
+        self.assertEqual(P.run_state(running, NOW - 30, "absent", NOW), "运行中")       # fresh heartbeat, GPU poll blind
+        self.assertEqual(P.run_state(running, NOW - 900, "absent", NOW), "已中断")      # stale, server says gone
+        self.assertEqual(P.run_state(running, NOW - 900, "unreachable", NOW), "状态未知")
+        self.assertEqual(P.run_state(running, NOW - 900, None, NOW), "状态未知")         # stale alone is not enough
+        self.assertEqual(P.run_state(running, NOW - 900, "running", NOW), "运行中")
+        self.assertEqual(P.run_state(running, None, "running", NOW), "运行中")           # old runs: as before
+        self.assertEqual(P.run_state(running, None, "absent", NOW), "已中断")
+        self.assertEqual(P.run_state(running, None, None, NOW), "状态未知")
+
+
+class Reconcile(unittest.TestCase):
+    """Agreed case 4: two passes before writing, idempotent, waiting tasks move on."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = os.path.join(self.tmp, "root")
+        self.board = os.path.join(self.root, "proj", "board")
+        os.makedirs(os.path.join(self.board, "tasks"))
+        with open(os.path.join(self.board, "project.json"), "w") as f:
+            json.dump({"title": "p"}, f)
+        self.mkrun("dead", {"status": "运行中", "server": "xtrah100", "pid": 11, "task": "train-9b"}, hb_age=900)
+        self.mkrun("alive", {"status": "运行中", "server": "xtrah100", "pid": 12, "task": "eval-9b"}, hb_age=20)
+        self.mkrun("old", {"status": "运行中", "server": "xtrah200", "tmux": "proj-old"})          # no heartbeat, no pid
+        self.mkrun("done", {"status": "完成", "server": "xtrah100", "task": "train-9b"})
+        self.task("train-9b", "等运行")
+        self.task("eval-9b", "等运行")
+        self.task("other", "进行中")
+        self.state = os.path.join(self.tmp, "state", "reconcile.json")
+        self.asked = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def mkrun(self, rid, rec, hb_age=None):
+        d = os.path.join(self.board, "runs", rid)
+        os.makedirs(d)
+        with open(os.path.join(d, "run.json"), "w") as f:
+            json.dump(dict(rec, id=rid), f, ensure_ascii=False)
+        if hb_age is not None:
+            hb = os.path.join(d, "heartbeat")
+            open(hb, "w").close()
+            os.utime(hb, (NOW - hb_age, NOW - hb_age))
+
+    def task(self, tid, status):
+        with open(os.path.join(self.board, "tasks", tid + ".md"), "w") as f:
+            f.write("---\nid: %s\ntitle: 任务 %s\nkind: 执行\nstatus: %s  # 注释保留\n---\n## 要做什么\nx\n" % (tid, tid, status))
+
+    def probe(self, recs):
+        self.asked.extend(r["id"] for r in recs)
+        return [{"dead": "absent", "old": "absent"}.get(r["id"], "running") for r in recs]
+
+    def rec(self, rid):
+        with open(os.path.join(self.board, "runs", rid, "run.json")) as f:
+            return json.load(f)
+
+    def meta(self, tid):
+        with open(os.path.join(self.board, "tasks", tid + ".md")) as f:
+            return P.parse_front_matter(f.read())[0]
+
+    def test_two_passes_then_idempotent(self):
+        first = T.reconcile(self.root, NOW, self.probe, self.state)
+        self.assertEqual(first, [])                                          # one look is not enough
+        self.assertEqual(self.rec("dead")["status"], "运行中")
+        self.assertNotIn("alive", self.asked)                                # a fresh heartbeat needs no ssh
+        second = T.reconcile(self.root, NOW + 300, self.probe, self.state)
+        self.assertEqual({(c["file"], c["what"].split("：")[0]) for c in second},
+                         {("runs/dead/run.json", "标为被中断"), ("runs/old/run.json", "标为被中断"),
+                          ("tasks/train-9b.md", "等运行 → 可以继续（2 次运行都结束了）")})
+        dead = self.rec("dead")
+        self.assertEqual((dead["status"], dead["closed_by"], dead["task"]), ("被中断", "board reconcile", "train-9b"))
+        self.assertIn("心跳停在", dead["error"])
+        self.assertEqual(self.meta("train-9b")["status"], "可以继续")
+        self.assertEqual(self.meta("eval-9b")["status"], "等运行")          # its run is alive
+        self.assertEqual(self.meta("other")["status"], "进行中")            # other states untouched
+        with open(os.path.join(self.board, "tasks", "train-9b.md")) as f:
+            self.assertIn("title: 任务 train-9b\n", f.read())                   # other lines kept as they were
+        self.assertEqual(T.reconcile(self.root, NOW + 600, self.probe, self.state), [])   # nothing left to do
+
+    def test_a_run_that_comes_back_resets_the_count(self):
+        T.reconcile(self.root, NOW, self.probe, self.state)
+        T.reconcile(self.root, NOW + 300, lambda recs: ["unreachable"] * len(recs), self.state)   # server down: not dead
+        self.assertEqual(T.reconcile(self.root, NOW + 600, self.probe, self.state), [])
+        self.assertEqual(self.rec("dead")["status"], "运行中")
+
+    def test_dry_run_changes_nothing(self):
+        T.reconcile(self.root, NOW, self.probe, self.state)
+        changes = T.reconcile(self.root, NOW + 300, self.probe, self.state, dry_run=True)
+        self.assertEqual(len(changes), 3)
+        self.assertEqual(self.rec("dead")["status"], "运行中")
+        self.assertEqual(self.meta("train-9b")["status"], "等运行")
+
+
+class Helpers(unittest.TestCase):
+    def test_set_front_matter(self):
+        text = "---\nid: a\nstatus: 等运行\n---\n## 要做什么\nstatus: 不是字段\n"
+        out = T.set_front_matter(text, {"status": "可以继续", "updated": "2026-11-24T00:00:00Z"})
+        self.assertEqual(out, "---\nid: a\nstatus: 可以继续\nupdated: 2026-11-24T00:00:00Z\n---\n## 要做什么\nstatus: 不是字段\n")
+        with self.assertRaises(ValueError):
+            T.set_front_matter("no front matter", {"a": "b"})
+
+    def test_probe_one_connection_per_server(self):
+        calls = []
+
+        def fake(cmd):
+            calls.append(cmd)
+            if "down.example" in cmd:
+                return None
+            # pretend r1 (pid 6) is gone and every other run is alive
+            return "\n".join("%s %s" % (k, "gone" if k == "r1" else "alive")
+                             for k in __import__("re").findall(r"echo '(r\d+) alive'", cmd[-1]))
+        probe = T.make_probe({"xtrah100": "h100.example", "xtrah200": "down.example"}, run_cmd=fake, here="xtraa100")
+        got = probe([{"server": "xtraa100", "pid": 5}, {"server": "xtrah100", "pid": 6}, {"server": "xtrah100", "tmux": "jev-x"},
+                     {"server": "xtrah200", "pid": 7}, {"server": "xtrah100"}, {"server": "xtrah100", "tmux": "bad name; rm -rf /"},
+                     {"server": "elsewhere", "pid": 3}])
+        self.assertEqual(got, ["running", "absent", "running", "unreachable", None, None, None])
+        self.assertEqual(sorted(c[0] if c[0] == "bash" else c[-2] for c in calls), ["bash", "down.example", "h100.example"])
+        h100 = next(c for c in calls if "h100.example" in c)[-1]
+        self.assertIn("tmux has-session -t '=jev-x'", h100)                      # both h100 runs in one connection
+        self.assertIn("-p 6 ", h100)
+        self.assertNotIn("rm -rf", "".join(c[-1] for c in calls))                # odd names never reach a shell
+
+
+if __name__ == "__main__":
+    unittest.main()

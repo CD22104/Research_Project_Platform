@@ -449,8 +449,12 @@ def scan_project(board, memo=None, new_memo=None):
                 continue
         except MISSING:
             continue
-        run = {"dir": d, "id": rid, "run": {}, "series": None, "samples_head": [], "images": [], "mtime": None}
+        run = {"dir": d, "id": rid, "run": {}, "series": None, "samples_head": [], "images": [], "mtime": None,
+               "heartbeat": None}
         times = []
+        st = b.stat(d + "/heartbeat")
+        if st:  # touched every minute by boardrun while the run is alive; not counted as an update
+            run["heartbeat"] = st.st_mtime
         st = b.stat(d + "/run.json")
         if st:
             times.append(st.st_mtime)
@@ -809,6 +813,31 @@ def empty_project(name):
 
 def with_answers(todos, answers):
     return [dict(t, answer=answers.get(str(t.get("id")))) for t in todos]
+
+
+HEARTBEAT_STALE = 300   # seconds without a heartbeat before a run counts as possibly dead
+RUN_STATES = ("运行中", "状态未知", "已结束", "已中断")
+
+
+def run_state(run, heartbeat_mtime, probe, now):
+    """What to show for a run, from its record, its heartbeat and a probe of its process.
+
+    run              the run.json dict
+    heartbeat_mtime  mtime of runs/<id>/heartbeat, or None (older runs have none)
+    probe            "running" (its process was seen), "absent" (the server answered and the process is
+                     gone), "unreachable" (the server did not answer) or None (no way to look)
+    Returns 运行中 / 状态未知 / 已结束 / 已中断. A run is never called 已中断 without a probe saying the
+    process is gone: a stale heartbeat alone may be a slow shared disk.
+    """
+    if (run or {}).get("status") != "运行中":
+        return "已结束"
+    if heartbeat_mtime is not None and now - heartbeat_mtime <= HEARTBEAT_STALE:
+        return "运行中"
+    if probe == "running":
+        return "运行中"
+    if probe == "absent":
+        return "已中断"
+    return "状态未知"
 
 
 def summary(data):
