@@ -5,7 +5,7 @@
 ## 组成
 | 文件 | 做什么 |
 |---|---|
-| `server.py` | HTTP 服务（unix socket `run/board.sock`）：显卡轮询、项目扫描、会话列表、三个写接口（回复、文档标记、显示名） |
+| `server.py` | HTTP 服务（unix socket `run/board.sock`）：显卡轮询、项目扫描、会话列表、四个写接口（回复、文档标记、论文打勾、显示名） |
 | `projects.py` | 解析各项目 `board/`、记录检查、运行状态 `run_state`、事实包和概况用的汇总 |
 | `sessions.py` | a100 上的 Claude 会话：`claude agents --json` 加会话记录的元数据（不读对话内容） |
 | `boardtool.py`（`~/bin/board`） | `brief` 事实包、`check` 记录检查、`reconcile` 收尾、`task-start` / `task-stop` 任务会话、`dispatch` 派活 |

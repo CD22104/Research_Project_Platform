@@ -197,6 +197,7 @@ def rc_entries():
 # Only these, all from the console page itself (see write_refused):
 #   replies to to-dos -> <project>/board/answers.jsonl (append only; sessions act on them when told to)
 #   document marks    -> <project>/board/marks.jsonl (append only; 看过 / 确认, sessions may read them)
+#   paper ticks       -> the same marks.jsonl, rows with "paper" instead of "file" (读过 or null)
 #   display names     -> state/names.json here on a100 (console-only setting, not in the project)
 STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(HERE, "state"))
 NAMES_FILE = os.path.join(STATE_DIR, "names.json")
@@ -305,6 +306,22 @@ def post_mark(body):
     return (503, {"error": err}) if err else (200, {"ok": True, "row": row})
 
 
+def post_paper_mark(body):
+    """Tick a paper on the project's reading list (board/papers.jsonl) as 读过, or clear the tick with null."""
+    name, pid, mark = body.get("project"), body.get("paper"), body.get("mark")
+    if not (isinstance(name, str) and isinstance(pid, str) and 0 < len(pid) <= 200
+            and (mark is None or mark in projects.PAPER_MARKS)):
+        return 400, {"error": "请求格式不对"}
+    snap, _ = project_cache.snapshot()
+    if not (projects.valid_name(name) and name in snap):
+        return 404, {"error": "没有这个项目"}
+    if not any(p.get("id") == pid for p in snap[name].get("papers") or []):
+        return 404, {"error": "清单里没有这篇论文，刷新看看"}
+    row = {"paper": pid, "mark": mark, "at": _utc_now(), "by": "console"}
+    err = append_row(name, "marks", row)
+    return (503, {"error": err}) if err else (200, {"ok": True, "row": row})
+
+
 def post_name(body):
     """Set (or clear, with an empty name) the name the console shows for a project."""
     name, label = body.get("project"), body.get("name")
@@ -367,6 +384,7 @@ def api_project(name):
     now = time.time()
     out["runs"] = [with_state(r, r["run"], r.get("heartbeat"), now) for r in data["runs"]]
     out["decision_states"] = projects.decision_states(data.get("decisions") or [], data.get("answers") or {})
+    out["papers_elsewhere"] = projects.papers_read_elsewhere(snap, name)
     return out
 
 
@@ -491,7 +509,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
-        handler = {"/api/answer": post_answer, "/api/name": post_name, "/api/mark": post_mark}.get(path)
+        handler = {"/api/answer": post_answer, "/api/name": post_name, "/api/mark": post_mark,
+                   "/api/paper-mark": post_paper_mark}.get(path)
         if handler is None:
             return self.send(404, "text/plain", b"not found")
         why = self.write_refused()

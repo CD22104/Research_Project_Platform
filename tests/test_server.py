@@ -328,6 +328,33 @@ class Http(unittest.TestCase):
         self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "NOTES.md", "mark": "看过"},
                                    {"Origin": "http://evil.example"})[0], 403)
 
+    def test_tick_papers(self):
+        path = os.path.join(self.root, "demo", "board", "marks.jsonl")
+        self.assertEqual(self.post("/api/paper-mark", {"project": "demo", "paper": "radam", "mark": "读过"})[0], 200)
+        with open(path, encoding="utf-8") as f:
+            row = json.loads(f.read().splitlines()[-1])
+        self.assertEqual((row["paper"], row["mark"], row["by"]), ("radam", "读过", "console"))
+        d = self.get_json("/api/project/demo")
+        self.assertEqual(d["paper_marks"]["radam"]["mark"], "读过")              # shows at once, before the next scan
+        self.assertIn("focal-loss", d["paper_marks"])                            # the earlier ticks are still there
+        self.assertEqual(d["papers_elsewhere"], {})                              # no other fixture project lists these papers
+        self.assertEqual(self.post("/api/paper-mark", {"project": "demo", "paper": "radam", "mark": None})[0], 200)
+        self.assertNotIn("radam", self.get_json("/api/project/demo")["paper_marks"])   # cleared
+        with open(path, encoding="utf-8") as f:
+            before = f.read()
+        for body, headers, code in [
+                ({"paper": "nope", "mark": "读过"}, {}, 404),
+                ({"paper": "old-survey", "mark": "读过"}, {}, 404),                # dropped from the list
+                ({"paper": "radam", "mark": "看过"}, {}, 400),                     # a paper is only 读过
+                ({"paper": 3, "mark": "读过"}, {}, 400),
+                ({"project": "nope", "paper": "radam", "mark": "读过"}, {}, 404),
+                ({"paper": "radam", "mark": "读过"}, {"X-Board-Write": None}, 403),
+                ({"paper": "radam", "mark": "读过"}, {"Origin": "http://evil.example"}, 403)]:
+            with self.subTest(body=body, headers=headers):
+                self.assertEqual(self.post("/api/paper-mark", dict({"project": "demo"}, **body), headers)[0], code)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), before)                                   # nothing written by refused requests
+
     def test_rename(self):
         self.assertEqual(self.post("/api/name", {"project": "demo", "name": "演示"})[0], 200)
         row = self.demo_summary()

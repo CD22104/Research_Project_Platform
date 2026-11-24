@@ -1242,7 +1242,7 @@ class ProjectCache:
             return with_answers(self._todos, self._answers)
 
     def console_path(self, name, which="answers"):
-        """Where the console's own files live: answers.jsonl (replies) or marks.jsonl (document marks)."""
+        """Where the console's own files live: answers.jsonl (replies) or marks.jsonl (document marks, paper ticks)."""
         if name == SHARED:
             return os.path.join(self.root, SHARED, which + ".jsonl")
         return os.path.join(self.root, name, "board", which + ".jsonl")
@@ -1252,13 +1252,15 @@ class ProjectCache:
 
     def reload(self, name, which="answers"):
         """Re-read one of the console's files now (after the console appended to it), so the change shows at once."""
-        data = (read_answers if which == "answers" else read_marks)(self.console_path(name, which))
+        path = self.console_path(name, which)
+        fresh = {"answers": read_answers(path)} if which == "answers" else \
+            {"marks": read_marks(path), "paper_marks": read_paper_marks(path)}  # one file, two readings
         with self._lock:
             if name == SHARED and which == "answers":
-                self._answers, self._answers_sig = data, None
+                self._answers, self._answers_sig = fresh["answers"], None
             elif name in self._projects:
                 projects = dict(self._projects)  # snapshots are replaced, never mutated
-                projects[name] = dict(projects[name], **{which: data})
+                projects[name] = dict(projects[name], **fresh)
                 self._projects = projects
 
     def reload_answers(self, name):
