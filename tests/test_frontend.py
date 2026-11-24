@@ -184,6 +184,7 @@ class Pages(unittest.TestCase):
         self.assertIn("<code>src/eval/</code>", task)                                     # scope
         self.assertIn('<a href="#/p/demo/flow/a%3A2026-11-15-focal">', task)                # hangs on an attempt
         self.assertIn("<h3>交接</h3>", task)
+        self.assertIn('在 App 的「demo」文件夹里新开一个对话，说「<code>做 f1-metric</code>」<button class="copy" data-c="做 f1-metric">复制</button>', task)
         dec = self.m("p_decision")
         self.assertIn('data-key="demo|d:scale-later"', dec)
         self.assertIn("点了「采纳」立即生效", dec)

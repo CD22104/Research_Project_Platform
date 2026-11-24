@@ -39,7 +39,7 @@ function dzArch() {
     <g class="dg zone"><rect x="330" y="50" width="650" height="310" rx="14"/></g>
     <text class="dgt" x="346" y="350">xtraa100：所有会话和管理程序（只用 CPU）</text>
     ${box(350, 70, 290, 125, '控制台 server.py', ['读各项目 board/，每分钟扫一遍', '轮询 6 台服务器的显卡', '读会话的元数据（不读对话）', '只写：回复、文档标记、显示名'], 'core')}
-    ${box(660, 70, 300, 125, 'Claude 会话', ['项目会话：rc-<项目>（常驻入口）', '任务会话：task-<项目>-<任务>', '研究服务台：服务器和账号', '开场读事实包，改记录当场检查'], 'agent')}
+    ${box(660, 70, 300, 125, 'Claude 会话', ['项目会话：rc-<项目>（常驻入口）', '任务会话：项目文件夹里的对话', '研究服务台：服务器和账号', '开场读事实包，改记录当场检查'], 'agent')}
     ${box(350, 205, 290, 125, '例行程序（不花 token）', ['收尾 reconcile：每 5 分钟', '　停掉的运行标「被中断」', '派活 dispatch：每 5 分钟', '　勾了「直接处理」的回复起会话'], 'prog')}
     ${box(660, 205, 300, 125, '钩子（Claude Code hooks）', ['SessionStart：注入事实包', '　开会话 / 恢复 / 压缩之后', 'PostToolUse：改 board/ 文件后', '　当场跑记录检查，有错报给会话'], 'prog')}
     ${box(330, 400, 310, 160, '共享盘 /shared/ssd/dchen', ['<项目>/board/：记录（控制台只读这里）', '<项目>/ 代码、数据、checkpoint', '_shared/：格式说明、boardrun、工具', '各台路径一致：在哪台跑都一样'], 'disk')}
@@ -112,14 +112,14 @@ function pageDesign() {
     <p>每个项目页顶部固定四格：<b>现在要回答的问题、有效的决定、下一步、最新证据</b>。不管在哪个页签，都能一眼看到这个项目的现状。</p>`);
   const S5 = dzSec('arch', '整体结构：服务器和程序', dzArch() + `
     <ul class="dz-ul">
-      <li><b>会话都开在 a100</b>：每个项目一个常驻入口（tmux 里的 Remote Control 服务），手机和网页都能点开；任务会话也在 a100。管理程序只用 CPU。</li>
+      <li><b>会话都开在 a100</b>：每个项目一个常驻入口（tmux 里的 Remote Control 服务），在 App 里是一个文件夹，手机和网页都能点开；任务会话也在这个文件夹里新开，一个项目的对话都在一处。管理程序只用 CPU。</li>
       <li><b>训练在有空卡的机器上跑</b>：用记录模块 boardrun 在目标机器的 tmux 里启动，它把记录、心跳、退出码写到共享盘。控制台和管理程序重启都不影响训练。</li>
       <li><b>共享盘就是总线</b>：没有在各服务器上另建执行服务、也不开端口；谁都通过共享盘上的文件交换状态。</li>
       <li><b>控制台几乎只读</b>：只写三类东西：我的回复、文档标记、显示名。它不能启动任何程序，网页上的写操作都要通过同源检查。</li></ul>`);
   const S6 = dzSec('roles', 'Agent 分工', `
     ${dzTable(['角色', '做什么', '什么时候存在'], [
       ['<b>项目会话</b>', '和我讨论方向，维护方案和决定，拆任务卡、开任务会话、看结果；长时间的执行不在这里做', '每个项目一个；上下文超过 15 万或定新版本时，写好交接换新的'],
-      ['<b>任务会话</b>', '做一张卡：讨论 / 执行 / 写作 / 分析 / 审查 / 调试；做完写交接', '<code>board task-start</code> 开，做完结束'],
+      ['<b>任务会话</b>', '做一张卡：讨论 / 执行 / 写作 / 分析 / 审查 / 调试；做完写交接', '在项目文件夹里新开对话说「做 &lt;任务&gt;」，开场由 <code>board task-begin</code> 检查；后台用 <code>board task-start</code>；做完结束'],
       ['<b>研究服务台</b>', '服务器、账号、密钥、ssh、控制台本身；跨项目的事', '常驻一个'],
       ['<b>子 agent</b>', '会话里读大量日志、论文、历史，只把摘要交回来', '用完即走'],
       ['<b>审查会话</b>', '核心结论在我确认之前，独立核对数字和运行记录', '只在验收核心实验时，由项目会话开（还没有自动化）'],
@@ -221,7 +221,7 @@ function pageDesign() {
       ['记录格式', '<code>_shared/BOARD_FORMAT.md</code>（约 480 行）', '各项目 board/ 怎么写：一页纸、任务卡、决定、纪要、术语、运行记录……'],
       ['全局规则', '各服务器 <code>~/.claude/CLAUDE.md</code>（a100 为准，分发到 6 台）', '会话分工、记录、启动、理解项目的规则'],
       ['控制台', 'a100 <code>~/gpu-board</code>：server.py、projects.py、sessions.py、app.js、work.js', '读记录、显卡、会话；网页'],
-      ['board 工具', '<code>boardtool.py</code>（<code>board</code> 命令）', 'brief 事实包、check 记录检查、reconcile 收尾、task-start 开任务会话、dispatch 派活'],
+      ['board 工具', '<code>boardtool.py</code>（<code>board</code> 命令）', 'brief 事实包、check 记录检查、reconcile 收尾、task-begin 开工一张卡、task-start 后台开任务会话、dispatch 派活'],
       ['记录模块', '<code>_shared/tools/boardrun</code>', '运行自己写记录、心跳、退出码，绑定提交'],
       ['钩子', 'a100、h100 的 <code>~/.claude/settings.json</code>', 'SessionStart 注入事实包；PostToolUse 改记录当场检查'],
       ['定时任务', 'a100 crontab', '控制台开机启动、各项目入口开机拉起、收尾和派活每 5 分钟'],

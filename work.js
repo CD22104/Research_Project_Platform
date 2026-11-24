@@ -231,6 +231,16 @@ function tabTasks(d, r) {
       <span class="small">${t.meta.updated ? isoAgo(t.meta.updated, d.now) : ''}</span></a>`).join('')}</div></details>` : '';
   return `<div class="kanban">${cols}</div>${done}${sel ? taskDetail(d, sel) : r.item ? `<div class="card"><div class="empty">找不到任务「${esc(r.item)}」。</div></div>` : ''}`;
 }
+// How to start a card: the user opens a conversation in the project's folder in the App (the folder is named after
+// the project directory) and says 「做 <id>」; that conversation runs board task-begin. Only for cards that can start.
+const TASK_STARTABLE = ['待开始', '可以继续', '进行中'];
+function taskBeginHint(d, t) {
+  const m = t.meta;
+  if (!TASK_STARTABLE.includes(m.status) || typeof m.id !== 'string') return '';
+  const say = '做 ' + m.id;
+  return `在 App 的「${esc(d.name)}」文件夹里新开一个对话，说「<code>${esc(say)}</code>」<button class="copy" data-c="${esc(say)}">复制</button>` +
+    (m.status === '进行中' ? '<div class="small">已经有对话在做的话，在那个对话里接着说。</div>' : '');
+}
 function taskDetail(d, t) {
   const m = t.meta, name = d.name, W = work(d), sec = t.sections || {};
   const sessions = listOf(m.sessions).map(String), live = (S.sessions || {sessions: []}).sessions;
@@ -242,6 +252,7 @@ function taskDetail(d, t) {
   const body = bodySections(t.body, order);
   return `<div class="card taskd"><h2>${esc(taskTitle(t))} ${taskPill(m.status)} <span class="tag2">${esc(m.kind || '?')}</span>
       <span class="meta right">${esc(t.file)}</span></h2><div class="pad">
+    ${kv('开工', taskBeginHint(d, t))}
     ${kv('挂在', m.about ? (refHref(d, m.about) ? `<a href="${refHref(d, m.about)}">${esc(placeLabel(d, m.about) || m.about)}</a>` : esc(m.about)) : '')}
     ${kv('允许改', listOf(m.scope).map(x => `<code>${esc(x)}</code>`).join(' '))}
     ${kv('交付物', listOf(m.deliver).map(esc).join('；'))}
