@@ -141,7 +141,8 @@ def make_grid(root):
 
 
 GRID_ROUTES = {"t": "#/p/grid/runs", "worst": "#/p/grid/runs?sort=m:false_allow&desc=1", "where": "#/p/grid/runs?where=model:haiku",
-               "att": "#/p/grid/runs?att=2026-11-25-other", "st": "#/p/grid/runs?st=%E8%A2%AB%E4%B8%AD%E6%96%AD"}
+               "att": "#/p/grid/runs?att=2026-11-25-other", "st": "#/p/grid/runs?st=%E8%A2%AB%E4%B8%AD%E6%96%AD",
+               "pv": "#/p/grid/runs?view=pivot", "pv2": "#/p/grid/runs?view=pivot&att=2026-11-25-info&rows=model&cols=condition&metric=false_block"}
 RUN_ROWS = r'<tr class="run[^"]*" data-href="#/p/grid/runs/(g\d+)'
 
 
@@ -189,6 +190,34 @@ class RunsTable(unittest.TestCase):
         self.assertEqual(re.findall(RUN_ROWS, self.m("att")), ["g09"])
         self.assertEqual(re.findall(RUN_ROWS, self.m("st")), ["g07"])
         self.assertIn('<option value="被中断" selected="">', self.m("st"))
+
+
+    def test_cross_table(self):
+        pv = self.m("pv")
+        self.assertIn('<a class="chip on" href="#/p/grid/runs?view=pivot">交叉表</a>', pv)
+        self.assertIn("这些运行来自 2 个实验", pv)                               # a hint to pick one
+        table = re.search(r'<table class="pivot">.*?</table>', pv, re.S).group(0)
+        heads = re.findall(r"<tr>(.*?)</tr>", table, re.S)[:2]
+        self.assertEqual(re.findall(r'<th[^>]*colspan="(\d+)"[^>]*>(\w+)</th>', heads[0]), [("2", "direct"), ("1", "decompose")])   # strategy, then model
+        self.assertEqual(re.findall(r"<th[^>]*>(\w+)</th>", heads[1]), ["haiku", "sonnet", "haiku"])
+        body = re.findall(r'<tr class="pvr"><th[^>]*>(.*?)</th>(.*?)</tr>', table, re.S)
+        self.assertEqual([h for h, _ in body], ["action_only", "default", "signals", '&lt;img src=x onerror="window.__pwned=1"&gt;'])  # order of first run
+        cells = {h: re.findall(r"<td[^>]*>(.*?)</td>", row, re.S) for h, row in body}
+        text = lambda h, i: re.sub(r"<[^>]+>", " ", cells[h][i]).split()
+        self.assertEqual(text("default", 0), ["0.1600", "×2"])                    # g03 0.20 and g09 0.12 averaged
+        self.assertEqual(text("signals", 0), ["0.3500", "×2"])
+        self.assertEqual(text("signals", 1), ["—"])                               # no run there
+        row = lambda h: re.search(r'<tr class="pvr"><th[^>]*>%s</th>.*?</tr>' % h, table, re.S).group(0)
+        self.assertEqual(row("default").count('class="pv best"'), 1)              # 0.05 (g07), the lowest
+        self.assertIn('class="pv spot"', row("action_only"))                      # g08 is a spot check
+        self.assertIn('href="#/p/grid/runs?where=condition%3Adefault%3Bstrategy%3Adirect%3Bmodel%3Ahaiku"', table)   # a cell opens its runs
+        self.assertNotIn("<img", pv)
+        self.assertIn('<select data-rq="rows">', pv)
+        pv2 = self.m("pv2")
+        self.assertNotIn("这些运行来自", pv2)
+        table2 = re.search(r'<table class="pivot">.*?</table>', pv2, re.S).group(0)
+        self.assertEqual([h for h in re.findall(r'<tr class="pvr"><th[^>]*>(.*?)</th>', table2)], ["haiku", "sonnet"])
+        self.assertIn("误拦", re.search(r'<select data-rq="metric">.*?</select>', pv2, re.S).group(0).split("selected")[1][:40])
 
 
 @unittest.skipUnless(CHROME, "Chromium not installed")

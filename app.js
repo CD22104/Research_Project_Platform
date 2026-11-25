@@ -1331,6 +1331,7 @@ function tabRuns(d, r) {
   const controls = `<div class="card"><div class="filters">
       <div class="chips">${evalRuns.length ? `<a class="chip${!data ? ' on' : ''}" href="${runsLink(d, Q, {view: Q.view === 'pivot' ? 'pivot' : '', g: null, where: [], att: '', st: '', track: ''})}">评测和训练 ${evalRuns.length}</a>` : ''}
         ${dataRuns.length ? `<a class="chip${data ? ' on' : ''}" href="${plink(name, 'runs', null, {view: 'data'})}">数据 ${dataRuns.length}</a>` : ''}</div>
+      ${data ? '' : `<div class="chips"><a class="chip${Q.view === '' ? ' on' : ''}" href="${runsLink(d, Q, {view: ''})}">表格</a><a class="chip${Q.view === 'pivot' ? ' on' : ''}" href="${runsLink(d, Q, {view: 'pivot'})}">交叉表</a></div>`}
       ${select('att', '实验', atts)}${data ? '' : select('track', '支线', tracks)}${select('st', '状态', stats.map(([s, n]) => [s, s, n]))}
     </div>
     ${Q.where.length ? `<div class="chips wherechips"><span class="small">只看</span>${Q.where.map(([k, v], i) =>
@@ -1342,9 +1343,11 @@ function tabRuns(d, r) {
     ${disp.problems.length ? `<div class="dnote">project.json 的 display 里有用不上的设置：${disp.problems.map(esc).join('；')}。已按默认方式显示。</div>` : ''}
     </div>`;
 
-  const body = runsTable(d, r, Q, {c, disp, g, shown, vals, cfg, attOf, sel});
+  const parts = {c, disp, g, shown, vals, cfg, attOf, sel};
+  const body = Q.view === 'pivot' ? runsPivot(d, r, Q, parts) : runsTable(d, r, Q, parts);
   const bareHtml = bare.length ? `<div class="bare"><span class="small">还没有指标的运行：</span>` +
     bare.map(x => `<a href="${runsLink(d, Q, {}, runKey(x))}">${esc(c.label(x))}</a>`).join('') + '</div>' : '';
+  if (Q.view === 'pivot') return controls + `<div class="card">${body}</div>`;
   if (!sel) return controls + `<div class="card">${body}${bareHtml}<div class="pad small">点表头排序，再点一次反过来；点一个设置值，只看这些运行；点一行，看这次运行属于哪次尝试、各测试集上的指标、配置、产物和曲线。</div></div>`;
   return controls + `<div class="md2 wide"><div class="card" style="margin:0">${body}${bareHtml}</div><div>${runDetail(d, sel)}</div></div>`;
 }
@@ -1403,6 +1406,68 @@ function runsTable(d, r, Q, {c, disp, g, shown, vals, cfg, attOf, sel}) {
   const more = g.cols.length > metrics.length || Q.all ? `<a class="allcols" href="${runsLink(d, Q, {all: !Q.all}, r.item)}">${Q.all ? '只显示主要列' : `显示全部指标（${g.cols.length}）`}</a>` : '';
   return `${commonHtml}<div class="scroll"><table class="runs">${head}${rows.map(row).join('')}</table></div>
     <div class="tmeta">${shown.length} 次运行${more ? ' · ' + more : ''}${shown.some(x => isSpot(vals(x))) ? ' · 斜纹是抽查，不参与比较' : ''}</div>`;
+}
+// The cross table: rows are the values of one setting, columns of one or two others (grouped by the first), each
+// cell the mean of a metric over its runs (spot checks left out unless that is all there is), shaded by the
+// metric's direction; a cell links to the table narrowed to its runs.
+function runsPivot(d, r, Q, {c, disp, g, shown, vals, cfg, attOf}) {
+  if (!shown.length) return '<div class="empty">这个测试集下没有运行。</div>';
+  const {cols: settings} = B.settingColumns(shown.map(x => (x.run || {}).config), {prefer: disp.settings, max: 12});
+  if (!settings.length) return '<div class="empty">这些运行之间没有不同的设置，排不成交叉表。在上面选一个实验，或者看表格。</div>';
+  const kinds = k => new Set(shown.map(x => B.valueText(cfg.get(x)[k]))).size;
+  const byKinds = [...settings].sort((a, b) => kinds(b) - kinds(a));                       // stable: record order on ties
+  const rowKey = settings.includes(Q.rows) ? Q.rows : byKinds[0];
+  let colKeys = (Q.cols || []).filter(k => settings.includes(k) && k !== rowKey).slice(0, 2);
+  if (!colKeys.length) {
+    const rest = byKinds.filter(k => k !== rowKey);
+    colKeys = rest.slice(0, 1);
+    if (rest[1] && kinds(rest[0]) * kinds(rest[1]) <= 12) colKeys.push(rest[1]);
+  }
+  const metrics = runMetricCols(disp, g, shown, vals);
+  const h = disp.headline && disp.headline.group === g.name && g.cols.includes(disp.headline.metric) ? disp.headline.metric : null;
+  const metric = g.cols.includes(Q.metric) ? Q.metric : h || metrics[0] || g.cols[0];
+  const better = metricBetter(c, disp, g.name, metric);
+  const text = (x, k) => k in cfg.get(x) ? B.valueText(cfg.get(x)[k]) : '—';
+  const byTime = [...shown].sort((a, b) => String((a.run || {}).started || '').localeCompare(String((b.run || {}).started || '')));
+  const P = B.pivot(byTime, x => text(x, rowKey), x => colKeys.map(k => text(x, k)), x => vals(x)[metric], x => isSpot(vals(x)));
+  // columns grouped by the first setting, in order of first appearance of each value
+  const order = colKeys.map((k, i) => [...new Set(P.cols.map(cv => cv[i]))]);
+  const cols = [...P.cols].sort((a, b) => colKeys.reduce((acc, _, i) => acc || order[i].indexOf(a[i]) - order[i].indexOf(b[i]), 0));
+  const means = [];
+  for (const rv of P.rows) for (const cv of cols) { const x = P.cell(rv, cv); if (x && !x.dim) means.push(x.mean); }
+  const sc = B.scale(means), dirSc = B.scale(means, better);
+  const lo = Math.min(...means), hi = Math.max(...means);
+  const cell = (rv, cv) => {
+    const x = P.cell(rv, cv);
+    if (!x) return '<td class="pv empty">—</td>';
+    const shade = x.dim ? 0 : better ? dirSc.good(x.mean) ?? 0 : hi > lo ? (x.mean - lo) / (hi - lo) : 0;
+    const cls = 'pv' + (x.dim ? ' spot' : dirSc.best(x.mean) ? ' best' : '') + (better ? '' : ' flat');
+    const where = [...Q.where.filter(([k]) => k !== rowKey && !colKeys.includes(k)),
+      ...[[rowKey, rv], ...colKeys.map((k, i) => [k, cv[i]])].filter(([, v]) => v !== '—')];
+    const tip = x.items.map(it => `${runKey(it)}：${B.num(vals(it)[metric])}${isSpot(vals(it)) ? '（抽查）' : ''}`).join('\n');
+    return `<td class="${cls}" style="--g:${shade.toFixed(3)}" title="${esc(tip)}"><a href="${runsLink(d, Q, {view: '', where})}">` +
+      `<span class="pvv">${B.num(x.mean)}</span>${x.n > 1 ? ` <span class="small">×${x.n}</span>` : ''}</a></td>`;
+  };
+  const corner = `<th class="pvk"${colKeys.length > 1 ? ' rowspan="2"' : ''}>${esc(rowKey)}<div class="small">${colKeys.map(esc).join(' · ')}</div></th>`;
+  let head;
+  if (colKeys.length > 1) {
+    const groups = [];
+    for (const cv of cols) { const last = groups[groups.length - 1]; if (last && last[0] === cv[0]) last[1]++; else groups.push([cv[0], 1]); }
+    head = `<tr>${corner}${groups.map(([v, n]) => `<th class="pvc" colspan="${n}">${esc(v)}</th>`).join('')}</tr>` +
+      `<tr>${cols.map(cv => `<th class="pvc">${esc(cv[1])}</th>`).join('')}</tr>`;
+  } else head = `<tr>${corner}${cols.map(cv => `<th class="pvc">${esc(cv[0])}</th>`).join('')}</tr>`;
+  const rowsHtml = P.rows.map(rv => `<tr class="pvr"><th class="pvh">${esc(rv)}</th>${cols.map(cv => cell(rv, cv)).join('')}</tr>`).join('');
+  const opt = (v, t, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(t)}</option>`;
+  const pick = (key, list, cur, none) => `<select data-rq="${key}">${none ? opt('', none, !cur) : ''}${list.map(k => opt(k, k, k === cur)).join('')}</select>`;
+  const metricName = k => c.metricName(k);
+  const controls = `<div class="pvsel"><label>行 ${pick('rows', settings, rowKey)}</label>
+      <label>列 ${pick('cols', settings.filter(k => k !== rowKey), colKeys[0])} × ${pick('cols', settings.filter(k => k !== rowKey), colKeys[1], '（不分）')}</label>
+      <label>格子 <select data-rq="metric">${g.cols.map(k => opt(k, metricName(k), k === metric)).join('')}</select></label></div>`;
+  const atts = new Set(shown.map(attOf)).size;
+  return `${controls}${atts > 1 ? `<div class="dnote">这些运行来自 ${atts} 个实验；先在上面选一个实验，交叉表更清楚。</div>` : ''}
+    <div class="scroll"><table class="pivot">${head}${rowsHtml}</table></div>
+    <div class="tmeta">格子是「${esc(metricName(metric))}」${better ? '（' + BETTER[better] + '，越好绿色越深，最好的一格加粗）' : '（没有声明方向，只按大小深浅）'}；
+      ×n 是 n 个运行的平均；斜纹是抽查，不算进比较；点一格，看这一格的运行。</div>`;
 }
 function groupNote(d, gname, n, missing) {
   const c = ctx(d), ds = c.setup.datasets.get(gname);

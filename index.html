@@ -386,6 +386,21 @@ table.runs td.mcell.spot>i{background:repeating-linear-gradient(45deg,var(--trac
 table.runs td.mcell.spot>span{color:var(--muted)}
 label.rq{display:inline-flex;align-items:center;gap:4px;margin-left:6px}
 .wherechips{padding:8px 14px 0;align-items:center}
+/* ---------- cross table (运行 → 交叉表) */
+.pvsel{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:12px 14px 4px;font-size:13px;color:var(--muted)}
+table.pivot{border-collapse:collapse;margin:8px 14px;font-size:13px}
+table.pivot th,table.pivot td{border:1px solid var(--line);padding:6px 10px}
+table.pivot th{font-weight:600;color:var(--muted);font-size:12px;background:var(--bg);white-space:nowrap}
+table.pivot th.pvk{text-align:left;vertical-align:bottom}
+table.pivot th.pvh{text-align:left;color:var(--text);max-width:16em;white-space:normal;overflow-wrap:anywhere}
+table.pivot td.pv{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:5.5em;
+  background:color-mix(in srgb,var(--free) calc(var(--g,0) * 40%),transparent)}
+table.pivot td.pv.flat{background:color-mix(in srgb,var(--bar) calc(var(--g,0) * 45%),transparent)}
+table.pivot td.pv a{color:var(--text);text-decoration:none;display:block}
+table.pivot td.pv.best .pvv{font-weight:700}
+table.pivot td.pv.spot{background:repeating-linear-gradient(45deg,var(--track) 0 3px,transparent 3px 6px)}
+table.pivot td.pv.spot .pvv{color:var(--muted)}
+table.pivot td.pv.empty{color:var(--muted);text-align:center}
 tr.run{cursor:pointer}
 tr.run:hover td{background:var(--bg)}
 tr.run.open td{background:var(--accent-bg)}
