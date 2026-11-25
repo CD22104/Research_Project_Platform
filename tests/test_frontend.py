@@ -119,11 +119,13 @@ def make_grid(root):
             f.write(obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False))
     put("project.json", {"title": "网格实验", "status": "进行中", "display": {
         "headline": {"group": "ag", "metric": "false_allow", "better": "lower"}, "primary_metrics": ["false_allow", "false_block", "cost"]}})
-    put("setup.json", {"goal": "g", "datasets": [{"id": "ag", "name": "AuthGate"}], "metrics": [
+    put("setup.json", {"goal": "g", "datasets": [{"id": "ag", "name": "AuthGate"},
+                                                 {"id": "ag_s4", "name": "AuthGate 小样", "samples_from": "ag", "samples_note": "每类 1 对"}], "metrics": [
         {"id": "false_allow", "name": "错误放行", "better": "lower"}, {"id": "false_block", "name": "误拦", "better": "lower"},
         {"id": "cost", "name": "每条花费", "better": "lower"}, {"id": "n", "name": "条数"}]})
     for aid in ("2026-11-25-info", "2026-11-25-other"):
         put("attempts/%s.md" % aid, "---\nid: %s\ntrack: null\ndate: 2026-11-25\nstatus: 进行中\n---\n## 例子\nx\n" % aid)
+    put("examples/data/ag.jsonl", "".join(json.dumps({"id": i, "action": "rm -rf build/", "label": "allow"}) + "\n" for i in range(3)))
     img = '<img src=x onerror="window.__pwned=1">'
     rows = [("g01", "info", "action_only", "direct", "haiku", .15, .86), ("g02", "info", "action_only", "decompose", "haiku", .10, .80),
             ("g03", "info", "default", "direct", "haiku", .20, .00), ("g04", "info", "default", "decompose", "haiku", .25, .02),
@@ -142,7 +144,7 @@ def make_grid(root):
 
 GRID_ROUTES = {"t": "#/p/grid/runs", "worst": "#/p/grid/runs?sort=m:false_allow&desc=1", "where": "#/p/grid/runs?where=model:haiku",
                "att": "#/p/grid/runs?att=2026-11-25-other", "st": "#/p/grid/runs?st=%E8%A2%AB%E4%B8%AD%E6%96%AD",
-               "pv": "#/p/grid/runs?view=pivot", "pv2": "#/p/grid/runs?view=pivot&att=2026-11-25-info&rows=model&cols=condition&metric=false_block"}
+               "pv": "#/p/grid/runs?view=pivot", "setup": "#/p/grid/setup", "pv2": "#/p/grid/runs?view=pivot&att=2026-11-25-info&rows=model&cols=condition&metric=false_block"}
 RUN_ROWS = r'<tr class="run[^"]*" data-href="#/p/grid/runs/(g\d+)'
 
 
@@ -191,6 +193,13 @@ class RunsTable(unittest.TestCase):
         self.assertEqual(re.findall(RUN_ROWS, self.m("st")), ["g07"])
         self.assertIn('<option value="被中断" selected="">', self.m("st"))
 
+
+    def test_samples_from(self):
+        st = self.m("setup")
+        both = re.findall(r'<details class="samples" id="samples-(\w+)"><summary>样例（3 条）(.*?)</summary>', st)
+        self.assertEqual([x[0] for x in both], ["ag", "ag_s4"])                   # the small set shows the big one's samples
+        self.assertIn("用的是「AuthGate」的样例", both[1][1])
+        self.assertIn("每类 1 对", both[1][1])
 
     def test_cross_table(self):
         pv = self.m("pv")
@@ -435,6 +444,19 @@ class Pages(unittest.TestCase):
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
 
+    def test_dataset_samples(self):
+        st = self.m("p_setup")
+        blk = re.search(r'<details class="samples" id="samples-测试集">.*?</details>', st, re.S).group(0)
+        self.assertIn("<summary>样例（10 条）", blk)
+        self.assertEqual(blk.count('<pre class="sample">'), 10)
+        self.assertIn("&lt;script&gt;window.__pwned=1&lt;/script&gt; 混进日志的一行", blk)   # data is text
+        self.assertIn('<code>examples/data/测试集.jsonl</code>', blk)
+        self.assertNotIn("展开（共", blk)                                         # raw lines are short: nothing folded
+        self.assertIn('<details class="samples" id="samples-测试集" open="">', self.m("p_setup_anchor"))   # opened from a link
+        self.assertIn('<a href="#/p/demo/setup/ds%3A%E6%B5%8B%E8%AF%95%E9%9B%86">看样例 →</a>', self.m("p_runs"))
+        ex = self.m("p_examples")
+        self.assertLess(ex.index("数据长什么样"), ex.index("一个例子从头走到底"))
+
     def test_figures(self):
         fig = self.m("p_doc_fig")
         self.assertIn('<h2>预热 &amp; 不预热：开头 1000 步的训练损失 <span class="tag2">图解</span>', fig)   # <title>, entities decoded once
@@ -600,6 +622,15 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   out.paper_bold = pdiv.querySelectorAll('b').length;
   out.paper_away = pdiv.querySelector('[data-anchor="away"]').textContent.replace(/\\s+/g, ' ');
   out.doc_about = ['k:f1-metric', 'd:scale-later', 'x:nope'].map(a => docItems({docs: [{file: 'docs/z.md', meta: {about: a}, mtime: 1}], marks: {}})[0].about);
+  location.hash = '#/p/demo/setup/ds:测试集'; await wait(600);
+  document.querySelector('[data-sindent="测试集"][data-v="1"]').click(); await wait(200);
+  const fold = [...document.querySelectorAll('#samples-测试集 [data-sopen]')];
+  out.samples_indent = [document.querySelectorAll('#samples-测试集 pre.sample')[0].textContent.startsWith('{\\n  "id": 3,'), fold.map(b => b.textContent)];
+  fold[0].click(); await wait(200);
+  out.samples_unfold = document.querySelectorAll('#samples-测试集 pre.sample')[9].textContent.split('\\n').length;
+  document.querySelector('[data-sindent="测试集"][data-v=""]').click(); await wait(200);
+  out.samples_raw = document.querySelectorAll('#samples-测试集 pre.sample')[0].textContent;
+  out.samples_still_open = document.getElementById('samples-测试集').open;
   const sess = document.createElement('div');   // a big context matters only while the session is open
   sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
                                 {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
@@ -647,6 +678,10 @@ class Interactions(unittest.TestCase):
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
         self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])
+        self.assertEqual(out["samples_indent"], [True, ["展开（共 57 行）"]])     # indented JSON; the 50-feature record folds
+        self.assertEqual(out["samples_unfold"], 57)
+        self.assertEqual(out["samples_raw"], '{"id": 3, "text": "loss 曲线在第 120 步出现尖峰后恢复", "label": 1}')   # back to the line as stored
+        self.assertTrue(out["samples_still_open"])
         self.assertEqual(out["ticked"], [True, "paper read", "读过"])          # a tick is saved and shown at once
         self.assertEqual(out["unticked"], [False, False])                        # and can be taken back
         self.assertEqual(out["paper_links"], [["https://x.org/away", "_blank", "noopener noreferrer"],   # no javascript: or broken-out url

@@ -7,7 +7,8 @@ const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 // ============================================================ data
 const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
 const ui = {exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
-  pick: {}, draft: {}, editing: {}, err: {}, direct: {}, renaming: false};                   // replies being written, the rename box
+  pick: {}, draft: {}, editing: {}, err: {}, direct: {}, renaming: false,
+  sampleIndent: {}, sampleOpen: {}};                                            // dataset samples: indented JSON, unfolded records                   // replies being written, the rename box
 // the console's only writes: replies (board/answers.jsonl), marks and paper ticks (board/marks.jsonl) and display names;
 // the server checks they come from this page
 const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Board-Write': '1'},
@@ -662,7 +663,7 @@ function pageProject(r) {
     <nav class="ptabs">${[['研究', RESEARCH_TABS], ['工作', WORK_TABS]].map(([g, tabs]) => `<span class="pgrp">${g}</span>` +
       tabs.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}${k === 'upkeep' ? ' quiet' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')).join('<span class="psep"></span>')}</nav>`;
-  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: tabExamples, docs: tabDocs, papers: tabPapers,
+  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: (d, r) => dataSamplesCard(d) + tabExamples(d, r), docs: tabDocs, papers: tabPapers,
     tasks: tabTasks, decisions: tabDecisions, sessions: tabSessions, timeline: tabTimeline, upkeep: tabUpkeep}[r.tab](d, r);
   return head + notices(d) + withTerms(body, d);
 }
@@ -786,7 +787,7 @@ function methodFlow(d) {
   return `<div class="setblk"><h3>方法流程 <span class="faint">board/flow.json</span></h3><div class="mflow">${order.map(box).join('<span class="marr">→</span>')}</div>
     ${groups.length ? `<div class="mleg">${groups.map(g => `<span class="mbox g${gi(g)} sw"></span>${esc(f.groups[g])}`).join('　')}</div>` : ''}</div>`;
 }
-function setupCard(d) {  // the 实验设置 tab
+function setupCard(d, r = {}) {  // the 实验设置 tab
   const c = ctx(d), s = c.setup, name = d.name;
   if (!s.present) return `<div class="card"><h2>实验设置</h2>${methodFlow(d) ? `<div class="pad">${methodIndex(d).steps.length ? '' : methodFlow(d)}</div>` : ''}<div class="empty">还没有实验设置（board/setup.json）。
     在这个项目的会话里说「补实验设置」，会话会按整体方案写好目标、数据集、模型、指标和方法的定义；之后更新方案或定新版本时会同步更新。
@@ -801,7 +802,9 @@ function setupCard(d) {  // the 实验设置 tab
     <div class="setgrid">
     ${table('数据集', ds.length, ['名称', '用途', '规模', '说明'], ds.map(x => row('ds:' + x.id, [
       `<b>${esc(x.name || x.id)}</b><div class="small">${esc(x.id)}</div>`, esc(ROLE[x.role] || x.role || ''), x.size != null ? `<span class="num">${B.num(x.size)}</span>` : '',
-      `${esc(x.about || '')}${x.source ? `<div class="small"><code>${esc(x.source)}</code></div>` : ''}`])))}
+      `${esc(x.about || '')}${x.source ? `<div class="small"><code>${esc(x.source)}</code></div>` : ''}`]) +
+      `<tr class="dsamp"><td colspan="4">${samplesBlock(d, x.id, r.item === 'ds:' + x.id) ||
+        (String(x.id).includes('{n}') ? '' : '<span class="small faint">还没有样例（board/examples/data/' + esc(x.id) + '.jsonl）</span>')}</td></tr>`))}
     ${table('模型', s.models.length, ['名称', '版本', '说明'], s.models.map(x => row('model:' + x.id, [
       `<b>${esc(x.name || x.id)}</b>`, x.version ? `<code>${esc(x.version)}</code>` : '<span class="faint">没有记录</span>', esc(x.about || '')])))}
     ${table('指标', mt.length, ['名称', '方向', '说明'], mt.map(x => row('mt:' + x.id, [
@@ -1469,11 +1472,51 @@ function runsPivot(d, r, Q, {c, disp, g, shown, vals, cfg, attOf}) {
     <div class="tmeta">格子是「${esc(metricName(metric))}」${better ? '（' + BETTER[better] + '，越好绿色越深，最好的一格加粗）' : '（没有声明方向，只按大小深浅）'}；
       ×n 是 n 个运行的平均；斜纹是抽查，不算进比较；点一格，看这一格的运行。</div>`;
 }
+// ============================================================ dataset samples: about 10 raw records of each dataset
+// board/examples/data/<dataset id>.<ext>; a dataset may use another's (samples_from in setup.json).
+function datasetSamples(d, id) {
+  const ds = ctx(d).setup.datasets.get(id), all = d.data_samples || {};
+  const from = ds && typeof ds.samples_from === 'string' && ds.samples_from !== id ? ds.samples_from : null;
+  const s = all[from || id];
+  return s ? Object.assign({}, s, {id, from, note: ds && typeof ds.samples_note === 'string' ? ds.samples_note : null}) : null;
+}
+const FOLD_LINES = 40;
+// One block per record, as the file has it (a JSON record can be shown indented); records over FOLD_LINES are folded.
+// Everything is text: samples are data, never markup.
+function samplesBlock(d, id, open = false) {
+  const s = datasetSamples(d, id);
+  if (!s) return '';
+  const key = s.from || id, indent = !!ui.sampleIndent[key], c = ctx(d);
+  const shown = rec => { if (!indent) return rec; try { return JSON.stringify(JSON.parse(rec), null, 2); } catch (e) { return rec; } };
+  const block = (text, k) => {
+    const lines = text.split('\n'), folded = lines.length > FOLD_LINES && !ui.sampleOpen[k];
+    return `<pre class="sample">${esc(folded ? lines.slice(0, FOLD_LINES).join('\n') : text)}</pre>` +
+      (lines.length > FOLD_LINES ? `<button class="lnkbtn" data-sopen="${esc(k)}">${folded ? `展开（共 ${lines.length} 行）` : '收起'}</button>` : '');
+  };
+  const body = s.kind === 'jsonl' ? s.records.map((rec, i) => `<div class="srec"><span class="sno">${i + 1}</span><div>${block(shown(rec), key + '#' + i)}</div></div>`).join('')
+    : block(s.text || '', key + '#all');
+  const n = s.kind === 'jsonl' ? s.records.length : s.count;
+  const from = s.from ? (c.setup.datasets.get(s.from) || {}).name || s.from : null;
+  return `<details class="samples" id="samples-${esc(id)}"${open ? ' open' : ''}><summary>样例${n != null ? `（${n} 条）` : ''}` +
+    `${from ? ` <span class="small">用的是「${esc(from)}」的样例</span>` : ''}${s.note ? ` <span class="small">${esc(s.note)}</span>` : ''}</summary>
+    <div class="sbar">${s.kind === 'jsonl' ? `<button class="mk${indent ? '' : ' on'}" data-sindent="${esc(key)}" data-v="">原样</button>` +
+      `<button class="mk${indent ? ' on' : ''}" data-sindent="${esc(key)}" data-v="1">缩进</button>` : ''}
+      <span class="small"><code>${esc(s.file)}</code>${s.truncated ? ' · 文件太大，只显示开头' : ''}</span></div>${body}</details>`;
+}
+// 样例 tab: every dataset's samples, in the order of setup.json
+function dataSamplesCard(d) {
+  const ds = [...ctx(d).setup.datasets.values()].filter(x => datasetSamples(d, x.id));
+  if (!ds.length) return '';
+  return `<div class="card"><h2>数据长什么样 <span class="meta">每个数据集抽的样例，原样显示 · board/examples/data/</span></h2><div class="pad">` +
+    ds.map(x => `<div class="dsblk"><h3><a href="${plink(d.name, 'setup', 'ds:' + x.id)}">${esc(x.name || x.id)}</a> <span class="small">${esc(x.id)}</span></h3>${samplesBlock(d, x.id)}</div>`).join('') +
+    '</div></div>';
+}
 function groupNote(d, gname, n, missing) {
   const c = ctx(d), ds = c.setup.datasets.get(gname);
   const what = ds ? `<b>${esc(ds.name || gname)}</b>${ds.size != null ? `（${B.num(ds.size)} 条）` : ''}：${esc(ds.about || '')} <a href="${plink(d.name, 'setup', 'ds:' + gname)}">定义 →</a>`
     : gname ? `分组「${esc(gname)}」在 setup.json 里没有定义` : '没有分组的指标';
-  return `<div class="tmeta">${what}<br>本组 ${n} 次运行${missing ? `，另有 ${missing} 次没有这组指标` : ''}</div>`;
+  const samples = ds && datasetSamples(d, gname) ? ` <a href="${plink(d.name, 'setup', 'ds:' + gname)}">看样例 →</a>` : '';
+  return `<div class="tmeta">${what}${samples}<br>本组 ${n} 次运行${missing ? `，另有 ${missing} 次没有这组指标` : ''}</div>`;
 }
 function runDetail(d, x) {
   const c = ctx(d), rr = x.run || {}, s = x.series, p = placeOfRun(d, x);
@@ -1795,6 +1838,10 @@ document.addEventListener('click', e => {
   if (t.closest('[data-example]')) { ui.exampleOpen = !ui.exampleOpen; render(); return; }
   const ag = t.closest('[data-agroup]');
   if (ag) { e.preventDefault(); ui.attGroup[ag.dataset.att] = ag.dataset.agroup; render(); return; }
+  const si = t.closest('[data-sindent]');
+  if (si) { ui.sampleIndent[si.dataset.sindent] = !!si.dataset.v; render(); return; }
+  const so = t.closest('[data-sopen]');
+  if (so) { ui.sampleOpen[so.dataset.sopen] = !ui.sampleOpen[so.dataset.sopen]; render(); return; }
   if (t.closest('[data-runallcols]')) { e.preventDefault(); ui.runAllCols = !ui.runAllCols; render(); return; }
   const row = t.closest('tr[data-href]');
   if (row && !t.closest('a')) location.hash = row.dataset.href;
