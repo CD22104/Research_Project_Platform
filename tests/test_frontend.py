@@ -229,12 +229,18 @@ class RunsTable(unittest.TestCase):
         self.assertIn("误拦", re.search(r'<select data-rq="metric">.*?</select>', pv2, re.S).group(0).split("selected")[1][:40])
 
 
+def touch_later(root):
+    """An attempt edited an hour after the copy: after the demo brief was written, and after its method step."""
+    t = time.time() + 3600
+    os.utime(os.path.join(root, "demo", "board", "attempts", "2026-11-10-lr-sweep.md"), (t, t))
+
+
 @unittest.skipUnless(CHROME, "Chromium not installed")
 class Pages(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
-        cls.proc, cls.base, cls.log = start_server(REPO, cls.tmp)
+        cls.proc, cls.base, cls.log = start_server(REPO, cls.tmp, prepare=touch_later)
         cls.pages = {k: dump(cls.base + v, 4000) for k, v in ROUTES.items()}
 
     @classmethod
@@ -456,7 +462,7 @@ class Pages(unittest.TestCase):
         self.assertLess(h.index("给你的简报"), h.index("项目地图"))                 # brief, then the map, then what waits
         self.assertLess(h.index("项目地图"), h.index("<h2>等你"))
         self.assertIn('<a class="ref rec" href="#/p/demo/flow/a%3A2026-11-10-lr-sweep" title="实验：2026-11-10-lr-sweep">加 500 步预热</a>', h)
-        self.assertIn("简报之后又有", h)                                         # dated 2026-11-21; records changed later
+        self.assertIn("简报之后又有 1 处变化", h)                                # lr-sweep changed after the brief's file
         self.assertIn('<span class="k">研究问题</span>学习率预热能否稳定小模型训练？', h)
         strip = re.search(r'<div class="mstrip">(.*?)</div>', h, re.S).group(1)
         self.assertEqual([re.sub(r"<[^>]+>|●", "", x).split() for x in re.findall(r'<a class="chip[^"]*"[^>]*>(.*?)</a>', strip, re.S)],

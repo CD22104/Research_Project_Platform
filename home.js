@@ -75,7 +75,9 @@ function projectMap(d) {
 function briefCard(d) {
   const b = latestBrief(d), name = d.name;
   if (!b) return `<div class="card brief none"><div class="pad small faint">还没有简报。一批工作告一段落时，项目会话写一篇 docs/&lt;日期&gt;-brief.md（kind: 简报）：现在到哪了、新做了什么、先看这几个、等你决定的。它会显示在这里。</div></div>`;
-  const later = [...d.attempts, ...(d.docs || []).filter(x => x.file !== b.file)].filter(x => typeof x.mtime === 'number' && x.mtime > b.at + 60).length;
+  // changed after the brief was written: its file time (a date-only `date` would mean midnight and count the whole day)
+  const written = typeof b.mtime === 'number' ? b.mtime : b.at;
+  const later = [...d.attempts, ...(d.docs || []).filter(x => x.file !== b.file)].filter(x => typeof x.mtime === 'number' && x.mtime > written + 60).length;
   const read = b.state === 'seen' || b.state === 'ok', folded = read || ui.briefFolded === b.file;
   return `<details class="card brief" id="home-brief"${folded ? '' : ' open'}><summary><h2>给你的简报 <span class="meta">${esc(B.day(new Date(b.at * 1000).toISOString()))} · ${esc(b.title)}${read ? ' · 你看过了' : ''}</span></h2></summary>
     ${later ? `<div class="notice">简报之后又有 ${later} 处变化（地图上标「新」的是你上次来之后的）。</div>` : ''}
