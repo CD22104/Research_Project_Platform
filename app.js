@@ -6,7 +6,7 @@ const B = Board, esc = B.esc, $ = id => document.getElementById(id);
 
 // ============================================================ data
 const S = {status: null, projects: null, guide: null, detail: {}, fetchedAt: {}, loading: {}, missing: {}, offline: false};
-const ui = {runView: {}, exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
+const ui = {exampleOpen: false, attGroup: {}, runAllCols: false,  // view state kept across refreshes
   pick: {}, draft: {}, editing: {}, err: {}, direct: {}, renaming: false};                   // replies being written, the rename box
 // the console's only writes: replies (board/answers.jsonl), marks and paper ticks (board/marks.jsonl) and display names;
 // the server checks they come from this page
@@ -1242,75 +1242,167 @@ function linkedRuns(d, a, runs) {
 
 // ------------------------------------------------------------ 运行: the comparison table on the left, the selected run on the right
 const SHOW_GROUPS = 6;
+// ============================================================ 运行: one table of runs (sortable, filtered), or a cross table
+// Everything the page shows is in its address, so a refresh or a shared link keeps it:
+//   view   '' table | pivot cross table | data the data runs        g      test set (metric group)
+//   sort   name | att | date | s:<setting> | m:<metric>, desc 1/0   where  setting filters "key:value;key:value" (parts URI-encoded)
+//   att    attempt   track  track   st  status   all  1 = every metric column   rows / cols / metric  the cross table
+function runsQuery(r) {
+  const q = r.query || {};
+  const where = String(q.where || '').split(';').filter(Boolean).map(part => {
+    const i = part.indexOf(':');
+    if (i < 0) return null;
+    try { return [decodeURIComponent(part.slice(0, i)), decodeURIComponent(part.slice(i + 1))]; } catch (e) { return null; }
+  }).filter(Boolean);
+  return {view: ['pivot', 'data'].includes(q.view) ? q.view : '', g: q.g == null ? null : q.g === '~' ? '' : q.g, sort: q.sort || null,
+    desc: q.desc === '1' ? true : q.desc === '0' ? false : null, where, att: q.att || '', track: q.track || '', st: q.st || '',
+    all: q.all === '1', rows: q.rows || null, cols: q.cols ? q.cols.split(',').filter(Boolean) : null, metric: q.metric || null};
+}
+const whereText = w => w.map(([k, v]) => encodeURIComponent(k) + ':' + encodeURIComponent(v)).join(';');
+function runsLink(d, Q, change = {}, item = null) {  // the runs page with some of Q changed; g '~' is the group of top-level numbers
+  const x = Object.assign({}, Q, change);
+  return plink(d.name, 'runs', item, {view: x.view || null, g: x.g === '' ? '~' : x.g, sort: x.sort, desc: x.sort && x.desc != null ? (x.desc ? '1' : '0') : null,
+    where: x.where.length ? whereText(x.where) : null, att: x.att || null, track: x.track || null, st: x.st || null,
+    all: x.all ? '1' : null, rows: x.rows, cols: x.cols && x.cols.length ? x.cols.join(',') : null, metric: x.metric});
+}
+// a metric's direction: display.headline for its own group, else setup.json
+function metricBetter(c, disp, g, col) {
+  const h = disp.headline;
+  if (h && h.metric === col && (h.group === g || !g)) return h.better;
+  const m = c.setup.metrics.get(col);
+  return m && (m.better === 'higher' || m.better === 'lower') ? m.better : null;
+}
+// the metric columns to show: display.primary_metrics, else the group's columns in the order the runs wrote them,
+// without counts (n, of), the parts of ratios, and columns that are the same in every run shown
+function runMetricCols(disp, g, shown, vals) {
+  const primary = disp.primary.filter(x => g.cols.includes(x));
+  if (primary.length) return primary;
+  const parts = new Set(Object.values(disp.ratio).flat());
+  const same = col => shown.length > 1 && new Set(shown.map(x => B.valueText(vals(x)[col]))).size <= 1;
+  return g.cols.filter(col => !parts.has(col) && col !== 'n' && col !== 'of' && !same(col)).slice(0, 6);
+}
+const isSpot = v => typeof v.n === 'number' && typeof v.of === 'number' && v.n < v.of;  // scored part of the set only
 function tabRuns(d, r) {
-  const c = ctx(d), name = d.name, q = r.query || {};
-  const sortKey = x => String((x.run || {}).started || '') + ' ' + x.id;
-  const all = [...d.runs].sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  const c = ctx(d), name = d.name, Q = runsQuery(r);
+  const newest = x => String((x.run || {}).started || '') + ' ' + x.id;
+  const all = [...d.runs].sort((a, b) => newest(b).localeCompare(newest(a)));
   if (!all.length) return '<div class="card"><div class="empty">还没有运行记录（runs/）。</div></div>';
   const sel = (r.item != null && all.find(x => runKey(x) === r.item)) || null;
   const dataRuns = all.filter(x => (x.run || {}).kind === 'data'), evalRuns = all.filter(x => (x.run || {}).kind !== 'data');
-  const view = (q.view === 'data' || (sel && (sel.run || {}).kind === 'data')) && dataRuns.length ? 'data' : evalRuns.length ? 'main' : 'data';
-  const disp = view === 'data' ? B.parseDisplay(null) : c.disp;
-  let runs = view === 'data' ? dataRuns : evalRuns;
-  if (q.track) runs = runs.filter(x => { const a = c.attemptOf(x); return a && a.meta.track === q.track; });
-  const st = ui.runView[view] || (ui.runView[view] = {group: undefined, all: false});
+  const data = (Q.view === 'data' || (sel && (sel.run || {}).kind === 'data')) && dataRuns.length || !evalRuns.length;
+  Q.view = data ? 'data' : Q.view === 'pivot' ? 'pivot' : '';
+  const disp = data ? B.parseDisplay(null) : c.disp;
+  const cfg = new Map(all.map(x => [x, B.flatten((x.run || {}).config)]));
+  const attOf = x => { const a = c.attemptOf(x); return a ? attKey(a) : String((x.run || {}).attempt || ''); };
+
+  // which runs: the kind, then attempt, track, status and setting filters
+  const base = data ? dataRuns : evalRuns;
+  let runs = base;
+  if (Q.track) runs = runs.filter(x => { const a = c.attemptOf(x); return a && a.meta.track === Q.track; });
+  if (Q.att) runs = runs.filter(x => attOf(x) === Q.att);
+  if (Q.st) runs = runs.filter(x => ((x.run || {}).status || '未写') === Q.st);
+  for (const [k, v] of Q.where) runs = runs.filter(x => k in cfg.get(x) && B.valueText(cfg.get(x)[k]) === v);
+
+  // which test set
   const groups = B.metricGroups(runs.map(x => (x.run || {}).metrics));
   const {ordered, defaultName} = B.arrangeGroups(groups, disp);
-  if (!groups.some(g => g.name === st.group)) st.group = defaultName;
-  if (sel && !B.hasNumber(B.groupValues((sel.run || {}).metrics, st.group ?? ''))) {  // show the selected run's own group
-    const g = B.metricGroups([(sel.run || {}).metrics]).find(x => x.runs);
-    if (g && groups.some(x => x.name === g.name)) st.group = g.name;
+  let gname = groups.some(x => x.name === Q.g) ? Q.g : defaultName;
+  if (sel && Q.g == null && !B.hasNumber(B.groupValues((sel.run || {}).metrics, gname ?? ''))) {  // show the picked run's own group
+    const own = B.metricGroups([(sel.run || {}).metrics]).find(x => x.runs);
+    if (own && groups.some(x => x.name === own.name)) gname = own.name;
   }
-  const g = groups.find(x => x.name === st.group);
+  const g = groups.find(x => x.name === gname);
   const vals = x => g ? B.groupValues((x.run || {}).metrics, g.name) : {};
   const shown = g ? runs.filter(x => B.hasNumber(vals(x))) : [];
   const bare = runs.filter(x => !groups.some(y => B.hasNumber(B.groupValues((x.run || {}).metrics, y.name))));
-  const allCols = g ? g.cols : [], brief = g ? columnsFor(g, disp) : [], cols = st.all ? allCols : brief.slice(0, sel ? 3 : 6);
-  const qs = extra => ({view: view === 'data' ? 'data' : null, track: q.track, ...extra});
 
-  // controls: which runs, which test set
+  // controls
+  const counts = (list, f) => { const m = new Map(); for (const x of list) { const k = f(x); if (k) m.set(k, (m.get(k) || 0) + 1); } return m; };
+  const select = (key, label, opts) => opts.length > 1 || Q[key] ? `<label class="rq"><span class="small">${label}</span><select data-rq="${key}"><option value="">全部</option>` +
+    opts.map(([v, t, n]) => `<option value="${esc(v)}"${Q[key] === v ? ' selected' : ''}>${esc(t)}（${n}）</option>`).join('') + '</select></label>' : '';
+  const attCounts = counts(base, attOf), atts = [...attCounts].map(([id, n]) => { const a = c.attById.get(id); return [id, a ? attName(a) : id, n]; });
+  const trackCounts = counts(base, x => { const a = c.attemptOf(x); return a && typeof a.meta.track === 'string' ? a.meta.track : ''; });
+  const tracks = [...trackCounts].map(([id, n]) => { const t = c.trackById.get(id); return [id, t ? t.meta.title || id : id, n]; });
+  const stats = [...counts(base, x => (x.run || {}).status || '未写')];
   const label = x => esc(c.groupName(x.name));
   const visible = ordered.slice(0, SHOW_GROUPS);
   if (g && !visible.includes(g)) visible.push(g);
   const more = ordered.filter(x => !visible.includes(x));
-  const trackOpts = [['', '全部支线'], ...d.tracks.filter(t => typeof t.meta.id === 'string').map(t => [t.meta.id, t.meta.title || t.meta.id])];
   const controls = `<div class="card"><div class="filters">
-      <div class="chips">${evalRuns.length ? `<a class="chip${view === 'main' ? ' on' : ''}" href="${plink(name, 'runs', null, {track: q.track})}">评测和训练 ${evalRuns.length}</a>` : ''}
-        ${dataRuns.length ? `<a class="chip${view === 'data' ? ' on' : ''}" href="${plink(name, 'runs', null, {view: 'data'})}">数据 ${dataRuns.length}</a>` : ''}</div>
-      ${view === 'main' ? `<select data-rtrack>${trackOpts.map(([v, t]) => `<option value="${esc(v)}"${(q.track || '') === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
+      <div class="chips">${evalRuns.length ? `<a class="chip${!data ? ' on' : ''}" href="${runsLink(d, Q, {view: Q.view === 'pivot' ? 'pivot' : '', g: null, where: [], att: '', st: '', track: ''})}">评测和训练 ${evalRuns.length}</a>` : ''}
+        ${dataRuns.length ? `<a class="chip${data ? ' on' : ''}" href="${plink(name, 'runs', null, {view: 'data'})}">数据 ${dataRuns.length}</a>` : ''}</div>
+      ${select('att', '实验', atts)}${data ? '' : select('track', '支线', tracks)}${select('st', '状态', stats.map(([s, n]) => [s, s, n]))}
     </div>
-    ${ordered.length > 1 ? `<div class="tabs" style="padding-top:8px"><span class="small">测试集</span>` +
-      visible.map(x => `<button class="tab${x === g ? ' on' : ''}" data-view="${view}" data-group="${esc(x.name)}" title="${esc((c.setup.datasets.get(x.name) || {}).about || x.name)}">${label(x)} <span class="small">${x.runs}</span></button>`).join('') +
-      (more.length ? `<select data-view="${view}"><option value="">更多（${more.length}）</option>` + more.map(x => `<option value="g:${esc(x.name)}">${label(x)}（${x.runs}）</option>`).join('') + '</select>' : '') + '</div>' : ''}
+    ${Q.where.length ? `<div class="chips wherechips"><span class="small">只看</span>${Q.where.map(([k, v], i) =>
+      `<a class="chip on" href="${runsLink(d, Q, {where: Q.where.filter((_, j) => j !== i)})}" title="去掉这个条件">${esc(k)} = ${esc(v)} ✕</a>`).join('')}</div>` : ''}
+    ${ordered.length > 1 ? `<div class="tabs"><span class="small">测试集</span>` +
+      visible.map(x => `<a class="chip${x === g ? ' on' : ''}" data-g="${esc(x.name)}" href="${runsLink(d, Q, {g: x.name, sort: null, desc: null, metric: null}, r.item)}" title="${esc((c.setup.datasets.get(x.name) || {}).about || x.name)}">${label(x)} <span class="small">${x.runs}</span></a>`).join('') +
+      (more.length ? `<select data-rq="g"><option value="">更多（${more.length}）</option>` + more.map(x => `<option value="${esc(x.name === '' ? '~' : x.name)}">${label(x)}（${x.runs}）</option>`).join('') + '</select>' : '') + '</div>' : ''}
     ${g ? groupNote(d, g.name, shown.length, runs.length - shown.length - bare.length) : ''}
     ${disp.problems.length ? `<div class="dnote">project.json 的 display 里有用不上的设置：${disp.problems.map(esc).join('；')}。已按默认方式显示。</div>` : ''}
     </div>`;
 
-  // bars: the headline metric if this test set has it, otherwise the first column shown
-  let barsHtml = '';
-  if (g && shown.length > 1) {
-    const h = disp.headline, metric = h && h.group === g.name ? h.metric : (h && g.cols.includes(h.metric) ? h.metric : cols[0]);
-    const sm = c.setup.metrics.get(metric), better = h && h.metric === metric ? h.better : sm && sm.better || null;
-    const lab = labelsFor(c, shown);
-    const chart = B.bars(shown.map(x => { const v = vals(x);
-      return {label: lab(x), value: v[metric], on: x === sel, href: plink(name, 'runs', runKey(x), qs({})),
-        dim: typeof v.n === 'number' && typeof v.of === 'number' && v.n < v.of, html: cellHtml(v, metric, disp.ratio)}; }), better);
-    if (chart) barsHtml = `<div class="card"><h2>${esc(c.metricName(metric))} · ${esc(c.groupName(g.name))} <span class="meta">${better ? BETTER[better] + '，绿色是最好的一次；' : '没有声明方向，只按大小排；'}斜纹是抽查，不参与比较</span></h2><div class="pad">${chart}</div></div>`;
-  }
-
-  const row = x => {
-    const rr = x.run || {}, v = vals(x), p = placeOfRun(d, x);
-    return `<tr class="run${x === sel ? ' open' : ''}" data-href="${plink(name, 'runs', runKey(x), qs({}))}">
-      <td><b>${esc(c.label(x))}</b>${c.label(x) !== runKey(x) ? `<div class="small">${esc(runKey(x))}</div>` : ''}</td>
-      <td>${B.pill(rr.status)} ${statePill(x.state)}${p.track ? `<div class="small">${esc(p.track.meta.title || idOf(p.track))}</div>` : ''}</td>
-      ${cols.map(col => `<td class="n">${cellHtml(v, col, disp.ratio)}</td>`).join('')}</tr>`;
-  };
-  const table = shown.length ? `<div class="scroll"><table class="runs"><tr><th>运行</th><th>状态 / 支线</th>${cols.map(col => metricTh(c, col)).join('')}</tr>${shown.map(row).join('')}</table></div>` +
-    (brief.length < allCols.length || st.all ? `<div class="tmeta"><a href="#" data-allcols="${view}">${st.all ? '只显示主要列' : `显示全部列（${allCols.length}）`}</a></div>` : '') : '<div class="empty">这个测试集下没有运行。</div>';
+  const body = runsTable(d, r, Q, {c, disp, g, shown, vals, cfg, attOf, sel});
   const bareHtml = bare.length ? `<div class="bare"><span class="small">还没有指标的运行：</span>` +
-    bare.map(x => `<a href="${plink(name, 'runs', runKey(x), qs({}))}">${esc(c.label(x))}</a>`).join('') + '</div>' : '';
-  if (!sel) return controls + barsHtml + `<div class="card">${table}${bareHtml}<div class="pad small">点一行，看这次运行属于哪次尝试、各测试集上的指标、配置、产物和曲线。</div></div>`;
-  return controls + barsHtml + `<div class="md2 wide"><div class="card" style="margin:0">${table}${bareHtml}</div><div>${runDetail(d, sel)}</div></div>`;
+    bare.map(x => `<a href="${runsLink(d, Q, {}, runKey(x))}">${esc(c.label(x))}</a>`).join('') + '</div>' : '';
+  if (!sel) return controls + `<div class="card">${body}${bareHtml}<div class="pad small">点表头排序，再点一次反过来；点一个设置值，只看这些运行；点一行，看这次运行属于哪次尝试、各测试集上的指标、配置、产物和曲线。</div></div>`;
+  return controls + `<div class="md2 wide"><div class="card" style="margin:0">${body}${bareHtml}</div><div>${runDetail(d, sel)}</div></div>`;
+}
+// The table: one row per run; the settings that differ between these runs, then the metrics of the test set,
+// each metric cell with a bar from zero and the best one marked. Sorted by the address, else by the headline metric.
+function runsTable(d, r, Q, {c, disp, g, shown, vals, cfg, attOf, sel}) {
+  if (!shown.length) return '<div class="empty">这个测试集下没有运行。</div>';
+  const {cols: settings, common} = B.settingColumns(shown.map(x => (x.run || {}).config), {prefer: disp.settings});
+  let metrics = Q.all ? g.cols : runMetricCols(disp, g, shown, vals);
+  if (sel && !Q.all) metrics = metrics.slice(0, 3);
+  const better = col => metricBetter(c, disp, g.name, col);
+  // the sort: the address, else the headline metric (or the first one with a direction) best first, else newest first
+  let sort = Q.sort, desc = Q.desc;
+  const ok = k => k === 'name' || k === 'att' || k === 'date' || (k.startsWith('s:') && settings.includes(k.slice(2))) || (k.startsWith('m:') && g.cols.includes(k.slice(2)));
+  if (!sort || !ok(sort)) {
+    const h = disp.headline && disp.headline.group === g.name && g.cols.includes(disp.headline.metric) ? disp.headline.metric : metrics.find(col => better(col));
+    sort = h ? 'm:' + h : 'date';
+    desc = null;
+  }
+  const firstDesc = k => k.startsWith('m:') ? better(k.slice(2)) !== 'lower' : k === 'date';   // best first, newest first, A to Z
+  if (desc == null) desc = firstDesc(sort);
+  const valueOf = k => k === 'name' ? x => c.label(x) : k === 'att' ? attOf : k === 'date' ? x => (x.run || {}).started || null
+    : k.startsWith('s:') ? x => cfg.get(x)[k.slice(2)] : x => vals(x)[k.slice(2)];
+  const rows = B.sortRows(shown, valueOf(sort), desc);
+  const th = (k, text, cls = '', title = '') => {
+    const on = sort === k, next = on ? !desc : firstDesc(k);
+    return `<th class="${cls}${on ? ' sorted' : ''}"${title ? ` title="${esc(title)}"` : ''}><a href="${runsLink(d, Q, {sort: k, desc: next}, r.item)}">${text}${on ? (desc ? ' ▼' : ' ▲') : ''}</a></th>`;
+  };
+  const mth = col => { const m = c.setup.metrics.get(col), b = better(col);   // the direction is in the tooltip; arrows are the sort
+    return th('m:' + col, esc(c.metricName(col)), 'num', [m && m.about && m.about.replace(/[。.；;]\s*$/, ''), b ? BETTER[b] : '没有声明方向', col].filter(Boolean).join('；')); };
+  const scales = new Map(metrics.map(col => [col, B.scale(shown.filter(x => !isSpot(vals(x))).map(x => vals(x)[col]), better(col))]));
+  const setCell = (x, k) => {
+    const f = cfg.get(x);
+    if (!(k in f)) return '<td class="faint">—</td>';
+    const t = B.valueText(f[k]), shown = t.length > 40 ? t.slice(0, 39) + '…' : t;
+    return `<td class="sv"><a href="${runsLink(d, Q, {where: [...Q.where.filter(([kk]) => kk !== k), [k, t]]})}" title="只看 ${esc(k)} = ${esc(t)} 的运行">${esc(shown)}</a></td>`;
+  };
+  const metCell = (x, col) => {
+    const v = vals(x), val = v[col], s = scales.get(col), spot = isSpot(v), num = typeof val === 'number' && isFinite(val);
+    const best = num && !spot && s.best(val);
+    return `<td class="n mcell${best ? ' best' : ''}${spot ? ' spot' : ''}"${spot ? ` title="抽查：只评了 ${B.num(v.n)}/${B.num(v.of)} 条，不参与比较"` : ''}>` +
+      (num ? `<i style="width:${(s.pos(val) * 100).toFixed(1)}%"></i>` : '') + `<span>${cellHtml(v, col, disp.ratio)}</span></td>`;
+  };
+  const multiAtt = new Set(shown.map(attOf)).size > 1;
+  const row = x => {
+    const rr = x.run || {}, a = attOf(x), att = c.attById.get(a);
+    return `<tr class="run${x === sel ? ' open' : ''}" data-href="${runsLink(d, Q, {}, runKey(x))}">
+      <td class="rname"><b>${esc(c.label(x))}</b>${c.label(x) !== runKey(x) ? `<div class="small">${esc(runKey(x))}</div>` : ''}` +
+      `${rr.status && rr.status !== '完成' ? ' ' + B.pill(rr.status) : ''} ${statePill(x.state)}</td>
+      ${multiAtt ? `<td class="small">${att ? `<a href="${plink(d.name, 'flow', 'a:' + a)}">${esc(attName(att))}</a>` : esc(a) || '—'}</td>` : ''}
+      ${settings.map(k => setCell(x, k)).join('')}${metrics.map(col => metCell(x, col)).join('')}
+      <td class="small">${esc(B.day(rr.started) || '—')}</td></tr>`;
+  };
+  const head = `<tr>${th('name', '运行')}${multiAtt ? th('att', '实验') : ''}${settings.map(k => th('s:' + k, esc(k), 'set')).join('')}${metrics.map(mth).join('')}${th('date', '开始')}</tr>`;
+  const commonHtml = common.length ? `<div class="tmeta">这些运行共同的设置：${common.slice(0, 10).map(([k, v]) => `<code>${esc(k)}</code> = ${esc(B.valueText(v))}`).join('，')}${common.length > 10 ? ' ……' : ''}</div>` : '';
+  const more = g.cols.length > metrics.length || Q.all ? `<a class="allcols" href="${runsLink(d, Q, {all: !Q.all}, r.item)}">${Q.all ? '只显示主要列' : `显示全部指标（${g.cols.length}）`}</a>` : '';
+  return `${commonHtml}<div class="scroll"><table class="runs">${head}${rows.map(row).join('')}</table></div>
+    <div class="tmeta">${shown.length} 次运行${more ? ' · ' + more : ''}${shown.some(x => isSpot(vals(x))) ? ' · 斜纹是抽查，不参与比较' : ''}</div>`;
 }
 function groupNote(d, gname, n, missing) {
   const c = ctx(d), ds = c.setup.datasets.get(gname);
@@ -1638,10 +1730,6 @@ document.addEventListener('click', e => {
   if (t.closest('[data-example]')) { ui.exampleOpen = !ui.exampleOpen; render(); return; }
   const ag = t.closest('[data-agroup]');
   if (ag) { e.preventDefault(); ui.attGroup[ag.dataset.att] = ag.dataset.agroup; render(); return; }
-  const tab = t.closest('button[data-group]');
-  if (tab) { ui.runView[tab.dataset.view].group = tab.dataset.group; render(); return; }
-  const allc = t.closest('[data-allcols]');
-  if (allc) { e.preventDefault(); const st = ui.runView[allc.dataset.allcols]; st.all = !st.all; render(); return; }
   if (t.closest('[data-runallcols]')) { e.preventDefault(); ui.runAllCols = !ui.runAllCols; render(); return; }
   const row = t.closest('tr[data-href]');
   if (row && !t.closest('a')) location.hash = row.dataset.href;
@@ -1656,10 +1744,15 @@ document.addEventListener('change', e => {
       .catch(err => { pc.checked = !want; pc.disabled = false; alert('没有保存：' + err.message); });
     return;
   }
-  const sel = e.target.closest('select[data-view]');
-  if (sel && sel.value.startsWith('g:')) { ui.runView[sel.dataset.view].group = sel.value.slice(2); render(); return; }
-  const tr = e.target.closest('select[data-rtrack]');
-  if (tr) { const r = route(); location.hash = plink(r.name, 'runs', null, {track: tr.value}); }
+  const rq = e.target.closest('select[data-rq]');   // a choice on the runs page goes into its address
+  if (rq) {
+    const r = route(), Q = runsQuery(r), key = rq.dataset.rq, d = S.detail[r.name];
+    if (!d) return;
+    const change = {[key]: rq.value || (key === 'g' || key === 'rows' || key === 'metric' ? null : '')};
+    if (key === 'cols') change.cols = [...rq.closest('.pvsel').querySelectorAll('select[data-rq="cols"]')].map(x => x.value).filter(Boolean);
+    if (key === 'g') Object.assign(change, {sort: null, desc: null, metric: null});
+    location.hash = runsLink(d, Q, change, r.item);
+  }
 });
 document.addEventListener('mousedown', e => { copying = !!e.target.closest('.copy'); });
 window.addEventListener('hashchange', () => { ui.renaming = false; render(); });

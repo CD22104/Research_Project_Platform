@@ -75,13 +75,15 @@ const cfgs = [
   {model: 'sonnet', strategy: 'decompose', condition: 'a', bench: 'ag', n: 200, policy: 'x'.repeat(50), net: {layers: 6}, ledger: 1.4},
   null];
 const sc = B.settingColumns(cfgs.slice(0, 4));
-check('settings: varying keys in record order, the fewest kinds of value first chosen, at most 6',
-  J(sc.cols) === J(['model', 'strategy', 'condition', 'n', 'net.layers', 'extra']), J(sc));   // ledger differs in every run: left out
+check('settings: varying keys in record order; one in every run differs (ledger) or few runs have (extra) are left out',
+  J(sc.cols) === J(['model', 'strategy', 'condition', 'n', 'net.layers']), J(sc));
 check('settings: constant short values are common; long values are neither', J(sc.common) === J([['bench', 'ag']]), J(sc));
 check('settings: a run without config makes keys vary', B.settingColumns(cfgs).common.length === 0, J(B.settingColumns(cfgs)));
 check('settings: display.settings wins, unknown keys dropped', J(B.settingColumns(cfgs.slice(0, 4), {prefer: ['condition', 'nope', 'model']}).cols) === J(['condition', 'model']));
 check('display.settings is read', J(B.parseDisplay({settings: ['model']}).settings) === J(['model']) && B.parseDisplay({settings: 'model'}).problems.length === 1);
-check('settings: max', B.settingColumns(cfgs.slice(0, 4), {max: 2}).cols.length === 2);
+check('settings: max keeps the first ones', J(B.settingColumns(cfgs.slice(0, 4), {max: 2}).cols) === J(['model', 'strategy']));
+check('settings: a few long values do not hide a column', J(B.settingColumns([{c: 'a'}, {c: 'b'}, {c: 'x'.repeat(60)}]).cols) === J(['c']));
+check('settings: two runs differing in one key show it', J(B.settingColumns([{lr: 1}, {lr: 2}]).cols) === J(['lr']));
 check('settings: nothing to show', J(B.settingColumns([])) === J({cols: [], common: []}));
 
 const rows = [{id: 1, v: 10}, {id: 2, v: 2}, {id: 3, v: null}, {id: 4, v: 2}, {id: 5}];

@@ -35,10 +35,13 @@ def dump(url, budget_ms=8000):
     return dom, errors
 
 
-def start_server(repo, tmp):
-    """server.py from `repo` on a free 127.0.0.1 port, serving a copy of the fixtures; waits for the first scan."""
+def start_server(repo, tmp, prepare=None):
+    """server.py from `repo` on a free 127.0.0.1 port, serving a copy of the fixtures (plus whatever prepare(root)
+    adds to the copy); waits for the first scan."""
     root = os.path.join(tmp, "projects")
     shutil.copytree(FIXTURES, root, symlinks=True)
+    if prepare:
+        prepare(root)
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -104,6 +107,88 @@ def main_html(dom):
 
 def title(dom):
     return re.search(r"<title>(.*?)</title>", dom).group(1)
+
+
+def make_grid(root):
+    """A project whose runs form a grid (condition × strategy × model), for the runs table and the cross table."""
+    b = os.path.join(root, "grid", "board")
+    os.makedirs(os.path.join(b, "attempts"))
+    def put(rel, obj):
+        os.makedirs(os.path.dirname(os.path.join(b, rel)), exist_ok=True)
+        with open(os.path.join(b, rel), "w", encoding="utf-8") as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False))
+    put("project.json", {"title": "网格实验", "status": "进行中", "display": {
+        "headline": {"group": "ag", "metric": "false_allow", "better": "lower"}, "primary_metrics": ["false_allow", "false_block", "cost"]}})
+    put("setup.json", {"goal": "g", "datasets": [{"id": "ag", "name": "AuthGate"}], "metrics": [
+        {"id": "false_allow", "name": "错误放行", "better": "lower"}, {"id": "false_block", "name": "误拦", "better": "lower"},
+        {"id": "cost", "name": "每条花费", "better": "lower"}, {"id": "n", "name": "条数"}]})
+    for aid in ("2026-11-25-info", "2026-11-25-other"):
+        put("attempts/%s.md" % aid, "---\nid: %s\ntrack: null\ndate: 2026-11-25\nstatus: 进行中\n---\n## 例子\nx\n" % aid)
+    img = '<img src=x onerror="window.__pwned=1">'
+    rows = [("g01", "info", "action_only", "direct", "haiku", .15, .86), ("g02", "info", "action_only", "decompose", "haiku", .10, .80),
+            ("g03", "info", "default", "direct", "haiku", .20, .00), ("g04", "info", "default", "decompose", "haiku", .25, .02),
+            ("g05", "info", "signals", "direct", "haiku", .30, .05), ("g06", "info", "signals", "direct", "haiku", .40, .07),
+            ("g07", "info", "default", "direct", "sonnet", .05, .00), ("g08", "info", "action_only", "direct", "sonnet", .50, .90),
+            ("g09", "other", "default", "direct", "haiku", .12, .01), ("g10", "info", img, "direct", "haiku", .33, .10)]
+    for i, (rid, att, cond, strat, model, fa, fb) in enumerate(rows):
+        config = {"bench": "authgate", "condition": cond, "strategy": strat, "model": model, "n_samples": 200}
+        if rid in ("g05", "g06"):
+            config["seed"] = int(rid[-1]) - 4
+        n = 20 if rid == "g08" else 200                                   # g08 is a spot check
+        put("runs/%s/run.json" % rid, {"id": rid, "kind": "eval", "attempt": "2026-11-25-" + att, "status": "被中断" if rid == "g07" else "完成",
+                                        "started": "2026-11-25T%02d:00:00Z" % (i + 1), "config": config,
+                                        "metrics": {"ag": {"n": n, "of": 200, "false_allow": fa, "false_block": fb, "cost": round(0.002 + i * 0.0001, 4)}}})
+
+
+GRID_ROUTES = {"t": "#/p/grid/runs", "worst": "#/p/grid/runs?sort=m:false_allow&desc=1", "where": "#/p/grid/runs?where=model:haiku",
+               "att": "#/p/grid/runs?att=2026-11-25-other", "st": "#/p/grid/runs?st=%E8%A2%AB%E4%B8%AD%E6%96%AD"}
+RUN_ROWS = r'<tr class="run[^"]*" data-href="#/p/grid/runs/(g\d+)'
+
+
+@unittest.skipUnless(CHROME, "Chromium not installed")
+class RunsTable(unittest.TestCase):
+    """The runs page as one table: settings that differ, metrics, sorting and filters in the address."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.proc, cls.base, cls.log = start_server(REPO, cls.tmp, prepare=make_grid)
+        cls.pages = {k: dump(cls.base + v, 4000) for k, v in GRID_ROUTES.items()}
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_server(cls.proc, cls.log)
+        shutil.rmtree(cls.tmp)
+
+    def m(self, key):
+        self.assertEqual(self.pages[key][1], [])                              # no JS errors
+        return main_html(self.pages[key][0])
+
+    def test_table(self):
+        t = self.m("t")
+        self.assertNotIn('class="bars"', t)
+        heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", t)]
+        self.assertEqual(heads, ["运行", "实验", "condition", "strategy", "model", "错误放行 ▲", "误拦", "每条花费", "开始"])   # seed: 2 of 10 runs
+        self.assertEqual(re.findall(RUN_ROWS, t), ["g07", "g02", "g09", "g01", "g03", "g04", "g05", "g10", "g06", "g08"])  # headline, lower first
+        self.assertIn("这些运行共同的设置：<code>bench</code> = authgate，<code>n_samples</code> = 200", t)
+        row = lambda rid: re.search(r'data-href="#/p/grid/runs/%s".*?</tr>' % rid, t, re.S).group(0)
+        self.assertIn('<td class="n mcell best">', row("g07"))                 # the best error rate
+        self.assertIn('<span class="pill t-', row("g07"))                       # 被中断 shows; 完成 does not
+        self.assertNotIn('<span class="pill t-', row("g01"))
+        self.assertIn('mcell spot" title="抽查：只评了 20/200 条，不参与比较"', row("g08"))
+        self.assertIn('href="#/p/grid/runs?where=condition%3Aaction_only"', row("g01"))   # a value filters the table
+        self.assertIn('href="#/p/grid/runs?sort=m%3Afalse_allow&amp;desc=1">错误放行 ▲</a>', t)   # the sorted header flips
+        self.assertIn("&lt;img src=x onerror=", row("g10"))                     # settings are text
+        self.assertNotIn("<img", t)
+
+    def test_sort_and_filters(self):
+        self.assertEqual(re.findall(RUN_ROWS, self.m("worst"))[:2], ["g08", "g06"])
+        w = self.m("where")
+        self.assertEqual(set(re.findall(RUN_ROWS, w)), {"g01", "g02", "g03", "g04", "g05", "g06", "g09", "g10"})
+        self.assertIn('title="去掉这个条件">model = haiku ✕</a>', w)
+        self.assertEqual(re.findall(RUN_ROWS, self.m("att")), ["g09"])
+        self.assertEqual(re.findall(RUN_ROWS, self.m("st")), ["g07"])
+        self.assertIn('<option value="被中断" selected="">', self.m("st"))
 
 
 @unittest.skipUnless(CHROME, "Chromium not installed")
@@ -263,7 +348,10 @@ class Pages(unittest.TestCase):
     def test_runs(self):
         d = self.m("p_runs")
         self.assertNotIn('class="md2 wide"', d)                       # full-width table until a run is picked
-        self.assertIn("准确率 · 同分布测试集", d)                         # bars
+        self.assertNotIn('class="bars"', d)                              # the table comes first, no bar chart
+        self.assertIn('<th class="num sorted" title="判定与标准答案一致的比例；越高越好；acc"><a href="#/p/demo/runs?sort=m%3Aacc&amp;desc=0">准确率 ▼</a></th>', d)
+        self.assertEqual(re.findall(r'<tr class="run[^"]*" data-href="#/p/demo/runs/(\w+)"', d), ["r001", "r002"])   # best first
+        self.assertIn('<td class="n mcell best"><i style="width:100.0%"></i><span>0.8100 <span class="small">(488/602)</span></span></td>', d)
         self.assertIn("同分布测试集</b>（602 条）：和训练集同一个生成器、不同随机种子。", d)
         self.assertIn(">数据 1</a>", d)
         run = self.m("p_run")
@@ -419,10 +507,12 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   await wait(800);
   location.hash = '#/p/demo/runs'; await wait(600);
   out.cols_before = ths();
-  document.querySelector('[data-allcols="main"]').click(); await wait(50);
+  document.querySelector('#main a.allcols').click(); await wait(300);
   out.cols_after = ths();
-  document.querySelector('button[data-view="main"][data-group=""]').click(); await wait(50);
-  out.other_group = document.querySelector('button.tab.on').textContent.trim().startsWith('其他指标');
+  document.querySelector('#main a.chip[data-g=""]').click(); await wait(300);
+  out.other_group = document.querySelector('#main a.chip.on[data-g]').textContent.trim().startsWith('其他指标');
+  document.querySelector('#main table.runs th a').click(); await wait(300);
+  out.sorted_hash = location.hash;
   [...document.querySelectorAll('tr[data-href]')].find(tr => tr.textContent.includes('r002')).click(); await wait(300);
   out.run_hash = location.hash;
   out.run_detail = !!document.querySelector('#main .detail h2');
@@ -435,7 +525,7 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   out.examples_scroll = window.scrollY;                       // picking another probe must not jump to the page top
   document.body.style.paddingBottom = '';
   location.hash = '#/p/demo/runs'; await wait(300);
-  const sel = document.querySelector('select[data-rtrack]'); sel.value = 't-loss'; sel.dispatchEvent(new Event('change', {bubbles: true})); await wait(300);
+  const sel = document.querySelector('select[data-rq="track"]'); sel.value = 't-loss'; sel.dispatchEvent(new Event('change', {bubbles: true})); await wait(300);
   out.track_hash = location.hash;
   location.hash = '#/p/demo/flow'; await wait(300);
   [...document.querySelectorAll('#main a.frow')].find(a => a.textContent.includes('focal-gamma1')).click(); await wait(300);
@@ -520,7 +610,8 @@ class Interactions(unittest.TestCase):
         out = json.loads(html.unescape(m.group(1)))
         self.assertGreater(out["cols_after"], out["cols_before"])
         self.assertTrue(out["other_group"])
-        self.assertEqual(out["run_hash"], "#/p/demo/runs/r002")
+        self.assertTrue(out["run_hash"].startswith("#/p/demo/runs/r002"), out["run_hash"])   # keeps the table's sort and filters
+        self.assertIn("sort=name", out["sorted_hash"])                          # a header sorts
         self.assertTrue(out["run_detail"])
         self.assertTrue(out["example_open"])
         self.assertEqual(out["track_hash"], "#/p/demo/runs?track=t-loss")

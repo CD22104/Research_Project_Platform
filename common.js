@@ -484,27 +484,23 @@ const Board = (() => {
 
   // ---- the runs page: a table of runs, sortable, and a cross table of settings × settings
   const valueText = v => typeof v === 'string' ? v : JSON.stringify(v);
-  // Which run settings (config keys, nested ones dotted) become table columns: those whose value differs between
-  // the runs shown (a run without the key counts as a different value). Long values (a sentence, a hash) are left
-  // to the run's detail. Of the varying keys, the max with the fewest kinds of value are kept, so a number that
-  // differs in every run (a cost ledger) loses to the experiment's factors; prefer (display.settings) overrides.
-  // -> {cols: [key], common: [[key, value]]} (common: short values shared by every run)
-  function settingColumns(configs, {max = 6, maxLen = 40, prefer = null} = {}) {
-    const flat = (configs || []).map(c => flatten(isObj(c) ? c : {}));
-    const keys = [], kinds = new Map(), long = new Set();
-    for (const f of flat) for (const [k, v] of Object.entries(f)) {
-      if (!kinds.has(k)) { keys.push(k); kinds.set(k, new Set()); }
-      if (valueText(v).length > maxLen) long.add(k);
-    }
-    for (const k of keys) for (const f of flat) kinds.get(k).add(k in f ? valueText(f[k]) : '\u0000missing');
-    const short = keys.filter(k => !long.has(k)), varying = short.filter(k => kinds.get(k).size > 1);
-    let cols;
-    if (Array.isArray(prefer) && prefer.length) cols = prefer.filter(k => kinds.has(k));
-    else {
-      const chosen = new Set([...varying].sort((a, b) => kinds.get(a).size - kinds.get(b).size).slice(0, max));
-      cols = varying.filter(k => chosen.has(k));
-    }
-    const common = short.filter(k => kinds.get(k).size === 1 && !cols.includes(k)).map(k => [k, flat[0][k]]);
+  // Which run settings (config keys, nested ones dotted) become table columns. A column is a key that most runs
+  // shown have (minShare; keys only some runs have, like one engine's parameters, are left to the detail), whose
+  // value differs between them, is mostly short (a sentence or a hash is left to the detail), and does not differ
+  // in every one of four or more runs (a cost ledger, a timestamp). The first max of them in record order;
+  // prefer (display.settings) overrides. -> {cols: [key], common: [[key, value]]}, common: short values every run shares.
+  function settingColumns(configs, {max = 6, maxLen = 40, prefer = null, minShare = 0.8} = {}) {
+    const flat = (configs || []).map(c => flatten(isObj(c) ? c : {})), n = flat.length, keys = [], seen = new Set();
+    for (const f of flat) for (const k of Object.keys(f)) if (!seen.has(k)) { seen.add(k); keys.push(k); }
+    const info = new Map(keys.map(k => {
+      const lens = flat.filter(f => k in f).map(f => valueText(f[k]).length).sort((a, b) => a - b);
+      return [k, {share: lens.length / n, kinds: new Set(flat.map(f => k in f ? valueText(f[k]) : '\u0000missing')).size,
+                  long: lens[lens.length >> 1] > maxLen}];
+    }));
+    const cols = Array.isArray(prefer) && prefer.length ? prefer.filter(k => info.has(k))
+      : keys.filter(k => { const x = info.get(k); return x.share >= minShare && !x.long && x.kinds > 1 && !(n >= 4 && x.kinds === n); }).slice(0, max);
+    const common = keys.filter(k => { const x = info.get(k); return x.kinds === 1 && x.share === 1 && !cols.includes(k) && valueText(flat[0][k]).length <= maxLen; })
+      .map(k => [k, flat[0][k]]);
     return {cols, common};
   }
   // rows sorted by valueOf: numbers by value, text in natural order (filler5 before filler20), missing values last
