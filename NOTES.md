@@ -23,6 +23,8 @@
 
 ### 不论选哪种都一样的设计
 - **skill 名字**：`research-board`（方案 3 另有 `research-workflow`）。
+- **加载**（研究服务台补充）：只有 a100 和 h100 有 SessionStart 钩子，所以瘦身后的全局规则里留一句「在有 board/ 的项目里工作、新建/结束/暂停项目、启动长任务时，先加载 skill research-board」；`SKILL.md` 的触发描述用同一句话，两边一致。
+- **分发和核对**（研究服务台补充）：skill 搬走了规则的大部分，改 skill 等于改规则，所以走规则的老流程：各台装本地副本，研究服务台给用户看改动，用户同意后运行脚本分发、逐台核对；不用指向共享盘的符号链接（那样一改就在所有机器上生效，绕过了用户确认）。skill 目录里放 `MANIFEST.sha256`（每个文件一行，`sha256sum` 格式，按路径排序，由 `scripts/make-manifest` 生成）和 `VERSION`（日期 + 生成时的 commit）。`MANIFEST.sha256` 自己的 sha256 就是这份 skill 的版本号：distribute.sh 先核对目标机器上的这个值等于预期的旧值，分发后在目标机器上跑 `sha256sum -c MANIFEST.sha256`（每个文件都对）并核对新值。boardrun 在共享盘的副本是项目代码依赖的库，照旧由控制台开发测试通过后发布，不属于这条流程。
 - **SKILL.md**（约 1–2 屏）：什么时候加载（在有 `board/` 的项目里工作、新建 / 结束 / 暂停项目、启动长任务、写或改记录、开工做任务卡）；总的做法（讨论 → 方案 → 任务卡 → 运行 → 记录 → 结论由用户确认 → 回写方案 → 简报）；遇到哪件事读哪份 reference；从配置文件读路径和服务器。
 - **references/**（按需读）：`board-format.md`（现在的格式文档，去掉个人路径）、`new-project.md`、`close-or-pause-project.md`、`long-runs.md`（boardrun、tmux、checkpoint、换服务器）、`task-sessions.md`（任务卡、开工、并行、worktree、合并）、`shared-resources.md`（模型和数据集先查再下、SOURCE.json）、`brief-and-map.md`（简报、一页纸、怎么让用户看懂）。
 - **事实包**：提醒里加一句「做法和格式见 skill research-board」，保证在项目里开的会话会加载它，不只靠模型自己判断。
