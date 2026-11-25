@@ -235,7 +235,7 @@ const Board = (() => {
   //   ratio: {column: [numerator column, denominator column]}. Column names are relative to the group.
   // Anything unusable is dropped and reported in .problems; the page then falls back to its defaults.
   function parseDisplay(raw) {
-    const out = {defaultGroup: null, order: [], primary: [], ratio: {}, headline: null, problems: []};
+    const out = {defaultGroup: null, order: [], primary: [], settings: [], ratio: {}, headline: null, problems: []};
     if (raw == null) return out;
     if (!isObj(raw)) { out.problems.push('display 应为对象'); return out; }
     const strList = v => Array.isArray(v) && v.every(x => typeof x === 'string');
@@ -243,6 +243,7 @@ const Board = (() => {
       if (k === 'default_group') typeof v === 'string' ? out.defaultGroup = v : out.problems.push('default_group 应为字符串');
       else if (k === 'group_order') strList(v) ? out.order = v : out.problems.push('group_order 应为字符串列表');
       else if (k === 'primary_metrics') strList(v) ? out.primary = v : out.problems.push('primary_metrics 应为字符串列表');
+      else if (k === 'settings') strList(v) ? out.settings = v : out.problems.push('settings 应为字符串列表（做表格列的设置名）');
       else if (k === 'ratio') {
         if (!isObj(v)) { out.problems.push('ratio 应为对象'); continue; }
         for (const [col, pair] of Object.entries(v)) {
@@ -481,6 +482,83 @@ const Board = (() => {
   const serverRank = name => { const n = String(name); const i = ['h200', 'h100', 'a100'].findIndex(k => n.includes(k)); return i < 0 ? 3 : i; };
   const sortServers = list => [...(list || [])].sort((a, b) => serverRank(a.name) - serverRank(b.name) || String(a.name).localeCompare(String(b.name)));
 
+  // ---- the runs page: a table of runs, sortable, and a cross table of settings × settings
+  const valueText = v => typeof v === 'string' ? v : JSON.stringify(v);
+  // Which run settings (config keys, nested ones dotted) become table columns: those whose value differs between
+  // the runs shown (a run without the key counts as a different value). Long values (a sentence, a hash) are left
+  // to the run's detail. Of the varying keys, the max with the fewest kinds of value are kept, so a number that
+  // differs in every run (a cost ledger) loses to the experiment's factors; prefer (display.settings) overrides.
+  // -> {cols: [key], common: [[key, value]]} (common: short values shared by every run)
+  function settingColumns(configs, {max = 6, maxLen = 40, prefer = null} = {}) {
+    const flat = (configs || []).map(c => flatten(isObj(c) ? c : {}));
+    const keys = [], kinds = new Map(), long = new Set();
+    for (const f of flat) for (const [k, v] of Object.entries(f)) {
+      if (!kinds.has(k)) { keys.push(k); kinds.set(k, new Set()); }
+      if (valueText(v).length > maxLen) long.add(k);
+    }
+    for (const k of keys) for (const f of flat) kinds.get(k).add(k in f ? valueText(f[k]) : '\u0000missing');
+    const short = keys.filter(k => !long.has(k)), varying = short.filter(k => kinds.get(k).size > 1);
+    let cols;
+    if (Array.isArray(prefer) && prefer.length) cols = prefer.filter(k => kinds.has(k));
+    else {
+      const chosen = new Set([...varying].sort((a, b) => kinds.get(a).size - kinds.get(b).size).slice(0, max));
+      cols = varying.filter(k => chosen.has(k));
+    }
+    const common = short.filter(k => kinds.get(k).size === 1 && !cols.includes(k)).map(k => [k, flat[0][k]]);
+    return {cols, common};
+  }
+  // rows sorted by valueOf: numbers by value, text in natural order (filler5 before filler20), missing values last
+  // in both directions, ties in their original order. Returns a new array.
+  const collator = new Intl.Collator('zh', {numeric: true, sensitivity: 'base'});
+  function sortRows(rows, valueOf, desc) {
+    const missing = v => v == null || v === '' || (typeof v === 'number' && !isFinite(v));
+    return (rows || []).map((r, i) => ({r, i, v: valueOf(r)})).sort((a, b) => {
+      const ma = missing(a.v), mb = missing(b.v);
+      if (ma || mb) return (ma - mb) || a.i - b.i;
+      const c = typeof a.v === 'number' && typeof b.v === 'number' ? a.v - b.v : collator.compare(valueText(a.v), valueText(b.v));
+      return (desc ? -c : c) || a.i - b.i;
+    }).map(x => x.r);
+  }
+  // Cross table: rows and columns are the values of rowOf / colOf (a column may be an array of values, e.g.
+  // [strategy, model]) in order of first appearance; only items with a number count. A cell averages its items;
+  // spot checks (dimOf) stay out of the mean unless the cell has nothing else (then dim: true).
+  // -> {rows, cols, cell(r, c) -> {mean, n, items, dim} | null}
+  function pivot(items, rowOf, colOf, valueOf, dimOf = () => false) {
+    const key = v => JSON.stringify(v ?? null), rows = new Map(), cols = new Map(), cells = new Map();
+    for (const it of items || []) {
+      const v = valueOf(it);
+      if (typeof v !== 'number' || !isFinite(v)) continue;
+      const r = rowOf(it), c = colOf(it), kr = key(r), kc = key(c);
+      if (!rows.has(kr)) rows.set(kr, r);
+      if (!cols.has(kc)) cols.set(kc, c);
+      const k = kr + '\u0001' + kc;
+      if (!cells.has(k)) cells.set(k, []);
+      cells.get(k).push({it, v, dim: !!dimOf(it)});
+    }
+    const cell = (r, c) => {
+      const xs = cells.get(key(r) + '\u0001' + key(c));
+      if (!xs) return null;
+      const fair = xs.filter(x => !x.dim), use = fair.length ? fair : xs;
+      return {mean: use.reduce((s, x) => s + x.v, 0) / use.length, n: use.length, items: xs.map(x => x.it), dim: !fair.length};
+    };
+    return {rows: [...rows.values()], cols: [...cols.values()], cell};
+  }
+  // Shading for a column (or a whole cross table) of values. pos: bar length from zero, 0..1 (like bars());
+  // good: 0 (worst) .. 1 (best) between the smallest and largest value, only with a direction; best: the best value,
+  // only with a direction and when the values differ.
+  function scale(values, better) {
+    const ok = (values || []).filter(v => typeof v === 'number' && isFinite(v));
+    const fin = v => typeof v === 'number' && isFinite(v);
+    if (!ok.length) return {pos: () => 0, good: () => null, best: () => false};
+    const min = Math.min(...ok), max = Math.max(...ok), lo = Math.min(0, min), hi = Math.max(0, max);
+    const dir = better === 'higher' || better === 'lower' ? better : null, span = max - min;
+    return {
+      pos: v => fin(v) ? (hi - lo ? (v - lo) / (hi - lo) : 1) : 0,
+      good: v => fin(v) && dir && span ? (dir === 'higher' ? v - min : max - v) / span : null,
+      best: v => fin(v) && !!dir && span > 0 && v === (dir === 'higher' ? max : min)};
+  }
+
   return {APP_NAME, FREE_MB, isFree, freeCount, serverRank, sortServers, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
-    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree, flowLayout};
+    flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree, flowLayout,
+    valueText, settingColumns, sortRows, pivot, scale};
 })();

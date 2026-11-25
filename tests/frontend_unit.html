@@ -66,6 +66,48 @@ sb.innerHTML = B.md('- ok\n   - <img src=x onerror="window.__pwned=1">\n     <sc
 check('nested items are escaped too', sb.querySelectorAll('img,script').length === 0 && window.__pwned === undefined, sb.innerHTML);
 check('empty input', B.md('') === '' && B.md(null) === '');
 
+// ---- the runs page: which settings become columns, sorting, the cross table, cell shading
+const J = x => JSON.stringify(x);
+const cfgs = [
+  {model: 'haiku', strategy: 'direct', condition: 'a', bench: 'ag', n: 200, policy: 'x'.repeat(50), net: {layers: 6}, ledger: 1.1, extra: 1},
+  {model: 'haiku', strategy: 'decompose', condition: 'b', bench: 'ag', n: 200, policy: 'x'.repeat(50), net: {layers: 12}, ledger: 1.2},
+  {model: 'sonnet', strategy: 'direct', condition: 'c', bench: 'ag', n: 80, policy: 'y'.repeat(50), net: {layers: 6}, ledger: 1.3},
+  {model: 'sonnet', strategy: 'decompose', condition: 'a', bench: 'ag', n: 200, policy: 'x'.repeat(50), net: {layers: 6}, ledger: 1.4},
+  null];
+const sc = B.settingColumns(cfgs.slice(0, 4));
+check('settings: varying keys in record order, the fewest kinds of value first chosen, at most 6',
+  J(sc.cols) === J(['model', 'strategy', 'condition', 'n', 'net.layers', 'extra']), J(sc));   // ledger differs in every run: left out
+check('settings: constant short values are common; long values are neither', J(sc.common) === J([['bench', 'ag']]), J(sc));
+check('settings: a run without config makes keys vary', B.settingColumns(cfgs).common.length === 0, J(B.settingColumns(cfgs)));
+check('settings: display.settings wins, unknown keys dropped', J(B.settingColumns(cfgs.slice(0, 4), {prefer: ['condition', 'nope', 'model']}).cols) === J(['condition', 'model']));
+check('display.settings is read', J(B.parseDisplay({settings: ['model']}).settings) === J(['model']) && B.parseDisplay({settings: 'model'}).problems.length === 1);
+check('settings: max', B.settingColumns(cfgs.slice(0, 4), {max: 2}).cols.length === 2);
+check('settings: nothing to show', J(B.settingColumns([])) === J({cols: [], common: []}));
+
+const rows = [{id: 1, v: 10}, {id: 2, v: 2}, {id: 3, v: null}, {id: 4, v: 2}, {id: 5}];
+check('sort: numbers by value, missing last, ties keep their order', J(B.sortRows(rows, r => r.v, false).map(r => r.id)) === J([2, 4, 1, 3, 5]));
+check('sort: descending keeps missing last', J(B.sortRows(rows, r => r.v, true).map(r => r.id)) === J([1, 2, 4, 3, 5]));
+check('sort: text in natural order', J(B.sortRows(['filler20', 'filler5', 'action_only'], x => x, false)) === J(['action_only', 'filler5', 'filler20']));
+check('sort: does not change its input', rows[0].id === 1);
+
+const pv = B.pivot([{r: 'a', c: 'x', v: 1}, {r: 'a', c: 'x', v: 3}, {r: 'b', c: 'y', v: 5}, {r: 'a', c: 'y', v: 2, dim: 1}, {r: 'a', c: 'y', v: 4, dim: 1},
+  {r: 'b', c: 'x', v: 9, dim: 1}, {r: 'b', c: 'x', v: 7}, {r: 'c', c: 'x', v: null}, {r: 'a', c: 'z', v: 0}], x => x.r, x => x.c, x => x.v, x => x.dim);
+check('pivot: rows and columns in order of first appearance, items without a value left out', J(pv.rows) === J(['a', 'b']) && J(pv.cols) === J(['x', 'y', 'z']), J([pv.rows, pv.cols]));
+const cl = (r, c) => { const x = pv.cell(r, c); return x && [x.mean, x.n, x.dim, x.items.length]; };
+check('pivot: two runs in a cell are averaged', J(cl('a', 'x')) === J([2, 2, false, 2]));
+check('pivot: spot checks stay out of the mean unless the cell has nothing else', J(cl('b', 'x')) === J([7, 1, false, 2]) && J(cl('a', 'y')) === J([3, 2, true, 2]));
+check('pivot: an empty cell is null', pv.cell('b', 'z') === null);
+check('pivot: two settings as one column', J(B.pivot([{v: 1}], () => 'r', () => ['direct', 'haiku'], x => x.v).cols) === J([['direct', 'haiku']]));
+
+const s1 = B.scale([0.2, 0.5, 0.1], 'lower');
+check('scale: lower is better marks the smallest', s1.best(0.1) && !s1.best(0.5) && !s1.best(0.2));
+check('scale: bars start at zero', s1.pos(0.5) === 1 && Math.abs(s1.pos(0.1) - 0.2) < 1e-9);
+check('scale: goodness follows the direction', s1.good(0.1) === 1 && s1.good(0.5) === 0);
+const s2 = B.scale([3], 'higher'), s3 = B.scale([1, 2], null);
+check('scale: one value, no division by zero, no best', s2.pos(3) === 1 && !s2.best(3) && s2.good(3) === null);
+check('scale: no direction, no best and no goodness', !s3.best(2) && s3.good(2) === null && s3.pos(1) === 0.5);
+check('scale: missing values', s1.pos(null) === 0 && !s1.best(undefined));
+
 // esc / num / time
 check('esc', B.esc('<a href="x">\'&') === '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
 check('num: 4 decimals, integers as is', B.num(0.81) === '0.8100' && B.num(0.59966777) === '0.5997' && B.num(1234) === '1234' && B.num(1e-5) === '1.00e-5' && B.num(2.5e6) === '2500000' && B.num(2500000.5) === '2.50e+6' && B.num(0) === '0' && B.num(null) === '' && B.num('<x>') === '&lt;x&gt;', [B.num(0.81), B.num(1e-5), B.num(2.5e6)]);
