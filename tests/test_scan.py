@@ -348,9 +348,9 @@ class FormatV2(FixtureCase):
         self.assertIn(("setup.json", "指标「acc_stepx」（1 次运行用到）没有在 metrics 里定义"), checks)
         self.assertFalse([c for c in checks if "acc_step1" in c[1]])          # acc_step{n} covers numbered steps
         self.assertIn(("setup.json", "terms 里每项要有 term（术语）和 about（一句白话解释）"), checks)
-        self.assertIn(("docs/odd.md", "kind「随笔」不认识（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要）"), checks)
+        self.assertIn(("docs/odd.md", "kind「随笔」不认识（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要 / 简报）"), checks)
         self.assertIn(("docs/odd.md", "about 「z:1」不是 v: / t: / a: / m: / k: / d: 加 id 的写法"), checks)
-        self.assertIn(("docs/hparams.md", "没有 kind（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要）"), checks)
+        self.assertIn(("docs/hparams.md", "没有 kind（方案 / 观察 / 复盘 / 报告 / 说明 / 纪要 / 简报）"), checks)
         self.assertFalse([c for c in checks if c[0] == "NOTES.md"])           # root notes need no front matter
 
 
@@ -487,6 +487,38 @@ class DataSamples(FixtureCase):
             ("examples/data/orphan.jsonl", "1 行不是 JSON（jsonl 一行一条完整的 JSON）"),
             ("examples/data/测试集.csv", "「测试集」已经有一个样例文件（examples/data/测试集.jsonl），这个不显示"),
             ("examples/data/x.parquet", "样例只认 .jsonl / .csv / .tsv / .txt，原样存成这几种之一")})   # 子集 and 冒烟{n} are fine
+
+
+class EntryRecords(FixtureCase):
+    """What the project's front page needs from the records: attempt titles, the method step each tests, briefs."""
+
+    def checks_of(self, prefix):
+        return {(c["where"], c["what"]) for c in self.demo()["checks"] if c["where"].startswith(prefix)}
+
+    def test_attempt_title_and_method(self):
+        board = os.path.join(self.root, "demo", "board", "attempts")
+        with open(os.path.join(board, "2026-11-21-x.md"), "w", encoding="utf-8") as f:
+            f.write("---\nid: 2026-11-21-x\ntitle: 一个写得太长太长太长太长太长太长太长的标题\ntrack: t-lr\nstatus: 计划中\nmethod: [warmup, nope]\n---\n## 例子\nx\n")
+        got = self.checks_of("attempts/")
+        self.assertNotIn("attempts/2026-11-10-lr-sweep.md", {w for w, _ in got if "title" in _ or "method" in _})   # has both
+        self.assertIn(("attempts/2026-11-15-focal.md", "没有 title：写一个人一看就懂的中文短名（不超过 20 字），控制台用它代替 id"), got)
+        self.assertIn(("attempts/2026-11-15-focal.md", "没写 method：这次尝试检验或改的是方法里的哪一步（写 method/ 的步骤 id）"), got)
+        self.assertIn(("attempts/2026-11-21-x.md", "title 太长（21 字）：不超过 20 字"), got)
+        self.assertIn(("attempts/2026-11-21-x.md", "method 里的「nope」不是 method/ 里的步骤"), got)
+        self.assertNotIn(("attempts/2026-11-21-x.md", "method 里的「warmup」不是 method/ 里的步骤"), got)
+        self.assertFalse([w for w, what in got if w == "attempts/2026-11-18-no-frontmatter.md" and ("title" in what or "method" in what)])
+
+    def test_brief(self):
+        docs = os.path.join(self.root, "demo", "board", "docs")
+        good = "---\ntitle: 简报\nkind: 简报\ndate: 2026-11-21\n---\n## 现在到哪了\na\n## 新做了什么\nb\n## 先看这几个\nc\n## 等你决定的\nd\n"
+        with open(os.path.join(docs, "2026-11-21-brief.md"), "w", encoding="utf-8") as f:
+            f.write(good)
+        with open(os.path.join(docs, "2026-11-22-brief.md"), "w", encoding="utf-8") as f:
+            f.write("---\nkind: 简报\n---\n## 现在到哪了\n" + "字" * 1600 + "\n## 新做了什么\nb\n")
+        got = self.checks_of("docs/2026-11-2")
+        self.assertFalse([c for c in got if c[0] == "docs/2026-11-21-brief.md"])                # 简报 is a known kind
+        self.assertEqual({what for w, what in got if w == "docs/2026-11-22-brief.md"},
+                         {"简报缺「先看这几个」一节", "简报缺「等你决定的」一节", "简报有 1615 字，超过 1500 字：只写要紧的，细节放进实验和文档"})
 
 
 class SafeFile(FixtureCase):

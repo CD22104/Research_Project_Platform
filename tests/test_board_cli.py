@@ -84,6 +84,9 @@ class Brief(Base):
             self.assertNotIn(absent, sec)
         self.assertIn("board/papers.jsonl", self.section(text, "提醒"))   # sessions are told to keep the list
         self.assertIn("board/examples/data/<数据集 id>.jsonl", self.section(text, "提醒"))   # and to add dataset samples
+        self.assertIn("kind: 简报", self.section(text, "提醒"))                                # and to write briefs
+        self.assertIn("title", self.section(text, "提醒"))
+        self.assertIn("method", self.section(text, "提醒"))
         short = T.brief(self.proj, max_chars=len(text) - 40)           # the papers are the first list to be shortened
         self.assertNotIn("用户读过：", self.section(short, "论文"))
         self.assertIn("预热有用，并入主线。", self.section(short, "最近的结论"))

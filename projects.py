@@ -269,7 +269,10 @@ TASK_STATUS = ("待开始", "进行中", "等运行", "等你", "可以继续", 
 TASK_OPEN = ("待开始", "进行中", "等运行", "等你", "可以继续")
 DECISION_STATUS = ("候选", "采纳", "不采纳", "已替代")
 DECISION_CHOICES = ("采纳", "不采纳")  # what the user can answer a 候选 decision with
-DOC_KINDS = ("方案", "观察", "复盘", "报告", "说明", "纪要")
+DOC_KINDS = ("方案", "观察", "复盘", "报告", "说明", "纪要", "简报")
+BRIEF_SECTIONS = ("现在到哪了", "新做了什么", "先看这几个", "等你决定的")  # a brief (kind 简报): what the user reads first
+BRIEF_MAX = 1500        # characters of a brief, whitespace not counted (about one screen)
+TITLE_MAX = 20          # characters of an attempt's title
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg")
 TEXT = "text/plain; charset=utf-8"  # raw records are shown as text, never rendered
 FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -820,6 +823,7 @@ def check_project(d, limit=200):
 
     run_ids = {str(r["run"].get("id") or r["id"]) for r in d["runs"]}
     att_ids, track_ids, ver_ids = _ids(d["attempts"]), _ids(d["tracks"]), _ids(d["versions"])
+    method_ids = _ids(d.get("method") or [])
     merged = set()
     for v in d["versions"]:
         for t in _list(v["meta"].get("merged_tracks")):
@@ -846,6 +850,17 @@ def check_project(d, limit=200):
             add(a["file"], "没有「例子」小节")
         for msg in onepager_problems(m, a.get("onepager") or {}, "一页纸" in (a.get("sections") or {})):
             add(a["file"], msg)
+        title = m.get("title")
+        if not (isinstance(title, str) and title.strip()):
+            add(a["file"], "没有 title：写一个人一看就懂的中文短名（不超过 %d 字），控制台用它代替 id" % TITLE_MAX)
+        elif len(title.strip()) > TITLE_MAX:
+            add(a["file"], "title 太长（%d 字）：不超过 %d 字" % (len(title.strip()), TITLE_MAX))
+        steps = _list(m.get("method")) if m.get("method") is not None else None
+        if steps is None and method_ids:
+            add(a["file"], "没写 method：这次尝试检验或改的是方法里的哪一步（写 method/ 的步骤 id）")
+        for x in steps or []:
+            if x not in method_ids:
+                add(a["file"], "method 里的「%s」不是 method/ 里的步骤" % x)
     for r in d["runs"]:
         at = r["run"].get("attempt")
         if at and at not in att_ids:
@@ -973,6 +988,14 @@ def check_project(d, limit=200):
         if not doc["file"].startswith("docs/"):
             continue
         m = doc.get("meta") or {}
+        if m.get("kind") == "简报":
+            have = split_sections(doc.get("body") or "")
+            for sec in BRIEF_SECTIONS:
+                if sec not in have:
+                    add(doc["file"], "简报缺「%s」一节" % sec)
+            n = len(re.sub(r"\s", "", doc.get("body") or ""))
+            if n > BRIEF_MAX:
+                add(doc["file"], "简报有 %d 字，超过 %d 字：只写要紧的，细节放进实验和文档" % (n, BRIEF_MAX))
         if not m.get("kind"):
             add(doc["file"], "没有 kind（%s）" % " / ".join(DOC_KINDS))
         elif m["kind"] not in DOC_KINDS:

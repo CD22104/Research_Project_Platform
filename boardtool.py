@@ -346,7 +346,8 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
     for a in sorted(d.get("attempts") or [], key=lambda a: str(a["meta"].get("date") or ""), reverse=True):
         so = ((a.get("onepager") or {}).get("所以") or {}).get("text") or _first_line((a.get("sections") or {}).get("结论和原因"))
         if so:
-            recent.append("- [%s] %s：%s" % (a["meta"].get("id"), a["meta"].get("status") or "", so))
+            t = a["meta"].get("title")
+            recent.append("- [%s]%s %s：%s" % (a["meta"].get("id"), " " + t if isinstance(t, str) and t else "", a["meta"].get("status") or "", so))
         if len(recent) >= 3:
             break
     sections.append(("最近的结论", recent or ["（还没有）"]))
@@ -359,6 +360,9 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
         "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (" --session " + sid if sid else ""),
         "- 讨论或更新方案时，把用到的、建议用户读的论文记进 board/papers.jsonl，写明为什么读（why）；"
         "亲自打开链接、核对过标题才写 checked。用户在控制台勾「读过」。",
+        "- 实验（attempts）字段区写 title（中文短名，不超过 20 字）和 method（检验或改的是方法里的哪一步）；用户确认的结论改变了某一步的做法时，同步改 method/ 里那一步。",
+        "- 一批工作告一段落时（夜间调度停下、几张任务卡做完、用户离开超过半天回来前），写一篇简报：docs/<日期>-brief.md，kind: 简报，"
+        "四节：现在到哪了 / 新做了什么 / 先看这几个 / 等你决定的，不超过 1500 字；用 {{a:<实验 id>}} 指向实验。控制台把最新一篇放在项目首页最上面。",
         "- setup.json 里新加数据集时，抽 10 条原样放进 board/examples/data/<数据集 id>.jsonl（有类别的每类都抽到），"
         "用户在控制台的实验设置页直接看数据长什么样。",
         "- 改 board/ 里的文件后，记录检查有问题会当场提示，照提示改掉。"]))
