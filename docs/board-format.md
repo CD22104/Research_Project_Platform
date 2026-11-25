@@ -182,6 +182,7 @@ attempts 的 `status`：
 - `terms`（可选）：`[{"term": "配方", "about": "一整套训练设置：模型、学习率、数据增强、训练轮数等"}]`。项目里会反复出现、用户可能不熟的说法，每个一句白话（不超过 120 字）。控制台在正文里给这些词加下划线，鼠标放上去显示解释。
 - `models[].version` 写到能复现的程度，例如仓库名加 revision。
 - `methods[].track`（可选）把方法和支线连起来；`methods[].runs`（可选）列出属于这个方法或对照组的运行编号，控制台在表格和图里用方法名代替运行编号。方法名用论文里会写的说法，12 个字以内。
+- `datasets[].samples_note`（可选）：样例从哪个划分、怎么抽的，一句话；`datasets[].samples_from`（可选）：用另一个数据集的样例。样例文件见下文 `examples/`。
 - 除了 `id` 和 `name`，其他字段都可以不写。`about` 一两句，不写长段落，不贴原始字典。
 - 研究问题本身写在 `project.json` 的 `question` 里。
 
@@ -222,6 +223,13 @@ with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
 
 - `walkthrough.md`：「一个例子」，一条样例从头走到底。开头放精简版，之后用一行 `---` 和一级标题「完整原文」隔开放完整原文；控制台默认只显示精简版。
 - `probe.jsonl`：固定的观察样例，每行一个 JSON。
+- `data/<数据集 id>.<扩展名>`：**数据集样例**，让用户一眼看到数据长什么样。`setup.json` 里的每个数据集都要有（编号族 `xxx{n}` 除外）：
+  - 从这个数据集抽 10 条，**原样**复制，不改写、不重新排版：原始数据是 jsonl 就一行一条；是表格就存 `.csv` / `.tsv`（第一行表头）；是纯文本就存 `.txt`。原始是 parquet 等二进制格式的，转成 jsonl，字段原样保留。
+  - 固定种子随机抽；有标签或类别的，每类都抽到（例如 allow、block 各 5 条）。在 `setup.json` 这个数据集里写 `samples_note`，一句话说从哪个划分、怎么抽的。
+  - 文件名就是数据集 id（`examples/data/authz_dev.jsonl`）；最多 10 条、不超过 1 MB。
+  - 某个数据集是另一个的子集、样例一样时，不用再存一份：在 `setup.json` 里写 `"samples_from": "<另一个数据集 id>"`。
+  - 控制台在「实验设置」页每个数据集下面、「样例」页的「数据长什么样」、运行页测试集说明的「看样例 →」显示，一律当文字显示。
+  - 新加数据集时同时抽好样例；数据集重建或换了版本，重抽。
 
 ## flow.json（可选）
 
@@ -527,6 +535,7 @@ replaces: [options-v0]
 - 图解开头 8 KB 里没有 `<title>`；`about` 指向不存在的记录；文件超过 10 MB；`figures/` 里的链接指向别处。
 - 论文缺 `title`、`url` 或 `why`；`url` 不是 http(s)；`id` 用了字母、数字和 `. _ -` 以外的字符；`priority` 不认识；`about` 指向不存在的记录。没写 `checked` 不算问题，只在控制台标「未核实」。
 - `setup.json` 的 `terms` 缺解释或解释太长。
+- 数据集没有样例（也没写 `samples_from`），`samples_from` 指向不存在或自己也没有样例的数据集；`examples/data/` 里的文件对不上任何数据集、超过 10 条或 1 MB、jsonl 有不是 JSON 的行、格式不是 jsonl / csv / tsv / txt、同一个数据集有两个文件。
 - `display.headline` 指向的分组和指标在运行记录里找不到。
 - 读不了的文件（JSON 写坏、待办行缺 `id` 或 `text`、论文行缺 `id` 等）。
 
