@@ -1,6 +1,7 @@
 """Parser tests for projects.py (record format v0). Run: python3 -m unittest -v"""
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -157,6 +158,38 @@ class Papers(unittest.TestCase):
             {"file": "docs/b.md", "mark": "确认", "at": "t6", "mtime": 2.0}])
         self.assertEqual(set(P.read_marks(path)), {"docs/a.md", "docs/b.md"})
         self.assertEqual(P.read_paper_marks(path), {"a": {"paper": "a", "mark": "读过", "at": "t2"}})
+
+
+class DataSamples(unittest.TestCase):
+    """board/examples/data/<dataset id>.<ext>: about 10 records of a dataset, kept as they are."""
+
+    def write(self, name, data):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, name)
+        with open(path, "wb") as f:
+            f.write(data.encode("utf-8") if isinstance(data, str) else data)
+        return path
+
+    def test_jsonl_lines_are_kept_verbatim(self):
+        r = P.read_data_samples(self.write("x.jsonl", '{"a": 1,  "b": "x"}\n\n{"a": 2}\r\nnot json\n'))
+        self.assertEqual(r, {"kind": "jsonl", "records": ['{"a": 1,  "b": "x"}', '{"a": 2}', "not json"], "text": None,
+                             "count": 3, "bad": 1, "truncated": False})
+
+    def test_csv_counts_rows_with_quoted_newlines(self):
+        text = 'id,text\n1,"two\nlines"\n2,x\n'
+        r = P.read_data_samples(self.write("x.csv", text))
+        self.assertEqual((r["kind"], r["text"], r["count"], r["records"]), ("csv", text, 2, []))
+        self.assertEqual(P.read_data_samples(self.write("x.tsv", "a\tb\n1\t2\n"))["count"], 1)
+
+    def test_txt_is_one_block(self):
+        r = P.read_data_samples(self.write("x.txt", "第一段\n\n第二段"))
+        self.assertEqual((r["kind"], r["text"], r["count"]), ("txt", "第一段\n\n第二段", None))
+
+    def test_over_the_limit_keeps_the_start(self):
+        r = P.read_data_samples(self.write("x.jsonl", ('{"x": "' + "y" * 1000 + '"}\n') * 1100))
+        self.assertTrue(r["truncated"])
+        self.assertLessEqual(sum(len(x) for x in r["records"]), P.MAX_SAMPLE_BYTES)
 
 
 if __name__ == "__main__":

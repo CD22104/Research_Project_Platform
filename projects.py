@@ -4,7 +4,9 @@ Read-only. Understands record format v0 (see a project's board/FORMAT.md) and is
 deliberately lenient: missing fields, extra fields and missing files must never
 raise; callers get empty values instead.
 """
+import csv
 import html.parser
+import io
 import json
 import os
 import re
@@ -525,6 +527,37 @@ def read_paper_marks(path, limit=20000):
     return out
 
 
+# ---------------------------------------------------------------- dataset samples (examples/data/<dataset id>.<ext>)
+DATA_SAMPLE_EXTS = (".jsonl", ".csv", ".tsv", ".txt")
+MAX_SAMPLE_RECORDS, MAX_SAMPLE_BYTES = 10, 1024 * 1024
+
+
+def read_data_samples(path):
+    """A dataset's sample file, kept as it is so the user sees the data's own format.
+    jsonl: one record per non-empty line, verbatim (bad = lines that are not JSON); csv / tsv / txt: the whole
+    text (count = data rows under the header for csv / tsv). truncated: the file is over MAX_SAMPLE_BYTES."""
+    kind = os.path.splitext(path)[1].lower().lstrip(".")
+    text, cut = read_text(path, MAX_SAMPLE_BYTES)
+    out = {"kind": kind, "records": [], "text": None, "count": None, "bad": 0, "truncated": cut}
+    if kind == "jsonl":
+        for line in text.split("\n"):
+            line = line.rstrip("\r")
+            if not line.strip():
+                continue
+            out["records"].append(line)
+            try:
+                json.loads(line)
+            except ValueError:
+                out["bad"] += 1
+        out["count"] = len(out["records"])
+    else:
+        out["text"] = text
+        if kind in ("csv", "tsv"):
+            rows = [r for r in csv.reader(io.StringIO(text), delimiter="," if kind == "csv" else "\t") if any(c.strip() for c in r)]
+            out["count"] = max(0, len(rows) - 1)  # the first row is the header
+    return out
+
+
 def paper_counts(data):
     """{"n": papers on the list, "read": ticked 读过, "must_unread": 必读 not yet ticked}."""
     papers, marks = data.get("papers") or [], data.get("paper_marks") or {}
@@ -623,6 +656,24 @@ def scan_project(board, memo=None, new_memo=None):
             bump("runs", run["mtime"])
         runs.append(run)
 
+    # dataset samples: examples/data/<dataset id>.<ext>, one level; one file per dataset
+    data_samples, skipped = {}, []
+    rank = lambda fn: (os.path.splitext(fn)[0], (DATA_SAMPLE_EXTS + (os.path.splitext(fn)[1].lower(),)).index(os.path.splitext(fn)[1].lower()))
+    for fn in sorted(b.listdir("examples/data"), key=rank):  # a dataset with two files keeps the .jsonl one
+        rel = "examples/data/" + fn
+        st = b.stat(rel) if not fn.startswith(".") else None
+        if not st:
+            continue
+        stem, ext = os.path.splitext(fn)
+        if ext.lower() not in DATA_SAMPLE_EXTS:
+            skipped.append({"file": rel, "why": "ext"})
+            continue
+        bump("examples", st.st_mtime)
+        if stem in data_samples:
+            skipped.append({"file": rel, "why": "dup", "kept": data_samples[stem]["file"]})
+            continue
+        data_samples[stem] = dict(b.cached(rel, st, read_data_samples, {}) or {}, file=rel, mtime=st.st_mtime, size=st.st_size)
+
     example = {"walkthrough": None, "probe_head": []}
     st = b.stat("examples/walkthrough.md")
     if st:
@@ -693,7 +744,8 @@ def scan_project(board, memo=None, new_memo=None):
 
     out = {"project": project, "plan": plan, "runs": runs, "example": example, "setup": setup, "flow": flow,
            "todos": todos["items"], "answers": answers, "marks": marks, "docs": docs, "figures": figures,
-           "papers": papers["items"], "paper_marks": paper_marks, "updated": updated, "errors": b.errors}
+           "papers": papers["items"], "paper_marks": paper_marks, "data_samples": data_samples, "data_samples_skipped": skipped,
+           "updated": updated, "errors": b.errors}
     out.update(records)
     try:
         out["checks"] = check_project(out)
@@ -966,6 +1018,38 @@ def check_project(d, limit=200):
             if q:
                 add(where, "about " + q)
 
+    # every dataset in setup.json has samples of its own, or names another dataset's (samples_from)
+    datasets = [x for x in _list((d.get("setup") or {}).get("datasets")) if isinstance(x, dict) and isinstance(x.get("id"), str)]
+    ds_ids, samples = {x["id"] for x in datasets}, d.get("data_samples") or {}
+    for x in datasets:
+        i, src = x["id"], x.get("samples_from")
+        if "{n}" in i:
+            continue  # a family of numbered sets (smoke{n}) is not one dataset
+        where = "setup.json · " + i
+        if src is not None:
+            if not isinstance(src, str) or src not in ds_ids:
+                add(where, "samples_from「%s」不是 setup.json 里的数据集" % src)
+            elif src not in samples:
+                add(where, "samples_from 指向的「%s」自己还没有样例" % src)
+        elif i not in samples:
+            add(where, "还没有样例：从这个数据集抽 %d 条原样放进 board/examples/data/%s.jsonl（有类别的每类都抽到；格式见 BOARD_FORMAT.md）"
+                % (MAX_SAMPLE_RECORDS, i))
+    for i, s in samples.items():
+        f = s.get("file")
+        if d.get("setup") is not None and i not in ds_ids:
+            add(f, "文件名对不上 setup.json 里的任何数据集（文件名要和数据集 id 一样）")
+        if (s.get("size") or 0) > MAX_SAMPLE_BYTES:
+            add(f, "文件有 %.1f MB，超过 1 MB：样例只要 %d 条" % (s["size"] / 1024 / 1024, MAX_SAMPLE_RECORDS))
+        if (s.get("count") or 0) > MAX_SAMPLE_RECORDS:
+            add(f, "有 %d 条，样例最多 %d 条" % (s["count"], MAX_SAMPLE_RECORDS))
+        if s.get("count") == 0:
+            add(f, "是空的")
+        if s.get("bad"):
+            add(f, "%d 行不是 JSON（jsonl 一行一条完整的 JSON）" % s["bad"])
+    for x in d.get("data_samples_skipped") or []:
+        add(x["file"], "样例只认 .jsonl / .csv / .tsv / .txt，原样存成这几种之一" if x["why"] == "ext"
+            else "「%s」已经有一个样例文件（%s），这个不显示" % (os.path.splitext(os.path.basename(x["file"]))[0], x.get("kept")))
+
     h = ((d.get("project") or {}).get("display") or {}).get("headline")
     if isinstance(h, dict) and h.get("group") and h.get("metric"):
         seen = any(isinstance((r["run"].get("metrics") or {}).get(h["group"]), dict)
@@ -1007,7 +1091,7 @@ def empty_project(name):
     return {"name": name, "project": {}, "plan": None, "versions": [], "tracks": [], "attempts": [], "method": [],
             "tasks": [], "decisions": [], "runs": [], "example": {"walkthrough": None, "probe_head": []}, "setup": None, "flow": None,
             "todos": [], "answers": {}, "marks": {}, "docs": [], "figures": [], "papers": [], "paper_marks": {},
-            "checks": [], "updated": {}, "errors": [], "scanned_at": None}
+            "data_samples": {}, "data_samples_skipped": [], "checks": [], "updated": {}, "errors": [], "scanned_at": None}
 
 
 def with_answers(todos, answers):

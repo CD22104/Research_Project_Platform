@@ -452,6 +452,43 @@ class Papers(FixtureCase):
         self.assertEqual(P.papers_read_elsewhere(P.scan_root(self.root), "demo"), {})
 
 
+class DataSamples(FixtureCase):
+    """Each dataset in setup.json has about 10 raw records in board/examples/data/, or names another's (samples_from)."""
+
+    def test_scanned(self):
+        d = self.demo()
+        s = d["data_samples"]["测试集"]
+        self.assertEqual((s["file"], s["kind"], s["count"], s["bad"]), ("examples/data/测试集.jsonl", "jsonl", 10, 0))
+        self.assertIn("<script>", s["records"][3])                             # kept as it is; the page escapes it
+        self.assertFalse([c for c in d["checks"] if "样例" in c["what"] or c["where"].startswith("examples/data")])
+        self.assertEqual(P.empty_project("x")["data_samples"], {})
+
+    def test_checks(self):
+        board = os.path.join(self.root, "demo", "board")
+        with open(os.path.join(board, "setup.json"), encoding="utf-8") as f:
+            setup = json.load(f)
+        setup["datasets"] += [{"id": "新集"}, {"id": "子集", "samples_from": "测试集"}, {"id": "坏子集", "samples_from": "nope"},
+                              {"id": "空子集", "samples_from": "新集"}, {"id": "冒烟{n}"}]
+        with open(os.path.join(board, "setup.json"), "w", encoding="utf-8") as f:
+            json.dump(setup, f, ensure_ascii=False)
+        data = os.path.join(board, "examples", "data")
+        with open(os.path.join(data, "orphan.jsonl"), "w") as f:
+            f.write('{"a": 1}\n' * 10 + "not json\n")                            # 11 records, one is not JSON
+        for name in ("测试集.csv", "x.parquet"):
+            with open(os.path.join(data, name), "w") as f:
+                f.write("a\n1\n")
+        got = {(c["where"], c["what"]) for c in self.demo()["checks"] if "样例" in c["what"] or c["where"].startswith(("examples/data", "setup.json ·"))}
+        self.assertEqual(got, {
+            ("setup.json · 新集", "还没有样例：从这个数据集抽 10 条原样放进 board/examples/data/新集.jsonl（有类别的每类都抽到；格式见 BOARD_FORMAT.md）"),
+            ("setup.json · 坏子集", "samples_from「nope」不是 setup.json 里的数据集"),
+            ("setup.json · 空子集", "samples_from 指向的「新集」自己还没有样例"),
+            ("examples/data/orphan.jsonl", "文件名对不上 setup.json 里的任何数据集（文件名要和数据集 id 一样）"),
+            ("examples/data/orphan.jsonl", "有 11 条，样例最多 10 条"),
+            ("examples/data/orphan.jsonl", "1 行不是 JSON（jsonl 一行一条完整的 JSON）"),
+            ("examples/data/测试集.csv", "「测试集」已经有一个样例文件（examples/data/测试集.jsonl），这个不显示"),
+            ("examples/data/x.parquet", "样例只认 .jsonl / .csv / .tsv / .txt，原样存成这几种之一")})   # 子集 and 冒烟{n} are fine
+
+
 class SafeFile(FixtureCase):
     def test_allowed(self):
         p = P.safe_board_file(self.root, "demo", "runs/r001/curve.svg")
