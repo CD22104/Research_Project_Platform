@@ -90,7 +90,7 @@ ROUTES = {
     "legacy_exp": "#/p/demo/experiments/2026-11-15-focal", "legacy_track": "#/p/demo/experiments?track=t-lr",
     "p_runs": "#/p/demo/runs", "p_run": "#/p/demo/runs/r001", "p_runs_data": "#/p/demo/runs?view=data",
     "p_examples": "#/p/demo/examples", "p_docs": "#/p/demo/docs", "p_doc_notes": "#/p/demo/docs/NOTES.md",
-    "p_doc_review": "#/p/demo/docs/focal-review.md", "p_doc_fig": "#/p/demo/docs/lr-warmup.html", "p_doc_untitled": "#/p/demo/docs/untitled.html", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
+    "p_doc_review": "#/p/demo/docs/focal-review.md", "p_doc_brief": "#/p/demo/docs/2026-11-21-brief.md", "p_doc_fig": "#/p/demo/docs/lr-warmup.html", "p_doc_untitled": "#/p/demo/docs/untitled.html", "p_method": "#/p/demo/method", "p_method_warmup": "#/p/demo/method/warmup",
     "p_method_ramp": "#/p/demo/method/warmup-ramp",
     "p_home": "#/p/demo/home", "p_tasks": "#/p/demo/tasks", "p_task": "#/p/demo/tasks/f1-metric", "p_decisions": "#/p/demo/decisions",
     "p_decision": "#/p/demo/decisions/scale-later", "p_minutes": "#/p/demo/decisions/doc:2026-11-20-discussion.md",
@@ -249,7 +249,7 @@ class Pages(unittest.TestCase):
         for k, (dom, errors) in self.pages.items():
             with self.subTest(route=k):
                 self.assertEqual(errors, [])
-                self.assertEqual(len(re.findall(r"<script\b", dom)), 4)  # common.js + work.js + design.js + app.js only
+                self.assertEqual(len(re.findall(r"<script\b", dom)), 5)  # common.js + work.js + design.js + home.js + app.js only
 
     def test_sidebar_and_titles(self):
         d = self.pages["p_overview"][0]
@@ -394,7 +394,7 @@ class Pages(unittest.TestCase):
         self.assertIn(">数据 1</a>", d)
         run = self.m("p_run")
         self.assertIn('class="md2 wide"', run)
-        self.assertIn('学习率调度</a> <span class="small">›</span> <a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">lr-sweep</a>', run)
+        self.assertIn('学习率调度</a> <span class="small">›</span> <a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">加 500 步预热</a>', run)
         self.assertRegex(run, r'<table class="kv">.*<th>warmup</th><td class="num">500</td>')
         self.assertNotIn('{"lr"', run)
         self.assertIn("<b>r005</b>", self.m("p_runs_data"))
@@ -412,7 +412,7 @@ class Pages(unittest.TestCase):
         self.assertEqual(re.findall(r'<a class="mstep[^"]*" href="#/p/demo/method/(warmup-[\w]+)"', w), ["warmup-ramp", "warmup-hold"])
         self.assertIn("「训练」的一种做法", w)
         self.assertIn("↺ 第 1–2 步（「升温」到「恒定」）循环，每个 epoch", w)            # a loop back on the same level
-        self.assertIn('href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">lr-sweep</a>', w)    # experiments on this step
+        self.assertIn('href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">加 500 步预热</a>', w)    # experiments on this step
         self.assertIn('href="#/p/demo/setup/method%3Awarmup"', w)                         # its setup.json method
         self.assertIn('<a class="ref" href="#/p/demo/runs/r001"', w)                       # numbers come from the run
         ramp = self.m("p_method_ramp")
@@ -429,13 +429,13 @@ class Pages(unittest.TestCase):
         self.assertIn("观察样例", ex)
         docs = self.m("p_docs")
         groups = re.findall(r'<div class="tgroup">(.*?)</div>', docs)               # grouped by where they belong in the flow
-        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "学习率调度 › 尝试 · lr-sweep",
+        self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups], ["整个项目", "支线 · 学习率调度", "学习率调度 › 尝试 · 加 500 步预热",
                                                                        "版本 v2 · 加入学习率预热", "损失函数 › 尝试 · focal", "找不到的位置：a:ghost"])
         self.assertIn('<a class="li old" href="#/p/demo/docs/lr-plan-v0.md', docs)      # replaced documents are greyed
         self.assertIn("已被「学习率方案」取代", docs)
         self.assertIn('<span class="pill t-other">未看</span>', docs)
         self.assertIn('data-mark="确认"', docs)
-        self.assertIn('>未看 10</a>', docs)                                                # filter chips (8 documents, 2 figures)
+        self.assertIn('>未看 11</a>', docs)                                                # filter chips (9 documents, 2 figures)
         review = self.m("p_doc_review")
         self.assertRegex(review, r'属于：<a href="#/p/demo/flow/a%3A2026-11-15-focal">[^<]*尝试 · focal</a>')
         self.assertIn('<a class="ref" href="#/p/demo/runs/r002"', review)                 # {{run:...}} shows the run's number
@@ -443,6 +443,15 @@ class Pages(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
+
+    def test_record_references(self):
+        b = self.m("p_doc_brief")
+        self.assertIn('<a class="ref rec" href="#/p/demo/flow/a%3A2026-11-10-lr-sweep" title="实验：2026-11-10-lr-sweep">加 500 步预热</a>', b)   # the title
+        self.assertRegex(b, r'<a class="ref rec" href="#/p/demo/method/warmup" title="方法的步骤：warmup">[^<?]+</a>')
+        self.assertIn('href="#/p/demo/tasks/f1-metric" title="任务：f1-metric">加 F1 指标并重算旧结果</a>', b)
+        self.assertIn('href="#/p/demo/decisions/scale-later" title="决定：scale-later">', b)
+        self.assertIn('<span class="ref bad" title="找不到实验「nope」">nope?</span>', b)
+        self.assertNotIn("{{a:", b)
 
     def test_dataset_samples(self):
         st = self.m("p_setup")
@@ -460,7 +469,7 @@ class Pages(unittest.TestCase):
     def test_figures(self):
         fig = self.m("p_doc_fig")
         self.assertIn('<h2>预热 &amp; 不预热：开头 1000 步的训练损失 <span class="tag2">图解</span>', fig)   # <title>, entities decoded once
-        self.assertRegex(fig, r'属于：<a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">[^<]*尝试 · lr-sweep</a>')   # <meta name="about">
+        self.assertRegex(fig, r'属于：<a href="#/p/demo/flow/a%3A2026-11-10-lr-sweep">[^<]*尝试 · 加 500 步预热</a>')   # <meta name="about">
         self.assertIn('<p class="figq">回答：加 500 步预热，训练开头的损失尖峰还在不在？</p>', fig)              # <meta name="question">
         frames = re.findall(r"<iframe\b[^>]*>", fig)
         self.assertEqual(len(frames), 1)
@@ -479,7 +488,7 @@ class Pages(unittest.TestCase):
         groups = re.findall(r'<div class="tgroup">(.*?)</div>', m)
         self.assertEqual(groups[0], "整个项目")                                         # then the flow's order, task cards last
         self.assertEqual([re.sub(r"<[^>]+>", "", g) for g in groups[1:]],
-                         ["支线 · 学习率调度", "学习率调度 › 尝试 · lr-sweep", "数据增强 C# 实验 › 尝试 · aug-mixup", "支线 · 损失函数",
+                         ["支线 · 学习率调度", "学习率调度 › 尝试 · 加 500 步预热", "数据增强 C# 实验 › 尝试 · aug-mixup", "支线 · 损失函数",
                           "任务 · 加 F1 指标并重算旧结果"])
         self.assertIn('<a href="#/p/demo/tasks/f1-metric">任务 · 加 F1 指标并重算旧结果</a>', groups[-1])
         self.assertEqual(re.findall(r'<li class="paper[^"]*" data-anchor="([^"]+)"', m),
@@ -631,6 +640,12 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   document.querySelector('[data-sindent="测试集"][data-v=""]').click(); await wait(200);
   out.samples_raw = document.querySelectorAll('#samples-测试集 pre.sample')[0].textContent;
   out.samples_still_open = document.getElementById('samples-测试集').open;
+  const fakeM = {method: [{meta: {id: 's1'}, mtime: 100}, {meta: {id: 's2'}, mtime: 100}],
+    attempts: [{meta: {id: 'a1', method: ['s1'], status: '成功'}, mtime: 200}, {meta: {id: 'a2', method: ['s2'], status: '待确认'}, mtime: 300},
+               {meta: {id: 'a3', method: 's2', status: '失败'}, mtime: 50}]};
+  const ms = methodStale(fakeM);   // only a concluded attempt edited after the step counts
+  out.stale = [[...ms.keys()], ms.get('s1').map(a => a.meta.id)];
+  out.titles = [attTitle({meta: {id: '2026-11-10-x', title: ' 标题 '}}), attTitle({meta: {id: '2026-11-10-x'}, file: 'attempts/2026-11-10-x.md'})];
   const sess = document.createElement('div');   // a big context matters only while the session is open
   sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
                                 {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
@@ -650,7 +665,7 @@ class Interactions(unittest.TestCase):
         try:
             repo = os.path.join(tmp, "repo")
             os.mkdir(repo)
-            for f in ["server.py", "projects.py", "sessions.py", "index.html", "project.html", "common.js", "work.js", "app.js"]:
+            for f in ["server.py", "projects.py", "sessions.py", "index.html", "project.html", "common.js", "work.js", "design.js", "home.js", "app.js"]:
                 shutil.copy(os.path.join(REPO, f), repo)
             page = os.path.join(repo, "index.html")
             with open(page, encoding="utf-8") as f:
@@ -682,6 +697,8 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["samples_unfold"], 57)
         self.assertEqual(out["samples_raw"], '{"id": 3, "text": "loss 曲线在第 120 步出现尖峰后恢复", "label": 1}')   # back to the line as stored
         self.assertTrue(out["samples_still_open"])
+        self.assertEqual(out["stale"], [["s1"], ["a1"]])
+        self.assertEqual(out["titles"], ["标题", "x"])
         self.assertEqual(out["ticked"], [True, "paper read", "读过"])          # a tick is saved and shown at once
         self.assertEqual(out["unticked"], [False, False])                        # and can be taken back
         self.assertEqual(out["paper_links"], [["https://x.org/away", "_blank", "noopener noreferrer"],   # no javascript: or broken-out url

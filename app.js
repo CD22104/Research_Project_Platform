@@ -57,7 +57,7 @@ else if (location.hash === '#gpu') history.replaceState(null, '', '#/gpu');
 
 // ============================================================ helpers
 const attKey = a => String(a.meta.id || a.file.split('/').pop().replace(/\.md$/, ''));
-const attName = a => attKey(a).replace(/^\d{4}-\d{2}-\d{2}-/, '');
+const attName = a => attTitle(a);   // the title; else the id without its date (home.js)
 const attDate = a => B.day(a.meta.date) || (attKey(a).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0];
 const runKey = r => String((r.run || {}).id || r.id);
 const idOf = x => typeof x.meta.id === 'string' ? x.meta.id : x.file;
@@ -852,8 +852,26 @@ function refValue(d, spec) {
   const v = !m ? undefined : group ? (m[group] || {})[metric] : m[metric];
   return {r, v, id, group, metric};
 }
+// {{a:<attempt>}}, {{t:<track>}}, {{v:<version>}}, {{m:<method step>}}, {{k:<task>}}, {{d:<decision>}} in a record's text:
+// a link showing the record's name
+const REF_KIND = {a: '实验', t: '支线', v: '版本', m: '方法的步骤', k: '任务', d: '决定'};
+function refName(d, key) {
+  const c = ctx(d), k = key[0], id = key.slice(2);
+  if (k === 'a') { const a = c.attById.get(id); return a ? attName(a) : null; }
+  if (k === 't') { const t = c.trackById.get(id); return t ? t.meta.title || id : null; }
+  if (k === 'v') { const v = c.verById.get(id); return v ? id + (v.meta.title ? ' · ' + v.meta.title : '') : null; }
+  if (k === 'm') { const M = methodIndex(d), x = M.byId.get(id); return x ? M.title(x) : null; }
+  if (k === 'k') { const t = work(d).task(id); return t ? taskTitle(t) : null; }
+  const x = work(d).decision(id);
+  return x ? x.meta.title || id : null;
+}
 function refs(html, d) {
-  return String(html).replace(/\{\{run:([^}\s]+)\}\}/g, (all, spec) => {
+  html = String(html).replace(/\{\{([atvmkd]):([^}\s]+)\}\}/g, (all, k, id) => {
+    const key = k + ':' + id.replace(/&amp;/g, '&'), name = refName(d, key);
+    return name ? `<a class="ref rec" href="${refHref(d, key)}" title="${REF_KIND[k]}：${esc(key.slice(2))}">${esc(name)}</a>`
+      : `<span class="ref bad" title="找不到${REF_KIND[k]}「${esc(key.slice(2))}」">${esc(key.slice(2))}?</span>`;
+  });
+  return html.replace(/\{\{run:([^}\s]+)\}\}/g, (all, spec) => {
     const x = refValue(d, spec.replace(/&amp;/g, '&'));
     if (typeof x.v !== 'number') return `<span class="ref bad" title="找不到运行记录里的这个数：${esc(spec)}">?</span>`;
     return `<a class="ref" href="${plink(d.name, 'runs', x.id)}" title="运行 ${esc(x.id)}${x.group ? ' · ' + esc(ctx(d).groupName(x.group)) : ''} · ${esc(ctx(d).metricName(x.metric))}">${B.num(x.v)}</a>`;
@@ -1014,7 +1032,8 @@ function methodTab(d, x, hl, loop) {  // one step as a box on its level; loop: '
     return `<span class="sym s-${t}" title="${esc(attName(a))}：${esc(a.meta.status || '')}">${t === 'plan' ? '○' : FSYM[t] || '○'}</span>`; }).join('');
   return `<a class="mstep${hl ? ' on' : ''}${loop ? ' inloop' : ''}" href="${plink(d.name, 'method', x.meta.id)}"><b>${loop === 'start' ? '<span class="lpn">↻</span>' : ''}${esc(M.title(x))}${loop === 'end' ? '<span class="lpn">↺</span>' : ''}</b>
     ${gist(sec['一句话']) ? `<span class="ms1">${esc(gist(sec['一句话']))}</span>` : ''}
-    <span class="ms2">${vs.length ? `<span class="tag2">${vs.length + 1} 种做法</span>` : ''}${inside ? '<span class="tag2">可展开</span>' : ''}${dots}</span></a>`;
+    <span class="ms2">${vs.length ? `<span class="tag2">${vs.length + 1} 种做法</span>` : ''}${inside ? '<span class="tag2">可展开</span>' : ''}${dots}` +
+    `${[x, ...vs].some(s => methodStale(d).has(s.meta.id)) ? '<span class="pill t-todo" title="写完之后又有实验下了结论">可能过时</span>' : ''}</span></a>`;
 }
 function tabMethod(d, r) {
   const M = methodIndex(d), name = d.name;
@@ -1066,10 +1085,13 @@ function methodDetail(d, x, path) {
   const setup = setupIds.length ? `<div class="sec"><h3>实验设置里对应的方法</h3><div class="chips">${setupIds.map(id =>
     `<a class="chip" href="${plink(name, 'setup', 'method:' + id)}">${esc(smeth(id).name || id)}</a>`).join('')}</div></div>` : '';
   const others = x === base ? M.variants(x) : [base, ...M.variants(base).filter(v => v !== x)];
+  const late = methodStale(d).get(x.meta.id) || [];
+  const staleNote = late.length ? `<div class="notice">这一步可能过时：写完之后，${late.map(a => `<a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a>（${esc(a.meta.status)}）`).join('、')}
+    下了结论。结论改变了这一步的做法的话，请项目会话改这里的「关键设置」或加一种做法。</div>` : '';
   return `<div class="detail">${crumb}<h2>${esc(M.title(x))}${x !== base ? ` <span class="tag2">「${esc(M.title(base))}」的一种做法</span>` : ''}</h2>
     <div class="dmeta"><span>${esc(x.file)}</span>${others.length ? `<span>同一步的其他做法：${others.map(o => `<a href="${plink(name, 'method', o.meta.id)}">${esc(M.title(o))}</a>`).join('、')}</span>` : ''}</div>
     ${gist(sec['一句话']) ? `<div class="oneline">${esc(plain(sec['一句话']).split('\n').filter(Boolean).join(' '))}</div>` : ''}
-    ${box('输入和输出', sec['输入和输出'])}${box('怎么做', sec['怎么做'])}${box('关键设置', sec['关键设置'])}${box('例子', sec['例子'])}${extra}
+    ${staleNote}${box('输入和输出', sec['输入和输出'])}${box('怎么做', sec['怎么做'])}${box('关键设置', sec['关键设置'])}${box('例子', sec['例子'])}${extra}
     ${exp}${setup}${stepRefs(d, 'm:' + x.meta.id)}</div>`;
 }
 
