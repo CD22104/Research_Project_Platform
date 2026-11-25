@@ -1,5 +1,73 @@
 # 控制台开发：交接
 
+## 方案待用户选：整套做法做成 skill，仓库分 platform/ 和 skill/（2026-11-25，研究服务台转来）
+
+需求原文：`~/desk/requests/2026-11-25-skill-and-repo.md`。用户已定：仓库选 A（`~/gpu-board` 里放 platform/ 和 skill/）；skill 通用、不含个人信息；个人设置集中在一个配置文件；全局规则只留原则和红线。下面是要用户选的方案，选定后再动手。
+
+### 查到的事实
+- 全局规则约 5,400 字（不算空白）。按步骤做的几节（项目进度记录 1,039、会话分工 619、项目与会话 333、新建项目 662、长任务 366、结束或暂停 393）约 3,400 字，占六成多，都可以搬进 skill。
+- 仓库里的个人信息：`servers.json`（6 台主机全名）；`CLAUDE.md`、`NOTES.md`（项目名、路径、经历）；`design.js`（设计思路页，含真实项目和统计）；代码里写死的 `/shared/ssd/dchen` 和 `/home/dchen/bin/board`（boardtool.py 5 处、server.py、app.js、work.js、boardrun 各 1–2 处）；`docs/guide.md` 里的主机名；测试里的 xtra 主机名；页面标题「CD的研究控制台」。git 历史 90 多个提交里都有。
+- 机器上是 Python 3.10，标准库读不了 TOML，所以配置用 JSON。
+- monitor-bench 的 `pyproject.toml` 已经按路径依赖共享盘上发布的 boardrun（`_shared/tools/boardrun`），这个发布位置要保留。
+
+### 三种方案（差别在：工具放哪、skill 拆几个）
+- **方案 1：一个 skill，自带工具（推荐）。** `skill/research-board/` 里有 `SKILL.md`、`references/`（流程和格式）、`scripts/`（board 命令和 boardrun 的源码）。platform/ 只放控制台，复用 skill 里的 `projects.py`（一份代码，不复制）。各台装好 skill 后，钩子、`~/bin/board`、收尾和派活都指向 skill 里的 board；boardrun 照旧发布到配置里的共享工具目录，项目的依赖路径不变。
+  - 好：别人装一个 skill 就能用（流程 + 格式 + 命令），不必装控制台；工具和文档同一处、同一个版本；h100 的钩子不再依赖共享盘上的副本。
+  - 代价：platform 依赖 skill 的目录结构；skill 里有代码，分发时要连代码一起同步。
+- **方案 2：skill 只放流程和格式，工具留在 platform/。** skill 里只有 `SKILL.md` 和 `references/`；board 命令、boardrun 留在 platform/，照现在的方式发布到共享盘；`SKILL.md` 写「board 命令在配置的 tools_dir」。
+  - 好：改动最小，路径基本不变，控制台和工具一起测。
+  - 代价：别人只装 skill 用不了，还得装 platform；skill 和工具可能不同步。
+- **方案 3：两个 skill。** `research-workflow`（只有原则和流程，谁都能用，不依赖任何工具）+ `research-board`（board 格式和工具，配控制台用）。
+  - 好：不写 board 记录的人也能用流程部分；格式文档（580 行，最大的一块）只在写记录时才加载。
+  - 代价：两个 skill 的边界要维护；触发条件更难写准，漏加载一个就缺东西。方案 1 把格式放进 `references/`、用到时才读，也能拿到大部分好处。
+
+### 不论选哪种都一样的设计
+- **skill 名字**：`research-board`（方案 3 另有 `research-workflow`）。
+- **SKILL.md**（约 1–2 屏）：什么时候加载（在有 `board/` 的项目里工作、新建 / 结束 / 暂停项目、启动长任务、写或改记录、开工做任务卡）；总的做法（讨论 → 方案 → 任务卡 → 运行 → 记录 → 结论由用户确认 → 回写方案 → 简报）；遇到哪件事读哪份 reference；从配置文件读路径和服务器。
+- **references/**（按需读）：`board-format.md`（现在的格式文档，去掉个人路径）、`new-project.md`、`close-or-pause-project.md`、`long-runs.md`（boardrun、tmux、checkpoint、换服务器）、`task-sessions.md`（任务卡、开工、并行、worktree、合并）、`shared-resources.md`（模型和数据集先查再下、SOURCE.json）、`brief-and-map.md`（简报、一页纸、怎么让用户看懂）。
+- **事实包**：提醒里加一句「做法和格式见 skill research-board」，保证在项目里开的会话会加载它，不只靠模型自己判断。
+- **配置文件**：`~/.config/research-board/config.json`（各台本地一份，由研究服务台随规则分发；也可以用环境变量 `RESEARCH_BOARD_CONFIG` 指到别处）。仓库里只放 `config.example.json`。项目：
+  ```json
+  {"projects_root": "/shared/<you>/projects",
+   "shared_dir": "/shared/<you>/projects/_shared",
+   "tools_dir": "/shared/<you>/projects/_shared/tools",
+   "models_index": "_shared/models/MODELS.md", "datasets_index": "_shared/datasets/DATASETS.md",
+   "servers": [{"name": "gpu1", "host": "gpu1.example.edu", "gpus": 8}],
+   "home_server": "gpu1",
+   "claude_bin": "~/.local/bin/claude",
+   "secrets_dir": "~/.config/secrets",
+   "max_task_sessions": 6,
+   "console": {"name": "研究控制台", "socket": "~/research-console/run/board.sock", "port": 28765,
+               "state_dir": "~/research-console/state", "interval_seconds": 30}}
+  ```
+  控制台、board 命令、boardrun 都读这一份；读不到时报错并指向示例，不再悄悄用某个人的路径。
+- **全局规则怎么拆**（研究服务台据此起草；个人环境事实留在规则里，因为规则本来就是私人的，skill 要通用）：
+
+  | 节 | 处理 |
+  |---|---|
+  | 协作方式（语言、核心代码、一次性代码、不确定时） | 留 |
+  | 共享 GPU 服务器 | 留（红线：占卡先问、独占不超过一半） |
+  | 服务器环境 | 拆：留原则（项目放共享盘、环境本地重建、checkpoint 可恢复且原子写、要推远程）和本机事实（哪几台、CUDA 上限、非交互 ssh 没有 PATH）；做法搬 skill |
+  | 共享盘上的可复用资源 | 拆：留「先查再下、放共享目录、不放 home、大件删前问」；SOURCE.json、索引怎么写搬 skill |
+  | 项目进度记录 | 搬 skill；留三句：状态以 board/ 为准；开支线、定版本、下结论由用户确认；board/ 私人，不进团队仓库 |
+  | 会话分工 | 拆：留原则（三层、最多 6 个、不守着、失败 3 次停下问、同一项目一个会话改代码）；任务卡、开工、worktree、合并的做法搬 skill |
+  | 项目与会话（常驻入口） | 搬 skill；主机名进配置 |
+  | 新建项目 | 搬 skill（留一句：信任提问由用户答，不要绕过） |
+  | 长任务的启动与记录 | 搬 skill；留一句：训练在 tmux 里、用 boardrun 启动 |
+  | 结束或暂停项目 | 搬 skill |
+  | 帮我理解项目 | 留（这是用户的偏好：先给样例、核心实验先写预期） |
+  | 密钥和 token | 留（红线） |
+
+  估计规则剩约 2,000 字，每个会话少带约 3,400 字。
+- **platform/ 里的个人信息**：
+  - `servers.json` → 移出仓库，改读配置文件；仓库里留 `config.example.json`。
+  - 代码里写死的路径 → 一律读配置；页面上显示的路径和名字由服务端从配置里给。
+  - `CLAUDE.md`、`NOTES.md`（控制台开发的交接）→ 留在私有仓库里，但移到 `private/`，导出时排除。
+  - `design.js`（设计思路页）→ 页面框架留下，正文（真实项目、统计）改成从 `private/` 读，导出时换成一份通用的说明。
+  - 测试里的主机名、项目名 → 改成 gpu1、demo 这类通用名字。
+- **git 历史**：现在的仓库保持私有，照常用。要分享时用一个导出脚本（`scripts/export.sh`），把 platform/ 和 skill/ 拷成一个全新的仓库、只有一个提交，导出前扫一遍个人信息（主机名、路径、邮箱、项目名），扫到就停。不建议改写现有历史：会破坏已有的克隆，也容易漏。
+- **目录搬动**：运行时文件（`run/`、`state/`、`server.log`）留在 `~/gpu-board` 根目录（gitignore），Mac 的隧道和日志位置不变。搬完后交给研究服务台的清单：crontab 三行、`~/bin/board`、`~/.claude/settings.json` 两个钩子、tmux gpuboard 的启动命令、发布脚本的源路径（具体路径取决于选哪个方案，选定后列出）。
+
 ## 交接（2026-11-24，从旧服务台会话拆出来）
 
 ### 今天做完的（都已提交，测试全过）
