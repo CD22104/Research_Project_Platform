@@ -264,12 +264,19 @@ class Pages(unittest.TestCase):
 
     def test_tabs_follow_the_hierarchy(self):
         tabs = re.findall(r'<a class="ptab[^"]*" href="#/p/demo/(\w+)">([^<]+)', self.m("p_overview"))
-        self.assertEqual(tabs, [("home", "概况"), ("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("examples", "样例"), ("setup", "实验设置"),
-                                ("docs", "文档"), ("papers", "论文"), ("tasks", "任务"), ("decisions", "讨论与决定"), ("sessions", "会话"), ("timeline", "时间线"), ("upkeep", "记录维护")])
+        self.assertEqual(tabs, [("home", "首页"), ("method", "方法"), ("flow", "实验"), ("runs", "运行"), ("docs", "文档"), ("setup", "资料"),
+                                ("tasks", "任务"), ("decisions", "讨论与决定"), ("sessions", "会话"), ("timeline", "时间线"), ("upkeep", "记录维护")])
         self.assertIn('<span class="pgrp">研究</span>', self.m("p_overview"))      # two views: research, then work
         self.assertIn('<span class="pgrp">工作</span>', self.m("p_overview"))
         self.assertIn('<a class="ptab on" href="#/p/demo/flow">', self.m("p_road"))    # the old roadmap is the flow
-        self.assertIn('<a class="ptab on" href="#/p/demo/home">', self.m("p_old_overview"))   # the old overview is 概况
+        self.assertIn('<a class="ptab on" href="#/p/demo/home">', self.m("p_old_overview"))   # the old overview is 首页
+        for key, sub in (("p_setup", "setup"), ("p_examples", "examples"), ("p_papers", "papers")):   # 资料 holds three pages
+            with self.subTest(page=key):
+                self.assertIn('<a class="ptab on" href="#/p/demo/setup">资料', self.m(key))
+                nav = re.search(r'<div class="refnav chips">(.*?)</div>', self.m(key), re.S).group(1)
+                self.assertEqual(re.findall(r'href="#/p/demo/(\w+)">([^<]+)', nav), [("setup", "实验设置"), ("examples", "数据与样例"), ("papers", "论文 ")])
+                self.assertIn('<a class="chip on" href="#/p/demo/%s">' % sub, nav)
+        self.assertNotIn("refnav", self.m("p_runs"))
 
     def test_overview(self):                                    # the flow with nothing selected shows the project summary
         d = self.m("p_overview")
@@ -530,7 +537,7 @@ class Pages(unittest.TestCase):
         self.assertNotIn("Focal Loss", unread)                                           # the filter hides read ones
         self.assertIn('<li class="paper flash" data-anchor="radam">', self.m("p_paper"))   # papers/<id> points at the row
         head = self.pages["p_papers"][0]
-        self.assertIn('论文<span class="cnt">5 未读 / 6</span>', head)
+        self.assertIn('<a class="chip on" href="#/p/demo/papers">论文 <span class="small">5 未读 / 6</span></a>', head)
         self.assertIn('<a class="small" href="#/p/demo/papers">论文 6 篇 · 读过 1 · <b>必读未读 2</b></a>', head)
         self.assertRegex(self.m("p_overview"), r'<div class="k">论文</div><div class="v">6</div>\s*<div class="s">读过 <b>1</b> · 必读未读 <b>2</b>')
         att = self.m("p_road_a")                                                          # a step lists its papers

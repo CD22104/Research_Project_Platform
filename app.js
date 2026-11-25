@@ -16,9 +16,12 @@ const postJSON = (url, body) => fetch(url, {method: 'POST', headers: {'Content-T
 const getJSON = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
 
 // ============================================================ routing
-const RESEARCH_TABS = [['home', '概况'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['examples', '样例'], ['setup', '实验设置'], ['docs', '文档'], ['papers', '论文']];
+const RESEARCH_TABS = [['home', '首页'], ['method', '方法'], ['flow', '实验'], ['runs', '运行'], ['docs', '文档'], ['setup', '资料']];
+// 资料 holds three pages of reference material; their own addresses (setup, examples, papers) keep working
+const REF_TABS = [['setup', '实验设置'], ['examples', '数据与样例'], ['papers', '论文']];
 const WORK_TABS = [['tasks', '任务'], ['decisions', '讨论与决定'], ['sessions', '会话'], ['timeline', '时间线'], ['upkeep', '记录维护']];
-const TABS = [...RESEARCH_TABS, ...WORK_TABS];
+const TABS = [...RESEARCH_TABS, ...REF_TABS, ...WORK_TABS];
+const navTab = tab => REF_TABS.some(([k]) => k === tab) ? 'setup' : tab;
 const PAGES = ['overview', 'sessions', 'gpu', 'todo', 'guide', 'design', 'new'];
 
 function route() {
@@ -661,9 +664,11 @@ function pageProject(r) {
     ${p.full_title && !ui.renaming ? `<div class="small fulltitle">${esc(d.name)} · 原名：${esc(p.full_title)}</div>` : `<div class="small fulltitle">${esc(d.name)}</div>`}
     ${projectHero(d)}
     <nav class="ptabs">${[['研究', RESEARCH_TABS], ['工作', WORK_TABS]].map(([g, tabs]) => `<span class="pgrp">${g}</span>` +
-      tabs.map(([k, label]) => `<a class="ptab${k === r.tab ? ' on' : ''}${k === 'upkeep' ? ' quiet' : ''}" href="${plink(d.name, k)}">${label}` +
+      tabs.map(([k, label]) => `<a class="ptab${k === navTab(r.tab) ? ' on' : ''}${k === 'upkeep' ? ' quiet' : ''}" href="${plink(d.name, k)}">${label}` +
       (counts[k] ? `<span class="cnt">${counts[k]}</span>` : '') + '</a>').join('')).join('<span class="psep"></span>')}</nav>`;
-  const body = {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: (d, r) => dataSamplesCard(d) + tabExamples(d, r), docs: tabDocs, papers: tabPapers,
+  const refNav = navTab(r.tab) === 'setup' ? `<div class="refnav chips">${REF_TABS.map(([k, label]) => `<a class="chip${k === r.tab ? ' on' : ''}" href="${plink(d.name, k)}">${label}` +
+    `${k === 'papers' && papers.length ? ` <span class="small">${papers.length - papersRead ? `${papers.length - papersRead} 未读 / ` : ''}${papers.length}</span>` : ''}</a>`).join('')}</div>` : '';
+  const body = refNav + {home: tabHome, method: tabMethod, flow: tabFlow, setup: setupCard, runs: tabRuns, examples: (d, r) => dataSamplesCard(d) + tabExamples(d, r), docs: tabDocs, papers: tabPapers,
     tasks: tabTasks, decisions: tabDecisions, sessions: tabSessions, timeline: tabTimeline, upkeep: tabUpkeep}[r.tab](d, r);
   return head + notices(d) + withTerms(body, d);
 }
