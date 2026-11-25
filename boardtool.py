@@ -359,6 +359,8 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
         "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (" --session " + sid if sid else ""),
         "- 讨论或更新方案时，把用到的、建议用户读的论文记进 board/papers.jsonl，写明为什么读（why）；"
         "亲自打开链接、核对过标题才写 checked。用户在控制台勾「读过」。",
+        "- setup.json 里新加数据集时，抽 10 条原样放进 board/examples/data/<数据集 id>.jsonl（有类别的每类都抽到），"
+        "用户在控制台的实验设置页直接看数据长什么样。",
         "- 改 board/ 里的文件后，记录检查有问题会当场提示，照提示改掉。"]))
 
     def render(secs):
