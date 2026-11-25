@@ -386,6 +386,30 @@ table.runs td.mcell.spot>i{background:repeating-linear-gradient(45deg,var(--trac
 table.runs td.mcell.spot>span{color:var(--muted)}
 label.rq{display:inline-flex;align-items:center;gap:4px;margin-left:6px}
 .wherechips{padding:8px 14px 0;align-items:center}
+/* ---------- 首页: the brief, the project map */
+details.brief>summary{list-style:none;cursor:pointer}
+details.brief>summary::-webkit-details-marker{display:none}
+details.brief>summary h2::before{content:'▸ ';color:var(--muted)}
+details.brief[open]>summary h2::before{content:'▾ '}
+.brief.none{border-style:dashed}
+.map .mq{margin:0 0 6px;font-size:14px}
+.map .k{display:inline-block;min-width:4.5em;color:var(--muted);font-size:12px;margin-right:6px}
+.mstrip{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:10px 0 14px;padding:8px 10px;background:var(--bg);border-radius:8px}
+.mstrip .arrow{color:var(--muted)}
+.mstrip .chip.stale{border-color:var(--busy)}
+.mstrip .dot{color:var(--busy);font-size:10px}
+.mpart{border-top:1px solid var(--line);padding:10px 0 4px}
+.mpart>summary,.mpart>.phd{cursor:default;font-size:14px;margin-bottom:4px}
+details.mpart>summary{cursor:pointer}
+.mpart .ptitle{font-weight:700}
+.mpart .ptitle a{color:var(--text)}
+.pabout{margin:0 0 6px}
+.xrow{padding:8px 10px;margin:4px 0;border-radius:6px;border:1px solid var(--line)}
+.xrow.new{border-color:var(--accent)}
+.xrow .m1{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:14px}
+.xrow .m1 a{color:var(--text)}
+.xrow .m2{font-size:13px;margin-top:3px}
+.xrow .m4{margin-top:4px;color:var(--muted)}
 /* ---------- dataset samples (实验设置, 样例) */
 tr.dsamp>td{border-bottom:1px solid var(--line);padding:0 12px 8px}
 details.samples>summary{cursor:pointer;font-size:13px;color:var(--accent);padding:4px 0}

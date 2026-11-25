@@ -295,10 +295,10 @@ class Pages(unittest.TestCase):
         self.assertNotIn("old-plan", hero)
         self.assertIn('<span class="pill t-run">进行中</span> <a href="#/p/demo/tasks/f1-metric">', hero)   # next tasks
         self.assertIn("预热有用，并入主线。", hero)                                         # latest evidence
-        self.assertIn("最近的变化", d)                                                     # first visit in this browser
+        self.assertIn('href="#/p/demo/timeline">时间线：发生过的事 →</a>', d)             # first visit in this browser: no count
         self.assertIn('data-key="demo|d:scale-later"', d)                                  # waiting for you, adoptable here
         self.assertIn("下一步：重算 r002、r003。", d)                                       # what is going on
-        self.assertIn('<div class="onepager">', d)
+        self.assertNotIn('<div class="onepager">', d)                                      # the map's rows replace the one-pagers
 
     def test_work_view(self):
         tasks = self.m("p_tasks")
@@ -443,6 +443,31 @@ class Pages(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert("xss in plan")&lt;/script&gt;', docs)
         self.assertNotIn('href="javascript:', docs.lower())
         self.assertIn("2026-11-20：加了 focal loss。", self.m("p_doc_notes"))
+
+    def test_front_page(self):
+        h = self.m("p_home")
+        self.assertLess(h.index("给你的简报"), h.index("项目地图"))                 # brief, then the map, then what waits
+        self.assertLess(h.index("项目地图"), h.index("<h2>等你"))
+        self.assertIn('<a class="ref rec" href="#/p/demo/flow/a%3A2026-11-10-lr-sweep" title="实验：2026-11-10-lr-sweep">加 500 步预热</a>', h)
+        self.assertIn("简报之后又有", h)                                         # dated 2026-11-21; records changed later
+        self.assertIn('<span class="k">研究问题</span>学习率预热能否稳定小模型训练？', h)
+        strip = re.search(r'<div class="mstrip">(.*?)</div>', h, re.S).group(1)
+        self.assertEqual([re.sub(r"<[^>]+>|●", "", x).split() for x in re.findall(r'<a class="chip[^"]*"[^>]*>(.*?)</a>', strip, re.S)],
+                         [["数据", "0"], ["训练", "1"], ["评测", "0"]])               # the method's order; lr-sweep tests a variant of 训练
+        self.assertEqual([re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r'<span class="ptitle">(.*?)</span>', h, re.S)],
+                         ["损失函数", "学习率调度", "数据增强 C# 实验"])                # open first; 旧基线整理 has no experiments
+        lr = re.search(r'<div class="xrow[^"]*">\s*<div class="m1">.*?加 500 步预热.*?</div></div>', h, re.S).group(0)
+        self.assertIn('<a class="tag2" href="#/p/demo/method/warmup">线性预热</a>', lr)
+        self.assertIn('<span class="k">想回答</span>加 500 步预热，能不能让小模型训练初期不再发散？', lr)
+        self.assertIn('<a href="#/p/demo/runs?att=2026-11-10-lr-sweep">运行 1 →</a>', lr)
+        self.assertIn('href="#/p/demo/setup/ds%3A%E6%B5%8B%E8%AF%95%E9%9B%86">同分布测试集</a>', lr)
+        self.assertIn("（还没写标题）", re.search(r'<div class="xrow[^"]*">\s*<div class="m1">.*?a%3A2026-11-15-focal.*?</div></div>', h, re.S).group(0))
+        self.assertIn('<details class="mpart" id="mpart-t-lr">', h)                 # a closed part is folded
+        w = re.sub(r"<[^>]+>", " ", re.search(r"<h2>等你.*?</ul>", h, re.S).group(0))
+        order = [w.index(x) for x in ("补 dev 集评测", "尝试「focal」", "大模型等小模型跑通再上", "决定要不要补跑 gamma=1")]
+        self.assertEqual(order, sorted(order))                                   # blocking, conclusions, decisions, the rest
+        self.assertNotIn("最近的一页纸", h)
+        self.assertIn('href="#/p/demo/timeline">', h)
 
     def test_record_references(self):
         b = self.m("p_doc_brief")
@@ -646,6 +671,10 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   const ms = methodStale(fakeM);   // only a concluded attempt edited after the step counts
   out.stale = [[...ms.keys()], ms.get('s1').map(a => a.meta.id)];
   out.titles = [attTitle({meta: {id: '2026-11-10-x', title: ' 标题 '}}), attTitle({meta: {id: '2026-11-10-x'}, file: 'attempts/2026-11-10-x.md'})];
+  location.hash = '#/p/demo/home'; await wait(600);
+  out.brief_open = document.getElementById('home-brief').open;
+  document.querySelector('#home-brief [data-mark="看过"]').click(); await wait(900);
+  out.brief_after = [document.getElementById('home-brief').open, document.querySelector('#home-brief summary').textContent.includes('你看过了')];
   const sess = document.createElement('div');   // a big context matters only while the session is open
   sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
                                 {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
@@ -698,6 +727,8 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["samples_raw"], '{"id": 3, "text": "loss 曲线在第 120 步出现尖峰后恢复", "label": 1}')   # back to the line as stored
         self.assertTrue(out["samples_still_open"])
         self.assertEqual(out["stale"], [["s1"], ["a1"]])
+        self.assertTrue(out["brief_open"])                                       # an unread brief is open
+        self.assertEqual(out["brief_after"], [False, True])                      # once marked 看过 it folds to one line
         self.assertEqual(out["titles"], ["标题", "x"])
         self.assertEqual(out["ticked"], [True, "paper read", "读过"])          # a tick is saved and shown at once
         self.assertEqual(out["unticked"], [False, False])                        # and can be taken back

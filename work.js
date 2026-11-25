@@ -189,28 +189,6 @@ function waitingItems(d) {
       conclusion: ((a.sections || {})['结论和原因'] || '').slice(0, 600), answer: answers['a:' + a.meta.id] || null}, d.now)),
     ...todos.map(t => todoItem(t, proj, d.now))];
 }
-function tabHome(d) {
-  const name = d.name, W = work(d), since = prevSeen(name, d.now);
-  const evs = timelineOf(d), fresh = since == null ? evs.slice(0, 10) : evs.filter(e => e.t > since);
-  const changes = `<div class="card"><h2>${since == null ? '最近的变化' : `你上次来之后（${B.ago(since, d.now)}）`} <span class="meta">${since == null ? '第一次在这个浏览器打开' : fresh.length + ' 条'}</span>
-      <a class="meta right" href="${plink(name, 'timeline')}">完整时间线 →</a></h2>
-    <div class="pad">${fresh.length ? eventList(fresh.slice(0, 20), null, d.now) + (fresh.length > 20 ? `<div class="small"><a href="${plink(name, 'timeline')}">还有 ${fresh.length - 20} 条 →</a></div>` : '')
-      : '<div class="empty">没有新的变化。</div>'}</div></div>`;
-  const open = W.tasks.filter(t => TASK_COLS.includes(t.meta.status));
-  const running = d.runs.filter(x => (x.run || {}).status === '运行中');
-  const going = `<div class="card"><h2>正在进行 <span class="meta">任务 ${open.length} · 运行 ${running.length}</span></h2><div class="pad">
-    ${open.length ? `<ul class="hl">${open.map(t => `<li>${taskPill(t.meta.status)} <span class="tag2">${esc(t.meta.kind || '?')}</span>
-        <a href="${plink(name, 'tasks', t.meta.id)}">${esc(taskTitle(t))}</a>${handoffNext(t) ? `<div class="small">下一步：${esc(handoffNext(t))}</div>` : ''}</li>`).join('')}</ul>`
-      : '<div class="small faint">没有进行中的任务卡。项目会话拆任务时会写到 board/tasks/。</div>'}
-    ${running.length ? `<ul class="hl">${running.map(x => `<li>${statePill(x.state)} <a href="${plink(name, 'runs', runKey(x))}">${esc(ctx(d).label(x))}</a>
-        <span class="small">${esc(shortHost((x.run || {}).server || '?'))}${esc(gpusText(x.run || {}))}${x.heartbeat ? ' · 心跳 ' + B.ago(x.heartbeat, d.now) : ''}</span></li>`).join('')}</ul>` : ''}</div></div>`;
-  const wait = waitingItems(d);
-  const waiting = `<div class="card"><h2>等你 <span class="meta">${wait.length} 条</span></h2>${wait.length ? `<ul class="tlist">${wait.join('')}</ul>` : '<div class="empty">没有等你的事。</div>'}</div>`;
-  const ops = [...d.attempts].filter(a => Object.keys(a.onepager || {}).length).sort((a, b) => dateKey(b).localeCompare(dateKey(a))).slice(0, 2);
-  const pages = ops.length ? `<div class="card"><h2>最近的一页纸</h2><div class="pad">${ops.map(a => `<div class="opblk"><div class="opt2"><a href="${plink(name, 'flow', 'a:' + attKey(a))}">${esc(attName(a))}</a> ${B.pill(a.meta.status)}
-      <span class="small">${esc(attDate(a))}</span></div>${onepagerBox(a)}</div>`).join('')}</div></div>` : '';
-  return `<div class="homegrid"><div>${changes}${pages}</div><div>${waiting}${going}</div></div>`;
-}
 const handoffNext = t => { const m = String((t.sections || {})['交接'] || '').match(/^\s*[-*]?\s*下一步\s*[:：]\s*(.+)$/m); return m ? m[1].trim() : ''; };
 
 // ============================================================ 任务: the board of task cards

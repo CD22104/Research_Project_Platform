@@ -1841,7 +1841,8 @@ document.addEventListener('click', e => {
   }
   const mk = t.closest('[data-mark]');
   if (mk) {
-    const r = route();
+    const r = route(), brief = mk.closest('#home-brief');
+    if (brief) { ui.briefFolded = mk.dataset.file; brief.open = false; }   // a brief marked 看过 folds to one line at once
     mk.disabled = true;
     postJSON('/api/mark', {project: r.name, file: mk.dataset.file, mark: mk.dataset.mark || null})
       .then(() => { S.fetchedAt[r.name] = 0; return refreshAfterWrite(r.name); })
