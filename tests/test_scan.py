@@ -543,7 +543,7 @@ class SafeFile(FixtureCase):
                 self.assertIsNone(P.safe_board_file(self.root, name, rel))
 
     def test_valid_name(self):
-        for ok in ["demo", "jev-authz", "a.b_c-1"]:
+        for ok in ["demo", "my-project", "a.b_c-1"]:
             self.assertTrue(P.valid_name(ok))
         for no in ["", "_x", ".x", "a/b", "..", "x" * 65, "中文", "a b"]:
             self.assertFalse(P.valid_name(no))

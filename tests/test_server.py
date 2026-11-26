@@ -85,13 +85,13 @@ class Liveness(unittest.TestCase):
         self.assertEqual((site["name"], site["servers"], site["short"]), ("实验室</script><b>", ["gpu-h200", "gpu-a100"], {"gpu-h200": "h200", "gpu-a100": "a100"}))
 
     def test_cases(self):
-        L, me = self.S.liveness, "dchen"
+        L, me = self.S.liveness, "me"
         run = {"server": "gpu-h200", "gpus": [2, 3], "pid": 999999}
         other = [{"pid": 11, "user": "someone"}]
         self.assertEqual(L(run, self.srv({2: other, 3: []}), me), "absent")
-        self.assertEqual(L(run, self.srv({0: [{"pid": 999999, "user": "dchen"}]}), me), "running")  # pid anywhere
-        self.assertEqual(L(run, self.srv({3: [{"pid": 5, "user": "dchen"}]}), me), "running")  # child on its GPU
-        self.assertEqual(L(run, self.srv({0: [{"pid": 5, "user": "dchen"}]}), me), "absent")  # other GPU
+        self.assertEqual(L(run, self.srv({0: [{"pid": 999999, "user": "me"}]}), me), "running")  # pid anywhere
+        self.assertEqual(L(run, self.srv({3: [{"pid": 5, "user": "me"}]}), me), "running")  # child on its GPU
+        self.assertEqual(L(run, self.srv({0: [{"pid": 5, "user": "me"}]}), me), "absent")  # other GPU
         self.assertEqual(L(run, self.srv({2: []}, status="error"), me), "unreachable")  # server not reachable
         self.assertIsNone(L(run, None, me))                                         # server not polled
         self.assertIsNone(L(dict(run, gpus=[]), self.srv({}), me))                  # no GPUs: can't tell

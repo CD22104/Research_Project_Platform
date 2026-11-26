@@ -1212,7 +1212,7 @@ def run_state(run, heartbeat_mtime, probe, now):
     heartbeat (started by boardrun) can be 已中断: boardrun writes the final status itself on a normal
     exit, so a stopped heartbeat with no final status means the process died. A hand-written record
     whose process is gone may just as well have finished without writing it (2026-11-24: three
-    jev-fraud runs had completed), so it stays 状态未知 for a session to check.
+    hand-written runs had completed), so it stays 状态未知 for a session to check.
     """
     if (run or {}).get("status") != "运行中":
         return "已结束"

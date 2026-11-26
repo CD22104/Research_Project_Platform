@@ -48,7 +48,7 @@ def start_server(repo, tmp, prepare=None):
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as f:  # no "socket": plain 127.0.0.1 port, fixtures only
         json.dump({"projects_root": root, "servers": [], "state_dir": os.path.join(tmp, "state"), "sessions": {"enabled": False},
-                   "console": {"name": "CD的研究控制台", "port": port, "projects_interval_seconds": 3600}}, f)
+                   "console": {"name": "演示控制台", "port": port, "projects_interval_seconds": 3600}}, f)
     base = "http://127.0.0.1:%d/" % port
     log = open(os.path.join(tmp, "server.log"), "w")
     proc = subprocess.Popen([sys.executable, os.path.join(repo, "platform", "server.py")],
@@ -259,12 +259,12 @@ class Pages(unittest.TestCase):
 
     def test_sidebar_and_titles(self):
         d = self.pages["p_overview"][0]
-        self.assertIn('<a class="brand" href="#/overview">CD的研究控制台</a>', d)
+        self.assertIn('<a class="brand" href="#/overview">演示控制台</a>', d)
         self.assertIn('<span class="lbl">待办</span><span class="cnt">7</span>', d)   # 2 pending attempts + 2 open to-dos + 2 candidate decisions + 1 global
         self.assertRegex(d, r'<a class="sitem on" href="#/p/demo/home"[^>]*><span class="dot d-run"></span><span class="lbl">演示项目</span>')
-        self.assertEqual(title(self.pages["gpu"][0]), "(0 空) CD的研究控制台")
+        self.assertEqual(title(self.pages["gpu"][0]), "(0 空) 演示控制台")
         for k in ["p_overview", "legacy_project"]:
-            self.assertEqual(title(self.pages[k][0]), "演示项目 · CD的研究控制台", k)
+            self.assertEqual(title(self.pages[k][0]), "演示项目 · 演示控制台", k)
         for k in ["legacy_projects", "root"]:
             self.assertIn('<h1 class="pt">今天</h1>', self.m(k), k)
 
@@ -343,7 +343,7 @@ class Pages(unittest.TestCase):
         self.assertEqual(len(re.findall(r'<svg class="dz-svg"', d)), 2)
         self.assertIn("进行中的项目", d)                                                  # live numbers from the console
         self.assertIn('<span class="lbl">设计思路</span>', self.pages["design"][0])
-        self.assertEqual(title(self.pages["design"][0]), "设计思路 · CD的研究控制台")
+        self.assertEqual(title(self.pages["design"][0]), "设计思路 · 演示控制台")
 
     def test_setup_tab(self):
         d = self.m("p_setup")
@@ -566,7 +566,7 @@ class Pages(unittest.TestCase):
         self.assertNotIn("<h3>使用说明</h3>", g)                          # the file's own title is dropped
         self.assertIn('<span class="lbl">使用说明</span>', self.pages["guide"][0])
         self.assertIn('href="#/guide" title="在 a100 会话里输入：! ~/bin/rc-start demo">常驻入口未运行</a>', self.m("p_overview"))
-        self.assertEqual(title(self.pages["guide"][0]), "使用说明 · CD的研究控制台")
+        self.assertEqual(title(self.pages["guide"][0]), "使用说明 · 演示控制台")
 
     def test_global_pages(self):
         ov = self.m("overview")
@@ -662,7 +662,7 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
       {id: 'bad', title: '<b>x</b>', url: 'javascript:alert(1)', why: 'w'},
       {id: 'quote', title: 'q', url: 'https://x.org/a" onclick="alert(1)', why: 'w'},
       {id: 'away', title: 'Away', url: 'https://x.org/away', why: 'w'}],
-    paper_marks: {}, papers_elsewhere: {away: ['jev-fraud']}};
+    paper_marks: {}, papers_elsewhere: {away: ['other-project']}};
   const pdiv = document.createElement('div');
   pdiv.innerHTML = '<ul>' + paperItems(fake).map(p => paperRow(fake, p)).join('') + '</ul>';
   out.paper_links = [...pdiv.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.getAttribute('target'), a.getAttribute('rel')]);
@@ -746,9 +746,9 @@ class Interactions(unittest.TestCase):
         self.assertEqual(out["ticked"], [True, "paper read", "读过"])          # a tick is saved and shown at once
         self.assertEqual(out["unticked"], [False, False])                        # and can be taken back
         self.assertEqual(out["paper_links"], [["https://x.org/away", "_blank", "noopener noreferrer"],   # no javascript: or broken-out url
-                                              ["#/p/jev-fraud/papers", None, None]])                # the other project's list
+                                              ["#/p/other-project/papers", None, None]])                # the other project's list
         self.assertEqual(out["paper_bold"], 0)                                     # titles are text
-        self.assertIn("在 jev-fraud 勾过", out["paper_away"])
+        self.assertIn("在 other-project 勾过", out["paper_away"])
         self.assertEqual(out["doc_about"], ["k:f1-metric", "d:scale-later", None])  # documents can sit on task cards and decisions   # ended: greyed, no 建议换新
         self.assertGreater(out["examples_scroll"], 0)
         self.assertIn("先不补", out["answered"])                       # the reply is shown as sent, waiting for a session
