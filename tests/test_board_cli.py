@@ -23,7 +23,7 @@ class Base(unittest.TestCase):
         self.root = os.path.join(self.tmp, "projects")
         shutil.copytree(FIXTURES, self.root, symlinks=True)
         self.proj = os.path.join(self.root, "demo")
-        self.cfg = os.path.join(self.tmp, "servers.json")
+        self.cfg = os.path.join(self.tmp, "config.json")
         with open(self.cfg, "w") as f:
             json.dump({"projects_root": self.root, "state_dir": os.path.join(self.tmp, "state"), "servers": []}, f)
 
@@ -33,7 +33,7 @@ class Base(unittest.TestCase):
     def hook(self, cmd, data):
         t0 = time.time()
         p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "boardtool.py"), cmd, "--hook"], input=json.dumps(data),
-                           capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=self.cfg), timeout=20)
+                           capture_output=True, text=True, env=dict(os.environ, RESEARCH_BOARD_CONFIG=self.cfg), timeout=20)
         return p.returncode, p.stdout, p.stderr, time.time() - t0
 
 
@@ -55,7 +55,7 @@ class Brief(Base):
         tasks = self.section(text, "进行中的任务")
         self.assertIn("[f1-metric] 进行中 · 执行：加 F1 指标并重算旧结果。下一步：重算 r002、r003。", tasks)
         self.assertIn("[report-r1] 待开始", tasks)
-        self.assertIn("r002 @xtrah200", self.section(text, "在跑的运行"))
+        self.assertIn("r002 @gpu-h200", self.section(text, "在跑的运行"))
         self.assertIn("项目 CLAUDE.md", self.section(text, "项目规则"))
         self.assertIn("预热有用，并入主线。", self.section(text, "最近的结论"))
 
@@ -102,7 +102,7 @@ class Forwarders(Base):
         for cmd in (["/bin/sh", os.path.join(REPO, "board")], [sys.executable, os.path.join(REPO, "boardtool.py")]):
             with self.subTest(cmd=cmd[-1]):
                 p = subprocess.run(cmd + ["brief", self.proj], capture_output=True, text=True, timeout=30,
-                                   env=dict(os.environ, GPUBOARD_CONFIG=self.cfg))
+                                   env=dict(os.environ, RESEARCH_BOARD_CONFIG=self.cfg))
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertIn("【事实包】演示项目（demo）", p.stdout)
 
@@ -120,7 +120,7 @@ class Hooks(Base):
         code, out, _, _ = self.hook("brief", {"cwd": os.path.join(FIXTURES, "demo")})   # outside projects_root
         self.assertEqual((code, out), (0, ""))
         p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "boardtool.py"), "brief", "--hook"], input="not json",
-                           capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=self.cfg))
+                           capture_output=True, text=True, env=dict(os.environ, RESEARCH_BOARD_CONFIG=self.cfg))
         self.assertEqual(p.returncode, 0)                                # bad input never fails the session
 
     def test_post_edit_check(self):

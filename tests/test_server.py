@@ -45,15 +45,16 @@ def fake_claude(tmp, root):
     with open(bin_, "w") as f:
         f.write("#!/bin/sh\necho '%s'\n" % json.dumps(live))
     os.chmod(bin_, 0o755)
-    return {"claude_bin": bin_, "transcripts": os.path.join(tmp, "transcripts"), "interval_seconds": 3600}
+    return {"claude_bin": bin_, "transcripts": os.path.join(tmp, "transcripts"), "interval_seconds": 3600}   # claude_bin goes to the top
 
 
 def write_config(tmp, root, servers=()):
-    cfg = os.path.join(tmp, "servers.json")
+    cfg = os.path.join(tmp, "config.json")
+    sess = fake_claude(tmp, root)
     with open(cfg, "w") as f:
-        json.dump({"socket": os.path.join(tmp, "run", "t.sock"), "servers": list(servers),
-                   "projects_root": root, "projects_interval_seconds": 3600, "state_dir": os.path.join(tmp, "state"),
-                   "sessions": fake_claude(tmp, root)}, f)
+        json.dump({"projects_root": root, "servers": list(servers), "state_dir": os.path.join(tmp, "state"),
+                   "claude_bin": sess.pop("claude_bin"), "sessions": sess,
+                   "console": {"name": "测试控制台", "socket": os.path.join(tmp, "run", "t.sock"), "projects_interval_seconds": 3600}}, f)
     return cfg
 
 
@@ -61,22 +62,31 @@ class Liveness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
-        os.environ["GPUBOARD_CONFIG"] = write_config(cls.tmp, cls.tmp)
+        os.environ["RESEARCH_BOARD_CONFIG"] = write_config(cls.tmp, cls.tmp)
         sys.path.insert(0, os.path.join(REPO, "platform"))
         import server
         cls.S = server
 
     @classmethod
     def tearDownClass(cls):
-        del os.environ["GPUBOARD_CONFIG"]
+        del os.environ["RESEARCH_BOARD_CONFIG"]
         shutil.rmtree(cls.tmp)
 
     def srv(self, procs_by_gpu, status="ok"):
         return {"status": status, "gpus": [{"index": i, "procs": procs} for i, procs in procs_by_gpu.items()]}
 
+    def test_site_js(self):
+        cfg = {"console": {"name": "实验室</script><b>"}, "projects_root": "/p", "home_server": "gpu-a100",
+               "servers": [{"name": "gpu-h200", "host": "h"}, {"name": "gpu-a100", "host": "a"}]}
+        js = self.S.site_js(cfg)
+        self.assertNotIn("</script>", js)                                     # nothing in the configuration can close the script
+        self.assertTrue(js.startswith("const SITE = ") and js.rstrip().endswith(";"))
+        site = json.loads(js[len("const SITE = "):].rstrip().rstrip(";"))
+        self.assertEqual((site["name"], site["servers"], site["short"]), ("实验室</script><b>", ["gpu-h200", "gpu-a100"], {"gpu-h200": "h200", "gpu-a100": "a100"}))
+
     def test_cases(self):
         L, me = self.S.liveness, "dchen"
-        run = {"server": "xtrah200", "gpus": [2, 3], "pid": 999999}
+        run = {"server": "gpu-h200", "gpus": [2, 3], "pid": 999999}
         other = [{"pid": 11, "user": "someone"}]
         self.assertEqual(L(run, self.srv({2: other, 3: []}), me), "absent")
         self.assertEqual(L(run, self.srv({0: [{"pid": 999999, "user": "dchen"}]}), me), "running")  # pid anywhere
@@ -112,7 +122,7 @@ class Http(unittest.TestCase):
         cls.sock = os.path.join(cls.tmp, "run", "t.sock")
         cls.log = open(os.path.join(cls.tmp, "server.log"), "w")
         cls.proc = subprocess.Popen([sys.executable, os.path.join(REPO, "platform", "server.py")],
-                                    env=dict(os.environ, GPUBOARD_CONFIG=cfg), stdout=cls.log, stderr=cls.log)
+                                    env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg), stdout=cls.log, stderr=cls.log)
         deadline = time.time() + 10
         while time.time() < deadline:
             try:
@@ -171,7 +181,7 @@ class Http(unittest.TestCase):
         self.assertEqual([p["name"] for p in d["projects"]], ["broken", "demo", "minimal"])
         demo = d["projects"][1]
         self.assertEqual(demo["active_runs"][0]["id"], "r002")
-        self.assertIsNone(demo["active_runs"][0]["liveness"])            # xtrah200 is not polled here
+        self.assertIsNone(demo["active_runs"][0]["liveness"])            # gpu-h200 is not polled here
         self.assertEqual(demo["active_runs"][0]["state"], "状态未知")       # no heartbeat, no probe
         self.assertEqual([t["id"] for t in demo["tasks_open"]], ["f1-metric", "report-r1"])
         self.assertEqual([x["id"] for x in demo["decisions_candidate"]], ["broken-dec", "scale-later"])
@@ -308,6 +318,14 @@ class Http(unittest.TestCase):
         self.assertEqual(self.post("/api/answer", b"[1]")[0], 400)
         self.assertEqual(self.post("/api/other", ok)[0], 404)
         self.assertEqual(self.post("/api/answer", ok, {"Origin": None})[0], 200)  # no Origin (same-origin GET-like) is fine
+
+    def test_site_js_is_served_from_the_configuration(self):
+        c = UnixHTTP(self.sock)
+        c.request("GET", "/site.js")
+        r = c.getresponse()
+        body = r.read().decode()
+        self.assertEqual((r.status, r.getheader("Content-Type")), (200, "text/javascript; charset=utf-8"))
+        self.assertIn('"name": "测试控制台"', body)
 
     def test_mark_documents(self):
         self.assertEqual(self.post("/api/mark", {"project": "demo", "file": "docs/lr-plan-v1.md", "mark": "确认"})[0], 200)

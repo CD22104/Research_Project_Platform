@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""CD的研究控制台：各服务器的 GPU 占用（SSH 轮询 nvidia-smi）和共享盘上各项目的进度记录。
+"""研究控制台：各服务器的 GPU 占用（SSH 轮询 nvidia-smi）和共享盘上各项目的进度记录。
 
 只依赖 Python 标准库和本机的 ssh（使用 ~/.ssh/config 与免密密钥）。
-服务器列表、监听方式（unix socket 或本机端口）、项目根目录在 servers.json 里改。
-平台名显示在页面上的那一处在 common.js 的 APP_NAME。
+控制台的名字、服务器列表、监听方式（unix socket 或本机端口）、项目根目录都在个人配置文件里
+（skill 的 rbconfig.py；默认 ~/.config/research-board/config.json，或 $RESEARCH_BOARD_CONFIG），
+页面从 /site.js 拿到名字和服务器顺序。
 """
 import json
 import os
@@ -21,24 +22,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))      # platform/: the console 
 REPO = os.path.dirname(HERE)                           # the repository; runtime files (run/, state/, server.log) live here
 sys.path[:0] = [HERE, os.path.join(REPO, "skill", "research-board", "scripts")]   # sessions.py here; projects.py is the skill's
 import projects  # noqa: E402
+import rbconfig  # noqa: E402
 import sessions  # noqa: E402
 
-# GPUBOARD_CONFIG lets tests run the server against a throwaway config
-with open(os.environ.get("GPUBOARD_CONFIG") or os.path.join(REPO, "servers.json"), encoding="utf-8") as f:
-    CFG = json.load(f)
-
-PORT = int(CFG.get("port", 8765))
-INTERVAL = int(CFG.get("interval_seconds", 30))
-JUMP = CFG.get("jump_host") or None
+CFG = rbconfig.load()   # $RESEARCH_BOARD_CONFIG lets tests run the server against a throwaway config
+CON = CFG["console"]
+NAME = CON["name"]
+PORT = int(CON["port"])
+INTERVAL = int(CON["interval_seconds"])
+JUMP = CON["jump_host"] or None
 SERVERS = CFG["servers"]
 # If set, listen only on this unix socket (no TCP port), so only its owner can connect
-SOCKET = CFG.get("socket") or None
-PROJECTS_ROOT = os.path.expanduser(CFG.get("projects_root") or "/shared/ssd/dchen")
-PROJECTS_INTERVAL = int(CFG.get("projects_interval_seconds", 60))
+SOCKET = CON["socket"] or None
+PROJECTS_ROOT = CFG["projects_root"]
+PROJECTS_INTERVAL = int(CON["projects_interval_seconds"])
 ME = pwd.getpwuid(os.getuid()).pw_name  # same login on every server
 project_cache = projects.ProjectCache(PROJECTS_ROOT, PROJECTS_INTERVAL)
-_sc = CFG.get("sessions") or {}
-session_watch = sessions.SessionWatch(PROJECTS_ROOT, claude_bin=_sc.get("claude_bin"), transcripts=_sc.get("transcripts"),
+_sc = CFG["sessions"]
+session_watch = sessions.SessionWatch(PROJECTS_ROOT, claude_bin=CFG["claude_bin"], transcripts=_sc.get("transcripts"),
                                       interval=int(_sc.get("interval_seconds", 60)))
 SESSIONS_ON = _sc.get("enabled", True)
 
@@ -201,7 +202,7 @@ def rc_entries():
 #   document marks    -> <project>/board/marks.jsonl (append only; 看过 / 确认, sessions may read them)
 #   paper ticks       -> the same marks.jsonl, rows with "paper" instead of "file" (读过 or null)
 #   display names     -> state/names.json here on a100 (console-only setting, not in the project)
-STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(REPO, "state"))
+STATE_DIR = CFG["state_dir"]
 NAMES_FILE = os.path.join(STATE_DIR, "names.json")
 MAX_POST = 16 * 1024
 MAX_REPLY = 2000
@@ -411,6 +412,15 @@ def api_sessions():
     return {"now": time.time(), "at": snap.get("at"), "error": snap.get("error"), "enabled": SESSIONS_ON, "sessions": rows}
 
 
+def site_js(cfg):
+    """/site.js: what the pages need from the configuration (the console's name, where projects live, the servers in
+    the order to show them, their short names). JSON, with "<" escaped so no value can close the script."""
+    names = [s["name"] for s in cfg["servers"]]
+    site = {"name": cfg["console"]["name"], "projects_root": cfg["projects_root"], "home_server": cfg["home_server"],
+            "servers": names, "short": rbconfig.short_names(names)}
+    return "const SITE = %s;\n" % json.dumps(site, ensure_ascii=False).replace("<", "\\u003c")
+
+
 # The board's own pages, read from the repo on each request
 HTML, JS = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
 STATIC = {"/": ("index.html", HTML), "/index.html": ("index.html", HTML),
@@ -472,6 +482,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(data)
         elif path.startswith("/files/"):
             self.send_board_file(path[len("/files/"):])
+        elif path == "/site.js":
+            self.send(200, JS, site_js(CFG).encode())
         elif path == "/api/status":
             with lock:
                 body = json.dumps({"now": time.time(), "interval": INTERVAL, "me": ME,
@@ -580,5 +592,5 @@ if __name__ == "__main__":
     project_cache.start()
     if SESSIONS_ON:
         session_watch.start()
-    print("CD的研究控制台已启动: %s" % where, flush=True)
+    print("%s已启动: %s" % (NAME, where), flush=True)
     httpd.serve_forever()

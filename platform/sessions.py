@@ -1,7 +1,7 @@
 """Claude sessions on this machine, for the console's 会话 page: who is working where, how big each
 conversation has grown, and how many tokens it used. Metadata only: the console never shows what was said.
 
-Two sources, both local to xtraa100:
+Two sources, both local to the machine the console runs on:
   - `claude agents --json`: the sessions alive right now (interactive, background, remote control) and
     whether each is busy or idle.
   - the transcripts under ~/.claude/projects/*/<session id>.jsonl: title, working directory, last

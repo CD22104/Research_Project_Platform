@@ -484,7 +484,7 @@ function pageNew() {
   return `<h1 class="pt">新建项目</h1><div class="card"><div class="pad md">
     <p>控制台只读，不在页面上建项目。请在任意一台服务器上的 Claude 会话里说：</p>
     <pre><code>新建项目 &lt;名字&gt;</code></pre>
-    <p>会话会在共享盘 <code>/shared/ssd/dchen/&lt;名字&gt;/</code> 建好目录和 <code>board/</code>，一分钟内左侧栏就会出现这个项目。记录格式见 <code>/shared/ssd/dchen/_shared/BOARD_FORMAT.md</code>。</p></div></div>`;
+    <p>会话会在项目根目录 <code>${esc(B.SITE.projects_root || '（配置里的 projects_root）')}/&lt;名字&gt;/</code> 建好目录和 <code>board/</code>，一分钟内左侧栏就会出现这个项目。记录格式见 skill research-board 的 references/board-format.md。</p></div></div>`;
 }
 
 // ============================================================ resident entries and the guide
@@ -515,7 +515,7 @@ const gpuState = g => B.isFree(g) ? 'free' : g.mem_total && g.mem_used / g.mem_t
 const errText = e => /退出码 3/.test(e || '') ? 'nvidia-smi 无法运行（显卡驱动没有加载），需要管理员处理' : e;
 const gb = mb => mb == null ? '–' : (mb / 1024).toFixed(1);
 const dur = s => s == null ? '' : s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天';
-const shortHost = name => String(name).replace(/^xtra/, '');
+const shortHost = name => (B.SITE.short || {})[name] || String(name);   // the configuration's short name (common prefix dropped)
 function activeRuns() {
   return S.projects ? S.projects.projects.flatMap(p => (p.active_runs || []).map(r => ({...r, project: p.name, title: p.title}))) : [];
 }
@@ -550,7 +550,7 @@ function gpuGrid(servers, me) {
 }
 function pageGpu() {
   const d = S.status;
-  if (!d) return S.offline ? '<div class="empty">连不上控制台：请确认 Mac 能连到 xtraa100（校园网 / VPN）</div>' : '<div class="empty">加载中…</div>';
+  if (!d) return S.offline ? `<div class="empty">连不上控制台：请确认能连到控制台所在的机器${B.SITE.home_server ? '（' + esc(B.SITE.home_server) + '）' : ''}（网络 / VPN / ssh 隧道）</div>` : '<div class="empty">加载中…</div>';
   const runs = activeRuns(), me = d.me, servers = B.sortServers(d.servers);
   let total = 0, okServers = 0, html = '';
   const users = {}, freeBy = [];
@@ -824,7 +824,7 @@ function setupCard(d, r = {}) {  // the 实验设置 tab
 function checksCard(d) {
   const items = [...(d.checks || []).map(x => [x.where, x.what]), ...d.errors.map(e => [e.file, e.error])];
   if (!items.length) return '';
-  return `<div class="card"><h2>记录检查 <span class="meta">${items.length} 条 · 写记录的会话可以按这里修，修好后约 1 分钟消失 · 格式见 /shared/ssd/dchen/_shared/BOARD_FORMAT.md</span></h2>
+  return `<div class="card"><h2>记录检查 <span class="meta">${items.length} 条 · 写记录的会话可以按这里修，修好后约 1 分钟消失 · 格式见 skill research-board 的 references/board-format.md</span></h2>
     <div class="scroll"><table class="mt" style="margin:4px 8px 8px">${items.map(([w, t]) => `<tr><td><code>${esc(w)}</code></td><td style="white-space:normal">${esc(t)}</td></tr>`).join('')}</table></div></div>`;
 }
 
@@ -1710,7 +1710,7 @@ function tabDocs(d, r) {
     ...sel.replaces.map(x => { const o = all.find(y => y.replacedBy === sel && (y.id === x || y.file === x || y.file.endsWith('/' + x.replace(/\.md$/, '') + '.md')));
       return o ? `取代了 <a href="${plink(name, 'docs', o.id, qs)}">${esc(o.title)}</a>` : `取代了 ${esc(x)}`; })].filter(Boolean);
   return `<div class="md2"><div class="list">${filters}<div class="items">${items || '<div class="empty">没有符合条件的文档。</div>'}</div>
-      <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），图解写在 &lt;meta name="about"&gt; 里，这里就按流程归类，格式见 BOARD_FORMAT.md。</div></div>
+      <div class="pad small">文档开头写 about（属于哪一步）和 kind（类型），图解写在 &lt;meta name="about"&gt; 里，这里就按流程归类，格式见 skill research-board 的 references/board-format.md。</div></div>
     <div class="detail"><h2>${esc(sel.title)} ${sel.kind ? `<span class="tag2">${esc(sel.kind)}</span>` : ''}${docBadge(sel)}</h2>
       <div class="dmeta"><span>属于：${sel.about && placeLabel(d, sel.about) ? `<a href="${refHref(d, sel.about)}">${esc(stage)}</a>` : sel.about ? '找不到 ' + esc(sel.about) : '整个项目'}</span>
         <span>${esc(sel.file)}</span>${sel.figure ? `<span>${sizeText(sel.size)}</span>` : ''}<span>${B.ago(sel.mtime, d.now)}更新</span>${rel.map(x => `<span>${x}</span>`).join('')}</div>

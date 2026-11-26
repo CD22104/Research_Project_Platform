@@ -2,7 +2,9 @@
 // Everything lives under `Board` so page scripts can keep their own short names.
 const Board = (() => {
   // Platform name shown in the top bar and page titles; the only place to rename it.
-  const APP_NAME = 'CD的研究控制台';
+  // what the configuration says (served as /site.js); a page without it (the unit test) still works
+  const SITE_ = typeof SITE === 'object' && SITE ? SITE : {name: '研究控制台', servers: [], short: {}};
+  const APP_NAME = SITE_.name || '研究控制台';
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
@@ -479,7 +481,8 @@ const Board = (() => {
     .filter(s => s.status === 'ok').reduce((n, s) => n + (s.gpus || []).filter(isFree).length, 0);
 
   // display order of servers: h200, h100, a100, then the 6k machines (the user rarely uses those)
-  const serverRank = name => { const n = String(name); const i = ['h200', 'h100', 'a100'].findIndex(k => n.includes(k)); return i < 0 ? 3 : i; };
+  // servers in the order the configuration lists them; unknown ones after, by name
+  const serverRank = name => { const i = (SITE_.servers || []).indexOf(String(name)); return i < 0 ? 1e6 : i; };
   const sortServers = list => [...(list || [])].sort((a, b) => serverRank(a.name) - serverRank(b.name) || String(a.name).localeCompare(String(b.name)));
 
   // ---- the runs page: a table of runs, sortable, and a cross table of settings × settings
@@ -554,7 +557,7 @@ const Board = (() => {
       best: v => fin(v) && !!dir && span > 0 && v === (dir === 'higher' ? max : min)};
   }
 
-  return {APP_NAME, FREE_MB, isFree, freeCount, serverRank, sortServers, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
+  return {APP_NAME, SITE: SITE_, FREE_MB, isFree, freeCount, serverRank, sortServers, esc, span, ago, when, day, tone, pill, livePill, num, short, inline, md, splitFull, firstSentence, chart,
     flatten, groupValues, hasNumber, metricGroups, parseDisplay, arrangeGroups, runsOnGpu, projectUrl, kvTable, bestRun, events, foldEvents, bars, setupIndex, roadmapTree, flowLayout,
     valueText, settingColumns, sortRows, pivot, scale};
 })();

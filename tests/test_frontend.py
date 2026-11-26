@@ -45,14 +45,14 @@ def start_server(repo, tmp, prepare=None):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    cfg = os.path.join(tmp, "servers.json")
+    cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as f:  # no "socket": plain 127.0.0.1 port, fixtures only
-        json.dump({"port": port, "servers": [], "projects_root": root, "projects_interval_seconds": 3600,
-                   "state_dir": os.path.join(tmp, "state"), "sessions": {"enabled": False}}, f)
+        json.dump({"projects_root": root, "servers": [], "state_dir": os.path.join(tmp, "state"), "sessions": {"enabled": False},
+                   "console": {"name": "CD的研究控制台", "port": port, "projects_interval_seconds": 3600}}, f)
     base = "http://127.0.0.1:%d/" % port
     log = open(os.path.join(tmp, "server.log"), "w")
     proc = subprocess.Popen([sys.executable, os.path.join(repo, "platform", "server.py")],
-                            env=dict(os.environ, GPUBOARD_CONFIG=cfg), stdout=log, stderr=log)
+                            env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg), stdout=log, stderr=log)
     for _ in range(100):
         try:
             with urllib.request.urlopen(base + "api/projects", timeout=2) as r:
@@ -255,7 +255,7 @@ class Pages(unittest.TestCase):
         for k, (dom, errors) in self.pages.items():
             with self.subTest(route=k):
                 self.assertEqual(errors, [])
-                self.assertEqual(len(re.findall(r"<script\b", dom)), 5)  # common.js + work.js + design.js + home.js + app.js only
+                self.assertEqual(len(re.findall(r"<script\b", dom)), 6)  # site.js + common.js + work.js + design.js + home.js + app.js only
 
     def test_sidebar_and_titles(self):
         d = self.pages["p_overview"][0]
@@ -573,7 +573,7 @@ class Pages(unittest.TestCase):
         self.assertEqual(len(re.findall(r'<a class="pcard"', ov)), 3)
         self.assertIn("等你决定 <span class=\"meta\">6 条还没回复</span>", ov)
         self.assertIn('<a class="ig" href="#/p/demo/decisions/scale-later">采纳或不采纳 →</a>', ov)   # one line each, linking to where you reply
-        self.assertIn("没有心跳，h200 上看不到进程或连不上", ov)                          # r002: 状态未知 is stuck, not "interrupted"
+        self.assertIn("没有心跳，gpu-h200 上看不到进程或连不上", ov)                          # r002: 状态未知 is stuck, not "interrupted"
         live, _, arch = ov.partition('<details class="box ovarch" id="ov-arch">')       # archived projects are folded last
         self.assertIn("演示项目", live)
         self.assertIn("只有标题的项目", arch)

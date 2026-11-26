@@ -183,25 +183,25 @@ class TaskBegin(Base):
     def test_7_facts_pack_knows_the_conversation(self):
         text = T.brief(self.proj, session_id=self.ME)
         self.assertIn("本会话 id：%s" % self.ME, text)
-        self.assertIn("用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 /home/dchen/bin/board task-begin <任务 id> --session %s" % self.ME, text)
+        self.assertIn("用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 %s task-begin <任务 id> --session %s" % (T.BOARD, self.ME), text)
         text = T.brief(self.proj)
         self.assertNotIn("本会话 id", text)
-        self.assertIn("先运行 /home/dchen/bin/board task-begin <任务 id>，", text)
-        cfg = os.path.join(self.tmp, "servers.json")
+        self.assertIn("先运行 %s task-begin <任务 id>，" % T.BOARD, text)
+        cfg = os.path.join(self.tmp, "config.json")
         with open(cfg, "w") as f:
             json.dump({"projects_root": self.root, "servers": []}, f)
         p = subprocess.run([sys.executable, os.path.join(os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"), "boardtool.py"), "brief", "--hook"],
                            input=json.dumps({"cwd": self.proj, "session_id": self.ME}), capture_output=True, text=True,
-                           env=dict(os.environ, GPUBOARD_CONFIG=cfg), timeout=20)
+                           env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg), timeout=20)
         self.assertIn("本会话 id：%s" % self.ME, p.stdout)                          # the SessionStart hook passes it on
 
     def test_8_command_line(self):
-        cfg = os.path.join(self.tmp, "servers.json")
+        cfg = os.path.join(self.tmp, "config.json")
         with open(cfg, "w") as f:
             json.dump({"projects_root": self.root, "servers": []}, f)
         def cli(*args, cwd=self.proj):
             return subprocess.run([sys.executable, os.path.join(os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"), "boardtool.py"), "task-begin", *args],
-                                  cwd=cwd, capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=cfg), timeout=60)
+                                  cwd=cwd, capture_output=True, text=True, env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg), timeout=60)
         p = cli("write", "--session", self.ME, cwd=os.path.join(self.board, "tasks"))     # anywhere inside the project
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("可以开工：write（写作）", p.stdout)

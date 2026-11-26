@@ -40,10 +40,10 @@ class Reconcile(unittest.TestCase):
         os.makedirs(os.path.join(self.board, "tasks"))
         with open(os.path.join(self.board, "project.json"), "w") as f:
             json.dump({"title": "p"}, f)
-        self.mkrun("dead", {"status": "运行中", "server": "xtrah100", "pid": 11, "task": "train-9b"}, hb_age=900)
-        self.mkrun("alive", {"status": "运行中", "server": "xtrah100", "pid": 12, "task": "eval-9b"}, hb_age=20)
-        self.mkrun("old", {"status": "运行中", "server": "xtrah200", "tmux": "proj-old"})          # hand-written: no heartbeat
-        self.mkrun("done", {"status": "完成", "server": "xtrah100", "task": "train-9b"})
+        self.mkrun("dead", {"status": "运行中", "server": "gpu-h100", "pid": 11, "task": "train-9b"}, hb_age=900)
+        self.mkrun("alive", {"status": "运行中", "server": "gpu-h100", "pid": 12, "task": "eval-9b"}, hb_age=20)
+        self.mkrun("old", {"status": "运行中", "server": "gpu-h200", "tmux": "proj-old"})          # hand-written: no heartbeat
+        self.mkrun("done", {"status": "完成", "server": "gpu-h100", "task": "train-9b"})
         self.task("train-9b", "等运行")
         self.task("eval-9b", "等运行")
         self.task("other", "进行中")
@@ -130,9 +130,9 @@ class Helpers(unittest.TestCase):
             # pretend r1 (pid 6) is gone and every other run is alive
             return "\n".join("%s %s" % (k, "gone" if k == "r1" else "alive")
                              for k in __import__("re").findall(r"echo '(r\d+) alive'", cmd[-1]))
-        probe = T.make_probe({"xtrah100": "h100.example", "xtrah200": "down.example"}, run_cmd=fake, here="xtraa100")
-        got = probe([{"server": "xtraa100", "pid": 5}, {"server": "xtrah100", "pid": 6}, {"server": "xtrah100", "tmux": "jev-x"},
-                     {"server": "xtrah200", "pid": 7}, {"server": "xtrah100"}, {"server": "xtrah100", "tmux": "bad name; rm -rf /"},
+        probe = T.make_probe({"gpu-h100": "h100.example", "gpu-h200": "down.example"}, run_cmd=fake, here="gpu-a100")
+        got = probe([{"server": "gpu-a100", "pid": 5}, {"server": "gpu-h100", "pid": 6}, {"server": "gpu-h100", "tmux": "jev-x"},
+                     {"server": "gpu-h200", "pid": 7}, {"server": "gpu-h100"}, {"server": "gpu-h100", "tmux": "bad name; rm -rf /"},
                      {"server": "elsewhere", "pid": 3}])
         self.assertEqual(got, ["running", "absent", "running", "unreachable", None, None, None])
         self.assertEqual(sorted(c[0] if c[0] == "bash" else c[-2] for c in calls), ["bash", "down.example", "h100.example"])

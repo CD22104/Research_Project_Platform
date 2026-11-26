@@ -36,6 +36,8 @@ class Config(unittest.TestCase):
         self.assertEqual(small["tools_dir"], os.path.join(small["shared_dir"], "tools"))
         self.assertEqual((small["home_server"], small["max_task_sessions"], small["console"]["port"], small["sessions"]["enabled"]),
                          ("a", 4, 8765, True))
+        bare = C.load(self.write({"projects_root": "/p", "servers": []}, "bare.json"))        # records only, no GPU polling
+        self.assertEqual((bare["servers"], bare["home_server"]), ([], None))
 
     def test_environment_variable_wins(self):
         path = self.write({"projects_root": "/p", "servers": [{"name": "a", "host": "a.x"}]})
@@ -49,6 +51,7 @@ class Config(unittest.TestCase):
         cases = [(os.path.join(self.tmp, "nope.json"), "找不到配置文件", True),        # True: points to the example
                  (self.write("{not json", "bad.json"), "不是合法的 JSON", False),
                  (self.write({"servers": [{"name": "a", "host": "a.x"}]}, "noroot.json"), "缺少 projects_root", True),
+                 (self.write({"projects_root": "/p"}, "noservers.json"), "缺少 servers", True),
                  (self.write({"projects_root": "/p", "servers": [{"name": "a"}]}, "nohost.json"), "servers 应该是", False),
                  (self.write({"projects_root": "/p", "servers": [{"name": "a", "host": "a.x"}], "home_server": "b"}, "home.json"), "home_server「b」", False)]
         for path, words, example in cases:

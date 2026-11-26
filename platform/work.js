@@ -195,7 +195,7 @@ const handoffNext = t => { const m = String((t.sections || {})['交接'] || '').
 function tabTasks(d, r) {
   const W = work(d), name = d.name;
   if (!W.tasks.length) return `<div class="card"><h2>任务</h2><div class="empty">还没有任务卡。项目会话把一件具体的事（讨论、执行、写作、分析、审查、调试）写成 board/tasks/&lt;id&gt;.md，
-    一张卡由一个会话从头做到尾，做完写交接；这里按状态排成看板。格式见 BOARD_FORMAT.md 的「tasks/」一节。</div></div>`;
+    一张卡由一个会话从头做到尾，做完写交接；这里按状态排成看板。格式见 skill research-board 的 references/board-format.md 的「tasks/」一节。</div></div>`;
   const sel = r.item ? W.task(r.item) : null;
   const card = t => `<a class="tcard${sel === t ? ' on' : ''}" href="${plink(name, 'tasks', t.meta.id)}">
       <div class="tc1"><span class="tag2">${esc(t.meta.kind || '?')}</span><b>${esc(taskTitle(t))}</b></div>
@@ -353,6 +353,6 @@ function tabUpkeep(d) {
     <td style="white-space:normal"><ul class="plain">${ts.map(t => `<li>${esc(t)}</li>`).join('')}</ul></td></tr>`).join('');
   return `<div class="card"><h2>记录维护 <span class="meta">${items.length} 条，${by.size} 个文件</span></h2>
     <div class="pad small">这些是记录格式上的问题，由写记录的会话修，不需要你决定。会话改 board/ 里的文件时会当场看到这些提示；
-      想一次修完，在项目会话里说「修记录检查」。格式见 /shared/ssd/dchen/_shared/BOARD_FORMAT.md。</div>
+      想一次修完，在项目会话里说「修记录检查」。格式见 skill research-board 的 references/board-format.md。</div>
     <div class="scroll"><table class="mt" style="margin:4px 8px 8px">${rows}</table></div></div>`;
 }

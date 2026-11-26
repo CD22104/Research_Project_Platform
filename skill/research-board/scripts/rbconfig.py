@@ -44,18 +44,18 @@ def load(path=None):
         raise ConfigError("配置文件 %s 不是合法的 JSON：%s" % (path, e)) from None
     if not isinstance(raw, dict):
         raise ConfigError("配置文件 %s 应该是一个 JSON 对象：%s" % (path, hint))
-    missing = [k for k in REQUIRED if not raw.get(k)]
+    missing = [k for k in REQUIRED if raw.get(k) in (None, "")]
     if missing:
         raise ConfigError("配置文件 %s 缺少 %s：%s" % (path, "、".join(missing), hint))
-    servers = raw["servers"]
+    servers = raw["servers"]   # may be empty: records only, no GPU polling
     if not (isinstance(servers, list) and all(isinstance(s, dict) and isinstance(s.get("name"), str) and s["name"]
                                               and isinstance(s.get("host"), str) and s["host"] for s in servers)):
         raise ConfigError('配置文件 %s 的 servers 应该是 [{"name": "短名", "host": "完整主机名"}, ...]' % path)
     root = _path(raw["projects_root"])
     shared = _path(raw.get("shared_dir")) or os.path.join(root, "_shared")
     names = [s["name"] for s in servers]
-    home = raw.get("home_server") or names[0]
-    if home not in names:
+    home = raw.get("home_server") or (names[0] if names else None)
+    if home is not None and home not in names:
         raise ConfigError("配置文件 %s 的 home_server「%s」不在 servers 里" % (path, home))
     console = dict(CONSOLE_DEFAULTS, **(raw.get("console") or {}))
     console["socket"] = _path(console.get("socket"))

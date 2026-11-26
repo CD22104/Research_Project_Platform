@@ -1,4 +1,4 @@
-"""board: command-line tools around the project boards (run on xtraa100; standard library only).
+"""board: command-line tools around the project boards (standard library only). Settings: rbconfig.py.
 
   board brief [DIR] [--hook]        the facts pack of the project at or above DIR (SessionStart hook)
   board check [DIR] [--file PATH] [--hook]
@@ -12,7 +12,7 @@
   board task-stop PROJECT TASK      stop it
   board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
 
-The record format is docs/board-format.md. Only `reconcile` writes into project boards, and only two
+The record format is ../references/board-format.md. Only `reconcile` writes into project boards, and only two
 things: the status of a run that is recorded as 运行中 but whose process is gone, and the status of
 a task card that waits for runs that have all ended.
 """
@@ -29,22 +29,23 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import projects as P  # noqa: E402
+import rbconfig  # noqa: E402
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))   # in the repository: skill/research-board/scripts -> root
-# until the move to rbconfig: a servers.json beside this file (the copy published to the shared disk), else the repository's
-CONFIG = os.environ.get("GPUBOARD_CONFIG") or next((p for p in (os.path.join(HERE, "servers.json"), os.path.join(REPO, "servers.json"))
-                                                    if os.path.exists(p)), os.path.join(REPO, "servers.json"))
+BOARD = os.path.join(HERE, "board")                                                   # this skill's board command
+FORMAT = os.path.join(os.path.dirname(HERE), "references", "board-format.md")         # the record format, beside it
+
 TMUX_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 PASSES = 2  # a run must look dead on this many consecutive passes before its record is changed
 
 
-def load_config(path=CONFIG):
-    with open(path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    root = os.path.expanduser(cfg.get("projects_root") or "/shared/ssd/dchen")
-    state = os.path.expanduser(cfg.get("state_dir") or os.path.join(REPO, "state"))
-    servers = {s["name"]: s["host"] for s in cfg.get("servers") or []}
-    return {"root": root, "state_dir": state, "servers": servers}
+def load_config(path=None):
+    """The settings this tool needs, from the one configuration file (rbconfig); also sets the claude command and
+    the limit of task sessions for this run."""
+    global CLAUDE, MAX_SESSIONS
+    cfg = rbconfig.load(path)
+    CLAUDE, MAX_SESSIONS = cfg["claude_bin"], cfg["max_task_sessions"]
+    return {"root": cfg["projects_root"], "state_dir": cfg["state_dir"],
+            "servers": {s["name"]: s["host"] for s in cfg["servers"]}}
 
 
 def utc(ts):
@@ -358,9 +359,9 @@ def brief(project_dir, max_chars=6000, now=None, session_id=None):
 
     sections.append(("提醒", [
         "- 用户在对话里说的长期有效的话（要求、偏好、定下的做法），记成 board/decisions/ 里的「候选」，告诉用户「已记下，等你在控制台采纳」。",
-        "- 一件具体的事开工前写任务卡（board/tasks/），做完写交接；实验最上面写「一页纸」。格式：/shared/ssd/dchen/_shared/BOARD_FORMAT.md。",
-        "- 用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 /home/dchen/bin/board task-begin <任务 id>%s，"
-        "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (" --session " + sid if sid else ""),
+        "- 一件具体的事开工前写任务卡（board/tasks/），做完写交接；实验最上面写「一页纸」。格式：%s。" % FORMAT,
+        "- 用户说「做 <任务 id>」：这个对话就是那张卡的任务会话。先运行 %s task-begin <任务 id>%s，"
+        "照它打印的步骤做；它拒绝时把原因告诉用户，不要绕过。" % (BOARD, " --session " + sid if sid else ""),
         "- 讨论或更新方案时，把用到的、建议用户读的论文记进 board/papers.jsonl，写明为什么读（why）；"
         "亲自打开链接、核对过标题才写 checked。用户在控制台勾「读过」。",
         "- 实验（attempts）字段区写 title（中文短名，不超过 20 字）和 method（检验或改的是方法里的哪一步）；用户确认的结论改变了某一步的做法时，同步改 method/ 里那一步。",
@@ -439,16 +440,16 @@ def hook_check(root):
         return 0
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(proj))
     row = lambda c: str(c["where"]).partition(" · ")[2]  # which row of the file, e.g. the paper's id
-    print("记录检查：%s 有 %d 个问题，请照格式（/shared/ssd/dchen/_shared/BOARD_FORMAT.md）改掉：\n%s"
-          % (rel, len(probs), "\n".join("- " + (row(c) + "：" if row(c) else "") + c["what"] for c in probs[:20])), file=sys.stderr)
+    print("记录检查：%s 有 %d 个问题，请照格式（%s）改掉：\n%s"
+          % (rel, len(probs), FORMAT, "\n".join("- " + (row(c) + "：" if row(c) else "") + c["what"] for c in probs[:20])), file=sys.stderr)
     return 2
 
 
 # ------------------------------------------------------------------ task sessions and the dispatcher
-MAX_SESSIONS = 4                  # task and reply sessions running at once, all projects together
+MAX_SESSIONS = 4                  # task and reply sessions running at once, all projects together (config: max_task_sessions)
 CODE_KINDS = ("执行", "调试")       # task kinds that change code: one at a time per project, in a worktree
 STARTABLE = ("待开始", "可以继续", "进行中")
-CLAUDE = os.path.expanduser("~/.local/bin/claude")
+CLAUDE = os.path.expanduser("~/.local/bin/claude")   # config: claude_bin
 SESSION_RE = re.compile(r"^(task|reply)-([A-Za-z0-9][A-Za-z0-9._-]*)$")
 
 
@@ -705,9 +706,9 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False, live=None
             running = len(busy_tasks(root, names, live))
         if running >= MAX_SESSIONS:
             break
-        prompt = ("处理回复：只处理用户在控制台勾了「直接处理」的这几条：%s。按 /shared/ssd/dchen/_shared/BOARD_FORMAT.md 的「处理回复」做："
+        prompt = ("处理回复：只处理用户在控制台勾了「直接处理」的这几条：%s。按 %s 的「处理回复」做："
                   "每条先在 todos.jsonl 追加一行 state: 已领取，做完写 done 和 result；回复有歧义或和现状冲突时不要猜，"
-                  "写 state: 受阻 和原因，并留一条待办问用户。其他回复不要动。" % "、".join(want))
+                  "写 state: 受阻 和原因，并留一条待办问用户。其他回复不要动。" % ("、".join(want), FORMAT))
         cmd = [CLAUDE, "-p", "--permission-mode", "auto", "--name", "%s·处理回复" % name, prompt]
         log = os.path.join(os.path.dirname(state_path), "dispatch-%s.log" % name)
         shell = "unset ANTHROPIC_API_KEY; %s >> %s 2>&1" % (" ".join(_q(x) for x in cmd), _q(log))
