@@ -35,6 +35,45 @@ REPLACE = {
 WORDS_FILE = os.path.expanduser("~/.config/research-board/private-words.txt")
 
 
+ID_RE = __import__("re").compile(r"^(?=.{8,})(?=.*[-_0-9])[A-Za-z0-9][A-Za-z0-9._-]*$")   # long and specific enough to be a real id
+
+
+def project_words(root):
+    """Ids from the real projects' records (attempts, tracks, versions, tasks, decisions, docs, runs, datasets,
+    methods, models): examples copied from a real project are personal too. Only ids that are long and specific
+    (8+ characters with a digit, - or _), so generic words like "train" never count."""
+    import json
+    words = set()
+    try:
+        names = [n for n in os.listdir(root) if not n.startswith((".", "_")) and os.path.isdir(os.path.join(root, n, "board"))]
+    except OSError:
+        return words
+    for n in names:
+        b = os.path.join(root, n, "board")
+        for sub in ("attempts", "tracks", "versions", "tasks", "decisions", "docs", "method"):
+            try:
+                words.update(os.path.splitext(f)[0] for f in os.listdir(os.path.join(b, sub)) if f.endswith(".md"))
+            except OSError:
+                pass
+        try:
+            with open(os.path.join(b, "todos.jsonl"), encoding="utf-8") as f:
+                words.update(json.loads(x).get("id") for x in f if x.strip().startswith("{"))
+        except (OSError, ValueError, AttributeError):
+            pass
+        try:
+            words.update(os.listdir(os.path.join(b, "runs")))
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(b, "setup.json"), encoding="utf-8") as f:
+                setup = json.load(f)
+            for k in ("datasets", "methods", "models"):
+                words.update(x.get("id") for x in setup.get(k) or [] if isinstance(x, dict) and isinstance(x.get("id"), str))
+        except (OSError, ValueError, AttributeError):
+            pass
+    return {w for w in words if isinstance(w, str) and ID_RE.match(w)}
+
+
 def private_words(cfg=None, extra=()):
     """Strings that must not appear in a shared copy. cfg: rbconfig.load() or None (then only the rest)."""
     words = set(extra)
@@ -42,6 +81,7 @@ def private_words(cfg=None, extra=()):
         for s in cfg["servers"]:
             words.update([s["name"], s["host"]])
         words.update([cfg["projects_root"], cfg["console"]["name"]])
+        words.update(project_words(cfg["projects_root"]))
         try:
             words.update(n for n in os.listdir(cfg["projects_root"])   # project folders, not files like README.md
                          if not n.startswith((".", "_")) and os.path.isdir(os.path.join(cfg["projects_root"], n)))
@@ -62,7 +102,8 @@ def private_words(cfg=None, extra=()):
 def scan(root, words, skip=()):
     """[(file, line number, word)] for every word found in the text files under root (skip: relative paths)."""
     found = []
-    pats = [(w, re.compile(re.escape(w))) for w in words]
+    edge = "A-Za-z0-9_-"   # a word counts only on its own: "run_a" is not found inside "run_ab"
+    pats = [(w, re.compile("(?<![%s])%s(?![%s])" % (edge, re.escape(w), edge))) for w in words]
     for path in sorted(glob.glob(os.path.join(root, "**", "*"), recursive=True)):
         rel = os.path.relpath(path, root)
         if not os.path.isfile(path) or rel in skip or rel.startswith(".git" + os.sep) or "__pycache__" in rel:

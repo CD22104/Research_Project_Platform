@@ -8,7 +8,7 @@ description: 在有 board/ 的项目里工作、新建/结束/暂停项目、启
 用户和几个 Claude 会话一起推进一个研究项目。项目的状态写在项目目录的 `board/` 里，不在对话里：对话随时可以换新，记录不能丢。研究控制台从 `board/` 生成项目首页（简报 + 地图）、实验流程、运行表和交叉表，用户在上面看进度、回复待办、确认结论。
 
 ## 总的做法
-1. **讨论 → 方案**：项目会话和用户讨论，写 `plan.md`、`setup.json`（实验设置）、`method/`（方法拆成步骤）。用户说的长期有效的话，当场记成 `decisions/` 里的「候选」，告诉用户「已记下」；用户在控制台采纳后生效。
+1. **讨论 → 方案**：项目会话和用户讨论，写 `plan.md`、`setup.json`（实验设置）、`method/`（方法拆成步骤）。用户说的长期有效的话，当场记成 `decisions/` 里的「候选」，告诉用户「已记下」；用户在控制台采纳后生效。只管这一次的决定写进对应的任务卡，不写成决定。
 2. **拆任务**：一件具体的事写成任务卡 `tasks/<id>.md`，由一个任务会话从头做到尾。
 3. **执行**：训练、评测、数据处理用 boardrun 启动，自己写 `runs/<运行编号>/`。
 4. **记录**：每次实验一份 `attempts/`（最上面是「一页纸」，写 `title` 和 `method`），文档 `docs/`，图解 `figures/`，数据样例 `examples/data/`，论文 `papers.jsonl`。
@@ -26,7 +26,7 @@ description: 在有 board/ 的项目里工作、新建/结束/暂停项目、启
 | 结束、放弃、暂停、恢复项目 | `references/close-or-pause-project.md` |
 | 训练、评测等长任务；占用显卡；换服务器续跑 | `references/long-runs.md` |
 | 写任务卡、开工、并行、合并、换新会话 | `references/task-sessions.md` |
-| 下载模型或数据集 | `references/shared-resources.md` |
+| 下载模型、数据集或容器镜像 | `references/shared-resources.md` |
 | 给用户讲项目、写简报、画图、请用户写预期 | `references/brief-and-map.md` |
 
 这些文件在本 skill 目录下（装在 `~/.claude/skills/research-board/` 时就是那里）。

@@ -116,7 +116,7 @@ def _probe_line(key, pid, tmux):
 
 def make_probe(servers, run_cmd=None, here=None):
     """probe(records) -> one of "running" / "absent" / "unreachable" / None per record, in order.
-    One ssh per server per call (the H100/H200 hosts refuse rapid connections); local runs need no ssh.
+    One ssh per server per call (some servers refuse rapid repeated connections); local runs need no ssh.
     None means nothing was recorded to look for (no pid, no tmux) or the server is not known.
     servers: {short name: ssh host}."""
     here = here or socket.gethostname().split(".")[0]

@@ -4,7 +4,7 @@
     with boardrun.Run(attempt="2026-11-22-warmup", kind="train", config=cfg) as run:
         for step, batch in ...:
             run.log(step, loss=loss, lr=lr)                     # curve       -> metrics.jsonl
-        run.result("authz_test_iid", accuracy=acc, n=602)        # final numbers -> run.json metrics[group]
+        run.result("test_iid", accuracy=acc, n=602)            # final numbers -> run.json metrics[group]
         run.sample(id=x.id, input=x.text, output=y, score=s)     # a few outputs -> samples.jsonl
         run.artifact("curve.png")                                 # small file copied next to run.json
         big = run.output_dir()                                    # results/<id>/: large outputs, not shown
