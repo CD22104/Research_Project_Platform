@@ -62,7 +62,7 @@ class Liveness(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         os.environ["GPUBOARD_CONFIG"] = write_config(cls.tmp, cls.tmp)
-        sys.path.insert(0, REPO)
+        sys.path.insert(0, os.path.join(REPO, "platform"))
         import server
         cls.S = server
 
@@ -111,7 +111,7 @@ class Http(unittest.TestCase):
         cfg = write_config(cls.tmp, cls.root)
         cls.sock = os.path.join(cls.tmp, "run", "t.sock")
         cls.log = open(os.path.join(cls.tmp, "server.log"), "w")
-        cls.proc = subprocess.Popen([sys.executable, os.path.join(REPO, "server.py")],
+        cls.proc = subprocess.Popen([sys.executable, os.path.join(REPO, "platform", "server.py")],
                                     env=dict(os.environ, GPUBOARD_CONFIG=cfg), stdout=cls.log, stderr=cls.log)
         deadline = time.time() + 10
         while time.time() < deadline:

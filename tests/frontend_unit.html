@@ -4,7 +4,7 @@
 <!-- Run by tests/test_frontend.py in headless Chromium; results land in #result as JSON. -->
 <div id="sandbox"></div>
 <pre id="result">not run</pre>
-<script src="../common.js"></script>
+<script src="../platform/common.js"></script>
 <script>
 const results = [];
 function check(name, cond, detail) { results.push({name, ok: !!cond, detail: cond ? '' : String(detail ?? '')}); }

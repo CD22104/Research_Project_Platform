@@ -10,7 +10,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, REPO)
+SCRIPTS = os.path.join(REPO, "skill", "research-board", "scripts")
+sys.path.insert(0, SCRIPTS)
 import boardtool as T  # noqa: E402
 
 FIXTURES = os.path.join(HERE, "fixtures", "projects")
@@ -31,7 +32,7 @@ class Base(unittest.TestCase):
 
     def hook(self, cmd, data):
         t0 = time.time()
-        p = subprocess.run([sys.executable, os.path.join(REPO, "boardtool.py"), cmd, "--hook"], input=json.dumps(data),
+        p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "boardtool.py"), cmd, "--hook"], input=json.dumps(data),
                            capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=self.cfg), timeout=20)
         return p.returncode, p.stdout, p.stderr, time.time() - t0
 
@@ -94,6 +95,18 @@ class Brief(Base):
         self.assertEqual(self.section(T.brief(self.proj), "论文").split("\n", 1)[1].strip(), "（还没有）")
 
 
+class Forwarders(Base):
+    """While crontab, ~/bin/board and the a100 hooks still call the repository root, those files forward to the skill."""
+
+    def test_root_board_and_boardtool_forward(self):
+        for cmd in (["/bin/sh", os.path.join(REPO, "board")], [sys.executable, os.path.join(REPO, "boardtool.py")]):
+            with self.subTest(cmd=cmd[-1]):
+                p = subprocess.run(cmd + ["brief", self.proj], capture_output=True, text=True, timeout=30,
+                                   env=dict(os.environ, GPUBOARD_CONFIG=self.cfg))
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("【事实包】演示项目（demo）", p.stdout)
+
+
 class Hooks(Base):
     """Agreed case 7."""
 
@@ -106,7 +119,7 @@ class Hooks(Base):
         self.assertIn("【事实包】演示项目", out)
         code, out, _, _ = self.hook("brief", {"cwd": os.path.join(FIXTURES, "demo")})   # outside projects_root
         self.assertEqual((code, out), (0, ""))
-        p = subprocess.run([sys.executable, os.path.join(REPO, "boardtool.py"), "brief", "--hook"], input="not json",
+        p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "boardtool.py"), "brief", "--hook"], input="not json",
                            capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=self.cfg))
         self.assertEqual(p.returncode, 0)                                # bad input never fails the session
 

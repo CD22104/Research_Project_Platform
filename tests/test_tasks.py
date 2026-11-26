@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"))
 import boardtool as T  # noqa: E402
 
 
@@ -190,7 +190,7 @@ class TaskBegin(Base):
         cfg = os.path.join(self.tmp, "servers.json")
         with open(cfg, "w") as f:
             json.dump({"projects_root": self.root, "servers": []}, f)
-        p = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "boardtool.py"), "brief", "--hook"],
+        p = subprocess.run([sys.executable, os.path.join(os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"), "boardtool.py"), "brief", "--hook"],
                            input=json.dumps({"cwd": self.proj, "session_id": self.ME}), capture_output=True, text=True,
                            env=dict(os.environ, GPUBOARD_CONFIG=cfg), timeout=20)
         self.assertIn("本会话 id：%s" % self.ME, p.stdout)                          # the SessionStart hook passes it on
@@ -200,7 +200,7 @@ class TaskBegin(Base):
         with open(cfg, "w") as f:
             json.dump({"projects_root": self.root, "servers": []}, f)
         def cli(*args, cwd=self.proj):
-            return subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "boardtool.py"), "task-begin", *args],
+            return subprocess.run([sys.executable, os.path.join(os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"), "boardtool.py"), "task-begin", *args],
                                   cwd=cwd, capture_output=True, text=True, env=dict(os.environ, GPUBOARD_CONFIG=cfg), timeout=60)
         p = cli("write", "--session", self.ME, cwd=os.path.join(self.board, "tasks"))     # anywhere inside the project
         self.assertEqual(p.returncode, 0, p.stderr)

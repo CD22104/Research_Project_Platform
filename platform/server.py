@@ -17,12 +17,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
-import projects
-import sessions
+HERE = os.path.dirname(os.path.abspath(__file__))      # platform/: the console and its web files
+REPO = os.path.dirname(HERE)                           # the repository; runtime files (run/, state/, server.log) live here
+sys.path[:0] = [HERE, os.path.join(REPO, "skill", "research-board", "scripts")]   # sessions.py here; projects.py is the skill's
+import projects  # noqa: E402
+import sessions  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 # GPUBOARD_CONFIG lets tests run the server against a throwaway config
-with open(os.environ.get("GPUBOARD_CONFIG") or os.path.join(HERE, "servers.json"), encoding="utf-8") as f:
+with open(os.environ.get("GPUBOARD_CONFIG") or os.path.join(REPO, "servers.json"), encoding="utf-8") as f:
     CFG = json.load(f)
 
 PORT = int(CFG.get("port", 8765))
@@ -199,7 +201,7 @@ def rc_entries():
 #   document marks    -> <project>/board/marks.jsonl (append only; 看过 / 确认, sessions may read them)
 #   paper ticks       -> the same marks.jsonl, rows with "paper" instead of "file" (读过 or null)
 #   display names     -> state/names.json here on a100 (console-only setting, not in the project)
-STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(HERE, "state"))
+STATE_DIR = os.path.expanduser(CFG.get("state_dir") or os.path.join(REPO, "state"))
 NAMES_FILE = os.path.join(STATE_DIR, "names.json")
 MAX_POST = 16 * 1024
 MAX_REPLY = 2000

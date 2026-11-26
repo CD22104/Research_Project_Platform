@@ -51,7 +51,7 @@ def start_server(repo, tmp, prepare=None):
                    "state_dir": os.path.join(tmp, "state"), "sessions": {"enabled": False}}, f)
     base = "http://127.0.0.1:%d/" % port
     log = open(os.path.join(tmp, "server.log"), "w")
-    proc = subprocess.Popen([sys.executable, os.path.join(repo, "server.py")],
+    proc = subprocess.Popen([sys.executable, os.path.join(repo, "platform", "server.py")],
                             env=dict(os.environ, GPUBOARD_CONFIG=cfg), stdout=log, stderr=log)
     for _ in range(100):
         try:
@@ -707,9 +707,9 @@ class Interactions(unittest.TestCase):
         try:
             repo = os.path.join(tmp, "repo")
             os.mkdir(repo)
-            for f in ["server.py", "projects.py", "sessions.py", "index.html", "project.html", "common.js", "work.js", "design.js", "home.js", "app.js"]:
-                shutil.copy(os.path.join(REPO, f), repo)
-            page = os.path.join(repo, "index.html")
+            for part in ("platform", "skill"):   # the console and the skill it imports
+                shutil.copytree(os.path.join(REPO, part), os.path.join(repo, part), ignore=shutil.ignore_patterns("__pycache__"))
+            page = os.path.join(repo, "platform", "index.html")
             with open(page, encoding="utf-8") as f:
                 text = f.read()
             with open(page, "w", encoding="utf-8") as f:

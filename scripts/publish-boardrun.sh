@@ -3,7 +3,7 @@
 # (same path on all servers):  uv add --editable /shared/ssd/dchen/_shared/tools/boardrun
 # The repo copy (boardrun/) is the one to edit; run the tests before publishing.
 set -euo pipefail
-SRC="$(cd "$(dirname "$0")/.." && pwd)/boardrun"
+SRC="$(cd "$(dirname "$0")/.." && pwd)/skill/research-board/scripts/boardrun"
 DST="${1:-/shared/ssd/dchen/_shared/tools/boardrun}"
 TMP="$DST.tmp.$$"
 mkdir -p "$TMP/boardrun"

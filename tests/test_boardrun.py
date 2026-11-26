@@ -15,8 +15,9 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "boardrun"))
-sys.path.insert(0, REPO)
+SCRIPTS = os.path.join(REPO, "skill", "research-board", "scripts")
+sys.path.insert(0, os.path.join(SCRIPTS, "boardrun"))
+sys.path.insert(0, SCRIPTS)
 import boardrun   # noqa: E402
 import projects   # noqa: E402
 
@@ -113,7 +114,7 @@ class Boardrun(unittest.TestCase):
         # SIGTERM (e.g. tmux kill-session, kill) in a real process
         code = ("import sys, time; sys.path.insert(0, %r); import boardrun\n"
                 "with boardrun.Run('2026-11-22-a1', run_id='term', project_dir=%r):\n"
-                "    print('ready', flush=True); time.sleep(30)\n") % (os.path.join(REPO, "boardrun"), self.proj)
+                "    print('ready', flush=True); time.sleep(30)\n") % (os.path.join(SCRIPTS, "boardrun"), self.proj)
         p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
         self.assertEqual(p.stdout.readline().strip(), "ready")
         p.send_signal(signal.SIGTERM)
@@ -211,7 +212,7 @@ class Boardrun(unittest.TestCase):
         def cli(*cmd, rid):
             p = subprocess.run([sys.executable, "-m", "boardrun", "run", "--attempt", "2026-11-22-a1", "--kind", "data",
                                 "--id", rid, "--project", self.proj, "--", *cmd],
-                               cwd=os.path.join(REPO, "boardrun"), capture_output=True, text=True)
+                               cwd=os.path.join(SCRIPTS, "boardrun"), capture_output=True, text=True)
             return p.returncode, record(os.path.join(self.proj, "board", "runs", rid))
         code, rec = cli(sys.executable, "-c", "import os; print(os.environ['BOARDRUN_ID'])", rid="ok")
         self.assertEqual((code, rec["status"], rec["kind"]), (0, "完成", "data"))

@@ -30,7 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import projects as P  # noqa: E402
 
-CONFIG = os.environ.get("GPUBOARD_CONFIG") or os.path.join(HERE, "servers.json")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))   # in the repository: skill/research-board/scripts -> root
+# until the move to rbconfig: a servers.json beside this file (the copy published to the shared disk), else the repository's
+CONFIG = os.environ.get("GPUBOARD_CONFIG") or next((p for p in (os.path.join(HERE, "servers.json"), os.path.join(REPO, "servers.json"))
+                                                    if os.path.exists(p)), os.path.join(REPO, "servers.json"))
 TMUX_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 PASSES = 2  # a run must look dead on this many consecutive passes before its record is changed
 
@@ -39,7 +42,7 @@ def load_config(path=CONFIG):
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     root = os.path.expanduser(cfg.get("projects_root") or "/shared/ssd/dchen")
-    state = os.path.expanduser(cfg.get("state_dir") or os.path.join(HERE, "state"))
+    state = os.path.expanduser(cfg.get("state_dir") or os.path.join(REPO, "state"))
     servers = {s["name"]: s["host"] for s in cfg.get("servers") or []}
     return {"root": root, "state_dir": state, "servers": servers}
 
