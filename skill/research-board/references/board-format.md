@@ -1,9 +1,9 @@
 # 进度记录格式（board/）
 
-各项目 `board/` 目录的正式格式，由「CD的研究控制台」读取展示。这是唯一的正式版本：各项目的 `board/FORMAT.md` 只写一行指向本文件，不再各自维护一份。
+各项目 `board/` 目录的正式格式，由研究控制台读取展示。这是唯一的正式版本：各项目的 `board/FORMAT.md` 只写一行指向本文件，不再各自维护一份。
 
-- 正式版：a100 上 `~/gpu-board/docs/board-format.md`，随控制台代码一起改。
-- 共享盘副本：`/shared/ssd/dchen/_shared/BOARD_FORMAT.md`，由 `scripts/publish-format.sh` 生成，不要手改。
+- 正式版：skill research-board 的 `references/board-format.md`，随 skill 一起改、一起分发。
+- 文中的「项目根目录」「共享目录」（`shared_dir`）「工具目录」（`tools_dir`）「控制台所在的机器」（`home_server`）都指个人配置文件里的值（`~/.config/research-board/config.json`，见 skill 的 `SKILL.md`）。
 
 格式还在试点，会调整；调整时先改本文件，再改控制台代码。
 
@@ -192,7 +192,7 @@ attempts 的 `status`：
 
 ## run.json
 
-**由运行自己写，不手写。** 训练、评测、数据处理脚本用记录模块 `boardrun`（共享盘 `/shared/ssd/dchen/_shared/tools/boardrun`，项目里 `uv add --editable /shared/ssd/dchen/_shared/tools/boardrun`）：
+**由运行自己写，不手写。** 训练、评测、数据处理脚本用记录模块 `boardrun`（发布在工具目录的 `boardrun`，项目里 `uv add --editable <工具目录>/boardrun`）：
 
 ```python
 import boardrun
@@ -206,7 +206,7 @@ with boardrun.Run(attempt="<尝试 id>", kind="train", config=cfg) as run:
 正常结束记「完成」，抛异常记「失败」并写明错误，Ctrl-C 或 SIGTERM 记「被中断」。服务器、卡号、进程号、tmux 会话名、commit 自动填。不是 Python 的命令：`python -m boardrun run --attempt <尝试 id> --kind eval [--task <任务 id>] -- <命令>`，按退出码记状态并写下 `exit_code`。续跑用 `resumed_from=<上一次的运行编号>`，会得到新编号。
 
 - **每次运行绑定一个提交。** 代码有未提交的改动、或者还没有任何提交时，boardrun 拒绝启动。只看代码：`board/`、`NOTES.md`、`REPORT.md`、`CLAUDE.md` 是记录，运行期间会话会一直更新它们，改了不算「有改动」。拒绝时报 `DirtyCode`（命令行退出码 3），不会留下运行目录。先提交再跑；只有调试时才加 `allow_dirty=True`（`--allow-dirty`），这时 commit 带 `-dirty`。代码在项目里的另一个仓库（例如团队仓库的克隆、`.worktrees/<任务>`）时，从那个目录里启动，记的是那个仓库的提交，并写下 `code_dir`。
-- **心跳。** 运行期间每分钟写一次 `runs/<运行编号>/heartbeat`。控制台据此区分「运行中」和「状态未知」；收尾程序（a100 上每 5 分钟一次的 `board reconcile`）对心跳停了 5 分钟以上的运行去机器上查进程（每台机器一次 ssh），连续两次都查不到才把记录改成「被中断」，并写 `closed_by: board reconcile`。只处理有心跳的运行（boardrun 启动的）：手写的记录没有心跳，进程不在也可能是跑完了没写结果，收尾程序不改它们，控制台显示「状态未知」，由会话核对后收尾。
+- **心跳。** 运行期间每分钟写一次 `runs/<运行编号>/heartbeat`。控制台据此区分「运行中」和「状态未知」；收尾程序（控制台所在的机器上每 5 分钟一次的 `board reconcile`）对心跳停了 5 分钟以上的运行去机器上查进程（每台机器一次 ssh），连续两次都查不到才把记录改成「被中断」，并写 `closed_by: board reconcile`。只处理有心跳的运行（boardrun 启动的）：手写的记录没有心跳，进程不在也可能是跑完了没写结果，收尾程序不改它们，控制台显示「状态未知」，由会话核对后收尾。
 - `task=<任务 id>`（`--task`）：这次运行属于哪张任务卡。任务卡是「等运行」时，它的运行都结束后，收尾程序把卡改成「可以继续」。
 
 运行记录了 `attempt`，尝试的 `runs` 列表就可以不写（控制台两边都认）。下面是字段说明；没接入模块的旧运行照这个格式手写。
@@ -261,7 +261,7 @@ scope: [src/eval/, scripts/eval.py]
 deliver: [每次运行的 run.json 都有 f1]
 budget: 2 卡时
 after: [data-fix]
-sessions: [jev-fraud·f1-metric]
+sessions: [demo·f1-metric]
 created: 2026-11-24
 updated: 2026-11-24T06:00:00Z
 ---
@@ -293,8 +293,8 @@ updated: 2026-11-24T06:00:00Z
 
 ### 开工、并行和合并
 
-- **开工**：项目会话写好卡后，请用户在 App 里这个项目的文件夹中新开一个对话，说「做 <任务 id>」（控制台任务卡上有「复制」按钮）。这个对话归在项目下，开场有事实包（事实包开头写着本会话 id）；它就是这张卡的任务会话，先运行 `/home/dchen/bin/board task-begin <任务 id> --session <本会话 id>`：检查能不能开工、给改代码的卡建 worktree，然后照它打印的步骤做（第一步是把本会话 id 写进卡的 `sessions`、状态改成「进行中」）。它拒绝时把原因告诉用户，不要绕过。
-- **后台开**：自动派活，或用户明确要后台开时，用 `/home/dchen/bin/board task-start <项目> <任务 id>`：在 tmux `task-<项目>-<任务 id>` 里起一个会话，名字是「<项目>·<任务 id>」，开着远程控制，在 App 的「No folder」里能找到。`board task-stop <项目> <任务 id>` 停掉它。
+- **开工**：项目会话写好卡后，请用户在 App 里这个项目的文件夹中新开一个对话，说「做 <任务 id>」（控制台任务卡上有「复制」按钮）。这个对话归在项目下，开场有事实包（事实包开头写着本会话 id）；它就是这张卡的任务会话，先运行 `<skill 目录>/scripts/board task-begin <任务 id> --session <本会话 id>`：检查能不能开工、给改代码的卡建 worktree，然后照它打印的步骤做（第一步是把本会话 id 写进卡的 `sessions`、状态改成「进行中」）。它拒绝时把原因告诉用户，不要绕过。
+- **后台开**：自动派活，或用户明确要后台开时，用 `<skill 目录>/scripts/board task-start <项目> <任务 id>`：在 tmux `task-<项目>-<任务 id>` 里起一个会话，名字是「<项目>·<任务 id>」，开着远程控制，在 App 的「No folder」里能找到。`board task-stop <项目> <任务 id>` 停掉它。
 - **上限**：所有项目加起来同时最多 4 个任务会话（项目文件夹里正在做卡的对话、后台开的会话、自动处理回复的会话都算）；一张卡同时只有一个对话在做；同一个项目同时只做一张改代码的卡（kind 是执行或调试）。超了 `task-begin` 和 `task-start` 都会拒绝并说明原因。
 - **改代码的卡**（执行、调试，且写了 `scope`）：在 `<项目>/.worktrees/<任务 id>`（分支 `task/<任务 id>`）里改和提交，不动主目录；`.worktrees/` 写进 `.git/info/exclude`，不进版本库。运行从 worktree 里启动，记的是 worktree 的提交。
 - **记录一律写主目录的 `board/`**：worktree 里也有一份 `board/`，那份不用。
@@ -369,13 +369,13 @@ decisions: [small-model-first]
 - `context`：可选，回复需要知道的背景（Markdown，两三行）：现在的情况、每个选项的后果和代价。让用户在控制台上不用翻别的记录就能回复。
 - `options`：可选，回复的选项，字符串列表，每项一句短话，例如 `["现在补（1 张卡约 20 分钟）", "先不补"]`。有选项时控制台显示成按钮。
 - `recommend`：可选，建议选哪一项，必须和 `options` 里的某一项完全相同。
-- `where`：可选，不在控制台回复时去哪里做，例如「h100 会话」。
+- `where`：可选，不在控制台回复时去哪里做，例如「另一台服务器上的会话」。
 - `created`、`done`：ISO 8601 UTC；`done` 为 `null` 表示没做完。
 - `result`：标记完成时写一句做了什么，例如「已在 h200 卡 2 启动 r012」「按回复不补，记进尝试 focal」。
 - `by`：写这条的会话；`link`：可选，控制台内部链接。
 - `state`：可选，处理回复的进度：`已领取`（会话开始处理这条）、`受阻`（处理不下去，`result` 写原因，并另留一条待办问用户）。控制台在回复旁显示。
 - 同一个 `id` 出现多行时以最后一行为准。标记完成只需追加一行 `done` 不为 `null` 的记录（带上 `result`），不改写旧行。
-- 跨项目的待办放在 `/shared/ssd/dchen/_shared/todos.jsonl`，格式相同。
+- 跨项目的待办放在共享目录的 `todos.jsonl`，格式相同。
 
 任何会话给用户留下一件要做或要决定的事，都在对应项目的 `todos.jsonl` 里追加一条；能给选项的就给选项和建议。
 
@@ -517,7 +517,7 @@ replaces: [options-v0]
 - `id`：待办的 `id`；确认尝试结论时是 `a:<尝试 id>`；采纳决定时是 `d:<决定 id>`。
 - `answer`：选中的选项（待办的某个 `options`；尝试是 成功 / 部分成功 / 失败 / 放弃；决定是 采纳 / 不采纳），没选为 `null`。
 - `text`：用户的补充说明，可以为空。
-- `mode`：可选，`"直接处理"` 表示用户勾了「直接处理」：a100 上的派活程序（`board dispatch`，每 5 分钟）会为这条起一个会话自动处理，不用等用户说「处理回复」。没有这个字段的回复照旧等用户说。
+- `mode`：可选，`"直接处理"` 表示用户勾了「直接处理」：控制台所在机器上的派活程序（`board dispatch`，每 5 分钟）会为这条起一个会话自动处理，不用等用户说「处理回复」。没有这个字段的回复照旧等用户说。
 - 同一个 `id` 有多行时以最后一行为准（用户可以在会话处理前改回复）。
 
 **处理回复**：只在用户说「处理回复」时处理（`mode` 是「直接处理」的由派活程序起的会话处理），不要自己开始。会话开始时如果有未处理的回复，提一句有几条。处理时：
