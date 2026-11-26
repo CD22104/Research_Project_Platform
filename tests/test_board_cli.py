@@ -95,18 +95,6 @@ class Brief(Base):
         self.assertEqual(self.section(T.brief(self.proj), "论文").split("\n", 1)[1].strip(), "（还没有）")
 
 
-class Forwarders(Base):
-    """While crontab, ~/bin/board and the a100 hooks still call the repository root, those files forward to the skill."""
-
-    def test_root_board_and_boardtool_forward(self):
-        for cmd in (["/bin/sh", os.path.join(REPO, "board")], [sys.executable, os.path.join(REPO, "boardtool.py")]):
-            with self.subTest(cmd=cmd[-1]):
-                p = subprocess.run(cmd + ["brief", self.proj], capture_output=True, text=True, timeout=30,
-                                   env=dict(os.environ, RESEARCH_BOARD_CONFIG=self.cfg))
-                self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertIn("【事实包】演示项目（demo）", p.stdout)
-
-
 class Hooks(Base):
     """Agreed case 7."""
 

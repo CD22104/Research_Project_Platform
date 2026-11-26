@@ -5,7 +5,7 @@ git repository with a single commit, after a scan for personal information.
   python3 scripts/export.py DEST [--words WORD ...]
 
 What is left out or replaced (they describe one person's setup): CLAUDE.md and NOTES.md (the console's own
-development notes), the forwarding files at the root, platform/design.js and platform/docs/guide.md (replaced
+development notes), platform/design.js and platform/docs/guide.md (replaced
 by short generic versions). The scan looks for: host names, the projects root, the home directory and user name,
 the console's name (from the configuration), the names of the projects under the projects root, the git author
 name and email, and any words in ~/.config/research-board/private-words.txt (one per line). If anything is found
@@ -25,7 +25,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "skill", "research-board", "scripts"))
 import rbconfig  # noqa: E402
 
-LEAVE_OUT = ["CLAUDE.md", "NOTES.md", "server.py", "boardtool.py", "board"]   # at the root only
+LEAVE_OUT = ["CLAUDE.md", "NOTES.md"]   # at the root only
 REPLACE = {
     "platform/design.js": "function pageDesign() {\n  return '<h1 class=\"pt\">设计思路</h1><div class=\"card\"><div class=\"pad\">"
                           "这套做法的设计思路见仓库的 README.md 和 skill/research-board/SKILL.md。</div></div>';\n}\n",

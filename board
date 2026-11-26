@@ -1,3 +1,0 @@
-#!/bin/sh
-# Forwarding file while ~/bin/board still links here: runs the skill's board command. Remove once ~/bin/board points to the installed skill.
-exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/boardtool.py" "$@"

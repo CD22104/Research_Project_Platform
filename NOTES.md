@@ -9,7 +9,8 @@
   - 使用说明（`platform/docs/guide.md`）和设计思路页一样算私人内容，导出时替换。
 - a100 的 `~/.config/research-board/config.json` 研究服务台已放好（sha256 9c96a588…），控制台、crontab、钩子都已经在用它（经根目录的转接文件）。
 - skill 当前版本：MANIFEST.sha256 的 sha256 = 1d96a6531f02c18fe995983ee222369dbe3fc19c756cba60883c02e2a3683a84（VERSION `2026-11-26 1d96a6531f02`）。之后改 skill 要重跑 make-manifest，版本号会变。
-- **待切换**（清单已发研究服务台）：用户看 SKILL.md 和 references（研究服务台和新规则一起给用户对照）→ 同意后研究服务台装 skill 到 6 台、其余 5 台放配置、改 crontab 和 `~/bin/board` → 用户改两台的 `settings.json` 钩子 → 我把 tmux gpuboard 改成直接跑 `platform/server.py`、删转接文件 → 用户运行推送脚本。
+- **切换已完成（2026-11-26）**：6 台装了 skill（版本 5eedb52b…）和配置（1463e586…，max_task_sessions 6），全局规则新版（3b6b67f8…）；a100、h100 钩子和 a100 的 crontab、`~/bin/board` 都改用装好的 skill；控制台直接跑 `platform/server.py`；根目录转接文件已删。共享盘 `_shared/tools/board` 没人用了，研究服务台问用户后再删。
+- （以下是切换前的计划，留作记录）**待切换**（清单已发研究服务台）：用户看 SKILL.md 和 references（研究服务台和新规则一起给用户对照）→ 同意后研究服务台装 skill 到 6 台、其余 5 台放配置、改 crontab 和 `~/bin/board` → 用户改两台的 `settings.json` 钩子 → 我把 tmux gpuboard 改成直接跑 `platform/server.py`、删转接文件 → 用户运行推送脚本。
 - 偶发失败：图解探测（`fig_probes` 为空）到现在约 30 遍全套出现 4 次，越来越常见，切换完后查。
 
 ## 方案（用户已选方案 1）：整套做法做成 skill，仓库分 platform/ 和 skill/（2026-11-25，研究服务台转来）

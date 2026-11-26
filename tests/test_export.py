@@ -69,7 +69,7 @@ class Export(unittest.TestCase):
         cfg = real_config()
         dest = os.path.join(self.tmp, "share")
         self.assertEqual(X.export(dest, cfg=cfg), 0)
-        for gone in ("CLAUDE.md", "NOTES.md", "server.py", "boardtool.py", "board"):
+        for gone in ("CLAUDE.md", "NOTES.md"):
             self.assertFalse(os.path.exists(os.path.join(dest, gone)), gone)
         for rel, text in X.REPLACE.items():
             with open(os.path.join(dest, rel), encoding="utf-8") as f:

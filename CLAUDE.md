@@ -13,7 +13,7 @@
 | `platform/` | 控制台：`server.py`（HTTP，unix socket；显卡轮询、项目扫描、会话列表、四个写接口、`/site.js`）、`sessions.py`、网页（`index.html`、`common.js`、`work.js`、`design.js`、`home.js`、`app.js`）、`docs/guide.md` |
 | `tests/` | 全部测试和夹具（不进 skill） |
 | `scripts/` | `publish-boardrun.sh`、`publish-format.sh`（目的地读配置）、`export.py`（可分享的副本） |
-| 根目录 | `README.md`、`config.example.json`；运行时文件 `run/`、`state/`、`server.log`（gitignore）；切换完成前还有转接文件 `server.py`、`boardtool.py`、`board` |
+| 根目录 | `README.md`、`config.example.json`；运行时文件 `run/`、`state/`、`server.log`（gitignore） |
 
 ## 规则
 - 这是核心代码：先给 2–3 种方案和取舍，列出要替用户定的设计决定，函数签名和关键测试给用户确认后再实现；小步改，每步说明。用户已经同意过的方案（见 NOTES.md）可以直接做。
