@@ -1,0 +1,23 @@
+{
+  "projects_root": "/shared/<you>/projects",
+  "servers": [
+    {"name": "gpu-a100", "host": "gpu-a100.example.edu"},
+    {"name": "gpu-h100", "host": "gpu-h100.example.edu"}
+  ],
+  "home_server": "gpu-a100",
+  "shared_dir": "/shared/<you>/projects/_shared",
+  "tools_dir": "/shared/<you>/projects/_shared/tools",
+  "state_dir": "~/.local/state/research-board",
+  "claude_bin": "~/.local/bin/claude",
+  "secrets_dir": "~/.config/secrets",
+  "max_task_sessions": 4,
+  "console": {
+    "name": "研究控制台",
+    "socket": "~/research-console/run/board.sock",
+    "port": 8765,
+    "interval_seconds": 30,
+    "projects_interval_seconds": 60,
+    "jump_host": null
+  },
+  "sessions": {"enabled": true, "transcripts": null, "interval_seconds": 60}
+}
