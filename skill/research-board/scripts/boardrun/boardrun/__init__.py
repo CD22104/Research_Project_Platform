@@ -16,7 +16,7 @@ While it runs, the run touches board/runs/<id>/heartbeat every minute, so the co
 live run from a dead one even when it cannot see the process. A run refuses to start from code with
 uncommitted changes (or no commit at all) unless allow_dirty=True: every run is tied to a commit.
 
-The record format is /shared/ssd/dchen/_shared/BOARD_FORMAT.md (run.json). Standard library only.
+The record format is the skill research-board's references/board-format.md (run.json). Standard library only.
 """
 import datetime
 import json

@@ -70,7 +70,7 @@ def load(path=None):
 
 
 def short_names(names):
-    """Short names for the page: the prefix all the names share is dropped (xtraa100, xtrah100 -> a100, h100).
+    """Short names for the page: the prefix all the names share is dropped (gpu-a100, gpu-h100 -> a100, h100).
     One name, or names that would become empty, are kept as they are."""
     names = list(names)
     if len(names) < 2:

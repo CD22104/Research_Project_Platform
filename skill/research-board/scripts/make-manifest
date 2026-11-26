@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Write (or check) this skill's file list: MANIFEST.sha256 and VERSION, in the skill directory.
+
+  make-manifest [SKILL_DIR]           write them (run after every change to the skill, then commit)
+  make-manifest [SKILL_DIR] --check   exit 1 and list the differences if they are out of date
+
+MANIFEST.sha256 has one line per file in `sha256sum` format ("<sha256>  <path>"), sorted by path; it leaves
+out itself, VERSION and Python caches. Its own sha256 is the skill's version id: after copying the skill to a
+machine, `sha256sum -c --quiet MANIFEST.sha256` in the skill directory checks every file, and the sha256 of
+MANIFEST.sha256 says which version is there. VERSION is "<date> <first 12 characters of that sha256>".
+"""
+import datetime
+import hashlib
+import os
+import sys
+
+SKIP_FILES = {"MANIFEST.sha256", "VERSION"}
+
+
+def files(root):
+    out = []
+    for d, dirs, names in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x != "__pycache__" and not x.startswith("."))
+        for n in names:
+            rel = os.path.relpath(os.path.join(d, n), root).replace(os.sep, "/")
+            if rel in SKIP_FILES or n.endswith(".pyc") or n.startswith("."):
+                continue
+            out.append(rel)
+    return sorted(out)
+
+
+def manifest(root):
+    lines = []
+    for rel in files(root):
+        with open(os.path.join(root, rel), "rb") as f:
+            lines.append("%s  %s\n" % (hashlib.sha256(f.read()).hexdigest(), rel))
+    return "".join(lines)
+
+
+def main(argv):
+    check = "--check" in argv
+    args = [a for a in argv if a != "--check"]
+    root = os.path.abspath(args[0] if args else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    text = manifest(root)
+    version_id = hashlib.sha256(text.encode()).hexdigest()
+    path = os.path.join(root, "MANIFEST.sha256")
+    if check:
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = f.read()
+            with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+                version = f.read().split()
+        except OSError as e:
+            print("make-manifest: %s" % e, file=sys.stderr)
+            return 1
+        if old != text:
+            have, want = set(old.splitlines()), set(text.splitlines())
+            for line in sorted(want - have):
+                print("out of date: %s" % line.split("  ", 1)[1], file=sys.stderr)
+            for line in sorted(have - want):
+                if line.split("  ", 1)[1] not in {x.split("  ", 1)[1] for x in want}:
+                    print("listed but gone: %s" % line.split("  ", 1)[1], file=sys.stderr)
+            print("make-manifest: MANIFEST.sha256 is out of date; run %s" % os.path.relpath(__file__), file=sys.stderr)
+            return 1
+        if len(version) != 2 or version[1] != version_id[:12]:
+            print("make-manifest: VERSION does not match MANIFEST.sha256", file=sys.stderr)
+            return 1
+        return 0
+    for name, content in (("MANIFEST.sha256", text), ("VERSION", "%s %s\n" % (datetime.date.today().isoformat(), version_id[:12]))):
+        tmp = os.path.join(root, name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, os.path.join(root, name))
+    print("%s  (%d files, version %s)" % (version_id, len(text.splitlines()), version_id[:12]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

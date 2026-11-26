@@ -62,7 +62,7 @@ class Config(unittest.TestCase):
                 self.assertEqual("config.example.json" in str(e.exception), example)
 
     def test_short_names(self):
-        self.assertEqual(C.short_names(["xtraa100", "xtrah100", "xtraa6k01"]), {"xtraa100": "a100", "xtrah100": "h100", "xtraa6k01": "a6k01"})
+        self.assertEqual(C.short_names(["labx-a100", "labx-h100", "labx-a6k01"]), {"labx-a100": "a100", "labx-h100": "h100", "labx-a6k01": "a6k01"})
         self.assertEqual(C.short_names(["gpu1"]), {"gpu1": "gpu1"})
         self.assertEqual(C.short_names(["node", "node2"]), {"node": "node", "node2": "2"})   # never empty
 

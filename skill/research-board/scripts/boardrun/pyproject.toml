@@ -1,7 +1,7 @@
 [project]
 name = "boardrun"
 version = "0.1.0"
-description = "A run writes its own record into the project's board/runs/<id>/ (format: /shared/ssd/dchen/_shared/BOARD_FORMAT.md)"
+description = "A run writes its own record into the project's board/runs/<id>/ (format: references/board-format.md of the skill research-board)"
 requires-python = ">=3.8"
 dependencies = []
 

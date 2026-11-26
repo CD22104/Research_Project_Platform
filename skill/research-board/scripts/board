@@ -1,3 +1,3 @@
 #!/bin/sh
 # board: tools around the project boards (see boardtool.py). Linked from ~/bin/board.
-exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/boardtool.py" "$@"
+exec /usr/bin/env python3 "$(dirname "$(readlink -f "$0")")/boardtool.py" "$@"
