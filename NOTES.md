@@ -1,6 +1,18 @@
 # 控制台开发：交接
 
-## 方案待用户选：整套做法做成 skill，仓库分 platform/ 和 skill/（2026-11-25，研究服务台转来）
+## 拆成 skill 和 platform（2026-11-26，用户选了方案 1，代码部分做完，等切换）
+- 提交 5c05927…00a8a81，测试 155 个左右全过（偶发的图解探测失败照旧）。设计见下面「方案」一节；实际做法和方案一致，几处细化：
+  - `servers` 可以是空列表（只看记录、不轮询显卡），`home_server` 这时为空。
+  - 导出用 Python（`scripts/export.py`），拷的是被 git 跟踪的文件的当前内容；扫描的词来自本机配置、项目根目录下的项目文件夹名、git 作者，另可选 `~/.config/research-board/private-words.txt`。
+  - `board` 包装脚本用 `python3 -B`，装好的 skill 里不会多出 `__pycache__`。
+  - `publish-board.sh` 停用：共享盘上那份 boardtool 要新配置，等 h100 的钩子改用装好的 skill 后就不需要了。
+  - 使用说明（`platform/docs/guide.md`）和设计思路页一样算私人内容，导出时替换。
+- a100 的 `~/.config/research-board/config.json` 研究服务台已放好（sha256 9c96a588…），控制台、crontab、钩子都已经在用它（经根目录的转接文件）。
+- skill 当前版本：MANIFEST.sha256 的 sha256 = 1d96a6531f02c18fe995983ee222369dbe3fc19c756cba60883c02e2a3683a84（VERSION `2026-11-26 1d96a6531f02`）。之后改 skill 要重跑 make-manifest，版本号会变。
+- **待切换**（清单已发研究服务台）：用户看 SKILL.md 和 references（研究服务台和新规则一起给用户对照）→ 同意后研究服务台装 skill 到 6 台、其余 5 台放配置、改 crontab 和 `~/bin/board` → 用户改两台的 `settings.json` 钩子 → 我把 tmux gpuboard 改成直接跑 `platform/server.py`、删转接文件 → 用户运行推送脚本。
+- 偶发失败：图解探测（`fig_probes` 为空）到现在约 30 遍全套出现 4 次，越来越常见，切换完后查。
+
+## 方案（用户已选方案 1）：整套做法做成 skill，仓库分 platform/ 和 skill/（2026-11-25，研究服务台转来）
 
 需求原文：`~/desk/requests/2026-11-25-skill-and-repo.md`。用户已定：仓库选 A（`~/gpu-board` 里放 platform/ 和 skill/）；skill 通用、不含个人信息；个人设置集中在一个配置文件；全局规则只留原则和红线。下面是要用户选的方案，选定后再动手。
 
