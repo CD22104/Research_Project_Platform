@@ -11,6 +11,8 @@
                                     Remote Control; for the dispatcher, or when the user asks for it)
   board task-stop PROJECT TASK      stop it
   board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
+  board stop-check --hook           Stop hook: keep a session going once when it is leaving a task card without its
+                                    handoff, or board/ edits without NOTES.md (stop_check)
   board waiting [--json]            sessions on this machine waiting for a permission answer
   board waiting [--clear] --hook    Notification hook (permission_prompt): record this session as waiting;
                                     with --clear (after each tool call, prompt, turn, session end): drop the record
@@ -21,6 +23,7 @@ waits for runs that have all ended, and to-dos (ids run-failed-*) for failed run
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -958,13 +961,14 @@ def task_start(root, project, task, run=subprocess.run, model=None, live=None, e
                         "或留一条待办，由项目会话或用户来开。" % me)
     if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
         raise TaskError("没有项目 %s" % project)
-    meta, _ = read_task(board, task)
+    meta, sections = read_task(board, task)
     names = tmux_sessions(run)
     if meta.get("status") in STARTABLE:  # read the live sessions only when the card could start at all
         live = (live_sessions() or []) if live is None else live
     _check_start(root, project, task, meta, busy_tasks(root, names, live or []))
     name = task_session_name(project, task)
     workdir, worktree = _prepare_worktree(proj, task, meta, run)
+    snapshot_handoff(project, task, sections, time.time())
     prompt = task_prompt(project, task, meta.get("kind"), workdir, board, "自己的会话名「%s·%s」" % (project, task))
     cmd = [CLAUDE, "--remote-control", "%s·%s" % (project, task)] + (["--model", model] if model else []) + [prompt]
     shell = "unset ANTHROPIC_API_KEY; export %s=%s; exec %s" % (TASK_ENV, _q("%s/%s" % (project, task)), " ".join(_q(x) for x in cmd))
@@ -988,7 +992,7 @@ def task_begin(root, project, task, session_id=None, live=None, run=subprocess.r
         raise TaskError("本会话已经在做任务卡 %s，一个会话只做一张卡。要做 %s，请用户另开一个对话说「做 %s」。" % (held[1], task, task))
     if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
         raise TaskError("没有项目 %s" % project)
-    meta, _ = read_task(board, task)
+    meta, sections = read_task(board, task)
     note = None
     if live is None and meta.get("status") in STARTABLE:
         live = live_sessions()
@@ -996,6 +1000,7 @@ def task_begin(root, project, task, session_id=None, live=None, run=subprocess.r
             note = "（读不到 claude agents，同时在做的任务只按 tmux 里的会话算了。）"
     _check_start(root, project, task, meta, busy_tasks(root, tmux_sessions(run), live or []), session_id)
     workdir, worktree = _prepare_worktree(proj, task, meta, run)
+    snapshot_handoff(project, task, sections, time.time())
     me = "本会话 id「%s」" % session_id if session_id else "本会话的 id（事实包开头有）"
     steps = task_prompt(project, task, meta.get("kind"), workdir, board, me)
     if worktree:
@@ -1060,7 +1065,7 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False, live=None
                   "写 state: 受阻 和原因，并留一条待办问用户。其他回复不要动。" % ("、".join(want), FORMAT))
         cmd = [CLAUDE, "-p", "--permission-mode", "auto", "--name", "%s·处理回复" % name, prompt]
         log = os.path.join(os.path.dirname(state_path), "dispatch-%s.log" % name)
-        shell = "unset ANTHROPIC_API_KEY; %s >> %s 2>&1" % (" ".join(_q(x) for x in cmd), _q(log))
+        shell = "unset ANTHROPIC_API_KEY; export %s=%s; %s >> %s 2>&1" % (REPLY_ENV, _q(name), " ".join(_q(x) for x in cmd), _q(log))
         started.append({"project": name, "replies": want})
         if dry_run:
             continue
@@ -1076,6 +1081,207 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False, live=None
         os.makedirs(os.path.dirname(state_path), exist_ok=True)
         write_atomic(state_path, json.dumps({"taken": taken, "at": utc(now)}, ensure_ascii=False))
     return started
+
+
+# ------------------------------------------------------------------ end-of-turn check (Stop hook)
+# Stop fires at the end of every turn, not only when a session is done, so the check looks at what the turn
+# left behind: a task card moved on with the handoff of an earlier session, or work done with an untouched card;
+# board/ edited while NOTES.md (the project session's handoff) is hours old. It keeps the session going once,
+# with the reason; the session may do it or say why not. The same situation never stops it twice.
+STATE_HOME = "~/.local/state/research-board"    # this machine's hook state (never in project boards)
+REPLY_ENV = "RESEARCH_BOARD_REPLY"              # set in the sessions dispatch starts to process replies
+HANDOFF_DONE = ("完成", "等你", "可以继续", "等运行")
+NOTES_STALE = 2 * 3600                          # seconds; NOTES.md older than this after board/ edits: ask once
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+STOP_DONE = ("收尾检查：任务卡 {task}（{title}）已经是「{status}」，但交接还是接卡时的样子，这次没有更新。"
+             "结束前请在 {path} 的「## 交接」写上这次的五项：做了什么、证据在哪（文件、运行编号、提交号）、没做完的、下一步、要你决定的。"
+             "写好后简短告诉用户就可以停下。")
+STOP_WORK = ("收尾检查：本会话接手任务卡 {task}（{title}）以后{did}，但任务卡的交接还没动过。"
+             "如果这次的工作已经做完，或者要停下来等用户、等运行，先在 {path} 写交接（五项）并改状态（完成 / 等你 / 等运行）；"
+             "如果只是停下来问用户、还要接着做，回复一句「还在做」即可。")
+STOP_NOTES = ("收尾检查：本会话改过 board/（{files}），而 NOTES.md {age}。换会话时靠 NOTES.md 接上："
+              "请把这次定下的事、做到哪、下一步补进 {notes} 的交接。如果这次的改动不值得记，回复一句说明即可。")
+
+
+def _state_path(*parts):
+    return os.path.join(os.path.expanduser(STATE_HOME), *parts)
+
+
+def _load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def ts_any(s):
+    """An ISO 8601 time with or without fractions ('2026-11-27T08:59:12.345Z') -> seconds, or None."""
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def handoff_sha(sections):
+    """Fingerprint of a task card's 交接 (whitespace does not count)."""
+    return hashlib.sha256(" ".join(str((sections or {}).get("交接") or "").split()).encode("utf-8")).hexdigest()
+
+
+def _snapshot_path(project, task):
+    return _state_path("handoff", "%s--%s.json" % (project, task))
+
+
+def snapshot_handoff(project, task, sections, now):
+    """When a session takes a card (task-begin, task-start): remember its 交接 as it is, so the Stop hook can tell
+    whether this session wrote its own. A failure only means no check later."""
+    try:
+        path = _snapshot_path(project, task)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        write_atomic(path, json.dumps({"project": project, "task": task, "sha": handoff_sha(sections), "at": now}))
+    except OSError:
+        pass
+
+
+def project_dir_of(path, root):
+    """The project a path is in (a task worktree <project>/.worktrees/<task> counts as its project), or None."""
+    proj = find_project(path, root) if isinstance(path, str) and os.path.exists(path) else None
+    if proj and os.path.basename(os.path.dirname(proj)) == ".worktrees":
+        proj = find_project(os.path.dirname(os.path.dirname(proj)), root)
+    return proj
+
+
+def session_card(root, env, session_id):
+    """(project, task) of the card this session works on, whatever its status now: $RESEARCH_BOARD_TASK, else a
+    card naming the session id (one it still holds first)."""
+    proj, sep, task = str(env.get(TASK_ENV) or "").partition("/")
+    if sep and proj and task:
+        return proj, task
+    if not (isinstance(session_id, str) and SID_RE.match(session_id)):
+        return None
+    hits = sorted((meta.get("status") not in ACTIVE_CARD, key) for key, meta in _task_cards(root).items()
+                  if session_id in {str(x) for x in P._list(meta.get("sessions"))})
+    return hits[0][1] if hits else None
+
+
+def task_stop_reason(root, project, task, run=subprocess.run):
+    """(situation key, reason) when this task session must not end its turn yet, else None."""
+    snap = _load_json(_snapshot_path(project, task))
+    board = os.path.join(root, project, "board")
+    try:
+        meta, sections = read_task(board, task)
+    except TaskError:
+        return None
+    sha = handoff_sha(sections)
+    if not snap or snap.get("sha") != sha:       # taken before this check existed, or the handoff was written
+        return None
+    status, title = meta.get("status"), meta.get("title") or task
+    path = os.path.join(board, "tasks", task + ".md")
+    key = "%s/%s %s %s" % (project, task, status, sha[:16])
+    if status in HANDOFF_DONE:
+        return key, STOP_DONE.format(task=task, title=title, status=status, path=path)
+    if status != "进行中" or not isinstance(snap.get("at"), (int, float)):
+        return None
+    wt = os.path.join(root, project, ".worktrees", task)
+    ok, out = _git(wt if os.path.isdir(wt) else os.path.join(root, project), "log", "--since=" + utc(snap["at"]), "--format=%H", run=run)
+    commits = len(out.split()) if ok and out else 0
+    runs = sum(1 for _, _, rec, _ in read_runs(board) if rec.get("task") == task and (iso_ts(rec.get("started")) or 0) >= snap["at"])
+    did = "、".join(x for x in ("提交了 %d 次代码" % commits if commits else "", "启动了 %d 次运行" % runs if runs else "") if x)
+    return (key, STOP_WORK.format(task=task, title=title, did=did, path=path)) if did else None
+
+
+def board_edits(transcript, board, max_bytes=32 * 1024 * 1024):
+    """[(time or None, path)] of this session's Write/Edit/MultiEdit/NotebookEdit calls on files under board/."""
+    prefix = os.path.realpath(board) + os.sep
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - max_bytes))
+            lines = f.read().decode("utf-8", "replace").split("\n")
+    except (OSError, TypeError, ValueError):
+        return []
+    out = []
+    for line in lines:
+        if '"tool_use"' not in line or "/board/" not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        msg = row.get("message") if isinstance(row, dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for c in content if isinstance(content, list) else []:
+            inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in EDIT_TOOLS else None
+            fp = (inp.get("file_path") or inp.get("notebook_path")) if isinstance(inp, dict) else None
+            if isinstance(fp, str) and os.path.realpath(fp).startswith(prefix):
+                out.append((ts_any(row.get("timestamp")), fp))
+    return out
+
+
+def notes_stop_reason(proj, transcript, now):
+    """The reason when this session edited board/ after NOTES.md last changed and NOTES.md is older than
+    NOTES_STALE, else None."""
+    edits = board_edits(transcript, os.path.join(proj, "board"))
+    notes = os.path.join(proj, "NOTES.md")
+    try:
+        changed = os.stat(notes).st_mtime
+    except OSError:
+        changed = None
+    after = sorted({os.path.relpath(p, proj) for t, p in edits if changed is None or (t or 0) > changed})
+    if not after or (changed is not None and now - changed < NOTES_STALE):
+        return None
+    files = "%d 个文件：%s" % (len(after), "、".join(after[:3]) + ("等" if len(after) > 3 else ""))
+    age = "还不存在" if changed is None else "已经 %d 小时没更新" % int((now - changed) // 3600)
+    return STOP_NOTES.format(files=files, age=age, notes=notes)
+
+
+def stop_check(root, data, now, env=None, run=subprocess.run):
+    """The Stop hook's decision: a reason to keep the session going once (shown to the session), or None.
+    - Task session (session_card): its card is 完成 / 等你 / 可以继续 / 等运行 while the 交接 is as it was when the
+      session took the card; or the card is 进行中 and since then the session committed code or started runs with
+      the 交接 untouched. Cards taken before this check existed have no snapshot and are never checked.
+    - Any other session in a project, except reply sessions: notes_stop_reason, at most once per NOTES_STALE.
+    Never while stop_hook_active (the session already continues because of a Stop hook); never twice for the
+    same situation (STATE_HOME/stop/<session id>.json)."""
+    env = os.environ if env is None else env
+    sid = data.get("session_id")
+    if data.get("stop_hook_active") or not (isinstance(sid, str) and SID_RE.match(sid)):
+        return None
+    proj = project_dir_of(data.get("cwd"), root)
+    if not proj and not env.get(TASK_ENV):
+        return None
+    path = _state_path("stop", sid + ".json")
+    state = _load_json(path) or {}
+    seen = state.get("seen") if isinstance(state.get("seen"), dict) else {}
+    card = session_card(root, env, sid)
+    if card:
+        got = task_stop_reason(root, card[0], card[1], run=run)
+        if not got or got[0] in seen:
+            return None
+        key, reason = got
+    else:
+        last = seen.get("notes")
+        if env.get(REPLY_ENV) or not proj or (isinstance(last, (int, float)) and now - last < NOTES_STALE):
+            return None
+        key, reason = "notes", notes_stop_reason(proj, data.get("transcript_path"), now)
+        if not reason:
+            return None
+    seen[key] = now
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        write_atomic(path, json.dumps({"seen": seen}, ensure_ascii=False))
+    except OSError:
+        return None  # could not remember it: better not to stop the session than to stop it every turn
+    return reason
+
+
+def hook_stop(root):
+    """Stop: print {"decision": "block", "reason": ...} when stop_check says so; silent otherwise. Always 0."""
+    reason = stop_check(root, _hook_input(), time.time())
+    if reason:
+        print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    return 0
 
 
 # ------------------------------------------------------------------ command line
@@ -1104,11 +1310,18 @@ def main(argv=None):
     tp.add_argument("task")
     dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理")
     dp.add_argument("--dry-run", action="store_true")
+    sc = sub.add_parser("stop-check", help="Stop hook: keep a session going once when its handoff is missing")
+    sc.add_argument("--hook", action="store_true", required=True, help="read the Stop hook input on stdin; never fail")
     w = sub.add_parser("waiting", help="sessions on this machine waiting for a permission answer")
     w.add_argument("--hook", action="store_true", help="Notification hook input on stdin: record this session; never fail")
     w.add_argument("--clear", action="store_true", help="with --hook: drop this session's record")
     w.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "stop-check":
+        try:
+            return hook_stop(load_config()["root"])
+        except Exception:  # a hook must never get in the way of a session
+            return 0
     if a.cmd == "waiting":
         if a.hook:
             try:

@@ -52,6 +52,9 @@ class Base(unittest.TestCase):
         for k in (T.TASK_ENV, T.SESSION_ENV):
             os.environ.pop(k, None)
         self.tmp = tempfile.mkdtemp()
+        state = mock.patch.object(T, "STATE_HOME", os.path.join(self.tmp, "state-home"))  # taking a card writes a snapshot
+        state.start()
+        self.addCleanup(state.stop)
         self.root = os.path.join(self.tmp, "root")
         self.proj = os.path.join(self.root, "proj")
         self.board = os.path.join(self.proj, "board")
@@ -208,7 +211,8 @@ class TaskBegin(Base):
             json.dump({"projects_root": self.root, "servers": []}, f)
         def cli(*args, cwd=self.proj):
             return subprocess.run([sys.executable, os.path.join(os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"), "boardtool.py"), "task-begin", *args],
-                                  cwd=cwd, capture_output=True, text=True, env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg), timeout=60)
+                                  cwd=cwd, capture_output=True, text=True, timeout=60,
+                                  env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg, HOME=self.tmp))   # its snapshot stays in tmp
         p = cli("write", "--session", self.ME, cwd=os.path.join(self.board, "tasks"))     # anywhere inside the project
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("可以开工：write（写作）", p.stdout)
