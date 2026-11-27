@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts"))
@@ -44,6 +45,12 @@ class FakeTmux:
 
 class Base(unittest.TestCase):
     def setUp(self):
+        # the same results whether the tests run in a task session or not
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        for k in (T.TASK_ENV, T.SESSION_ENV):
+            os.environ.pop(k, None)
         self.tmp = tempfile.mkdtemp()
         self.root = os.path.join(self.tmp, "root")
         self.proj = os.path.join(self.root, "proj")
@@ -212,6 +219,64 @@ class TaskBegin(Base):
         p = cli("write", cwd=self.tmp)
         self.assertEqual(p.returncode, 1)
         self.assertIn("不在任何项目里", p.stderr)
+
+
+class Nesting(Base):
+    """11-25 item 2: sessions are at most three levels deep (project session -> task session -> subagents)."""
+    ME, OTHER = "11111111-0000-0000-0000-00000000000a", "22222222-0000-0000-0000-00000000000b"
+
+    def test_a_started_task_session_cannot_start_another(self):
+        with self.assertRaises(T.TaskError) as cm:
+            T.task_start(self.root, "proj", "write", run=FakeTmux(), live=[], env={T.TASK_ENV: "proj/code-a"})
+        self.assertEqual(str(cm.exception), "任务会话不能再开任务会话：本会话在做 proj 的任务卡 code-a。需要另开一张卡的事，"
+                                            "写进本卡交接的「下一步」或留一条待办，由项目会话或用户来开。")
+
+    def test_a_conversation_holding_a_card_cannot_either(self):
+        for status in ("进行中", "等运行", "等你", "可以继续"):
+            self.card("code-a", "执行", status, scope="[src/]", sessions=self.ME)
+            with self.assertRaisesRegex(T.TaskError, "^任务会话不能再开任务会话：本会话在做 proj 的任务卡 code-a。"):
+                T.task_start(self.root, "proj", "write", run=FakeTmux(), live=[], env={T.SESSION_ENV: self.ME})
+        self.card("code-a", "执行", "完成", scope="[src/]", sessions=self.ME)        # its card is done: no longer a task session
+        T.task_start(self.root, "proj", "write", run=FakeTmux(), live=[], env={T.SESSION_ENV: self.ME})
+
+    def test_project_sessions_and_the_dispatcher_still_can(self):
+        self.card("code-a", "执行", "进行中", scope="[src/]", sessions=self.OTHER)
+        tm = FakeTmux()
+        T.task_start(self.root, "proj", "write", run=tm, live=[], env={T.SESSION_ENV: self.ME})   # a project session
+        self.card("code-b", "调试", "待开始", scope="[src/]")
+        self.card("report", "写作", "待开始")
+        T.task_start(self.root, "proj", "report", run=tm, live=[], env={})                      # cron: no session at all
+        self.assertEqual([x["name"] for x in tm.started], ["task-proj-write", "task-proj-report"])
+
+    def test_the_started_session_knows_its_card(self):
+        tm = FakeTmux()
+        T.task_start(self.root, "proj", "write", run=tm, live=[], env={})
+        shell = tm.started[0]["shell"]
+        self.assertTrue(shell.startswith("unset ANTHROPIC_API_KEY; "))
+        head = shell.split("; exec ", 1)[0]                                  # what runs before claude starts
+        p = subprocess.run(["bash", "-c", head + "; printenv RESEARCH_BOARD_TASK"], capture_output=True, text=True)
+        self.assertEqual(p.stdout, "proj/write\n")
+
+    def test_one_card_per_conversation(self):
+        self.card("write", "写作", "进行中", sessions=self.ME)
+        with self.assertRaises(T.TaskError) as cm:
+            T.task_begin(self.root, "proj", "code-a", session_id=self.ME, live=[], run=FakeTmux(), env={})
+        self.assertEqual(str(cm.exception), "本会话已经在做任务卡 write，一个会话只做一张卡。要做 code-a，请用户另开一个对话说「做 code-a」。")
+        T.task_begin(self.root, "proj", "write", session_id=self.ME, live=[], run=FakeTmux(), env={})   # its own card again
+        with self.assertRaisesRegex(T.TaskError, "^本会话已经在做任务卡 write"):                    # a started session too
+            T.task_begin(self.root, "proj", "code-a", live=[], run=FakeTmux(), env={T.TASK_ENV: "proj/write"})
+        T.task_begin(self.root, "proj", "code-a", session_id=self.OTHER, live=[], run=FakeTmux(), env={})
+
+    def test_command_line_reads_the_environment(self):
+        self.card("write", "写作", "进行中", sessions=self.ME)
+        cfg = os.path.join(self.tmp, "config.json")
+        with open(cfg, "w") as f:
+            json.dump({"projects_root": self.root, "servers": []}, f)
+        script = os.path.join(os.path.dirname(HERE), "skill", "research-board", "scripts", "boardtool.py")
+        p = subprocess.run([sys.executable, script, "task-start", "proj", "code-a"], capture_output=True, text=True,
+                           env=dict(os.environ, RESEARCH_BOARD_CONFIG=cfg, CLAUDE_CODE_SESSION_ID=self.ME), timeout=60)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("board: 任务会话不能再开任务会话：本会话在做 proj 的任务卡 write。", p.stderr)
 
 
 class Dispatch(Base):

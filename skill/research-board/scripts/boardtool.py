@@ -663,6 +663,26 @@ CLAUDE = os.path.expanduser("~/.local/bin/claude")   # config: claude_bin
 SESSION_RE = re.compile(r"^(task|reply)-([A-Za-z0-9][A-Za-z0-9._-]*)$")
 
 
+TASK_ENV = "RESEARCH_BOARD_TASK"         # "<project>/<task>" in a session task_start started (its commands inherit it)
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"   # Claude Code gives a session's commands the session's id
+
+
+def calling_task(root, env=None, session_id=None):
+    """(project, task) when the caller is a task session, else None: a session task_start started ($RESEARCH_BOARD_TASK),
+    or a conversation whose session id (session_id, else $CLAUDE_CODE_SESSION_ID) is on a card it still holds."""
+    env = os.environ if env is None else env
+    proj, sep, task = str(env.get(TASK_ENV) or "").partition("/")
+    if sep and proj and task:
+        return proj, task
+    sid = session_id or env.get(SESSION_ENV)
+    if not (isinstance(sid, str) and SID_RE.match(sid)):
+        return None
+    for (proj, task), meta in sorted(_task_cards(root).items()):
+        if meta.get("status") in ACTIVE_CARD and sid in {str(x) for x in P._list(meta.get("sessions"))}:
+            return proj, task
+    return None
+
+
 class TaskError(Exception):
     """Why a task session was not started (shown to whoever asked)."""
 
@@ -817,11 +837,17 @@ def task_prompt(project, task, kind, workdir, board, me):
     return "\n".join(lines)
 
 
-def task_start(root, project, task, run=subprocess.run, model=None, live=None):
+def task_start(root, project, task, run=subprocess.run, model=None, live=None, env=None):
     """Start the session of one task card in the background (tmux, Remote Control). -> {"session", "dir", "worktree",
-    "name"}; raises TaskError when it must not start. live: rows of `claude agents --json` (None: read them)."""
+    "name"}; raises TaskError when it must not start, also when a task session asks (sessions are at most three
+    levels deep: project session -> task session -> subagents). live: rows of `claude agents --json` (None: read them).
+    env: the caller's environment (default os.environ)."""
     proj = os.path.join(root, project)
     board = os.path.join(proj, "board")
+    me = calling_task(root, env)
+    if me:
+        raise TaskError("任务会话不能再开任务会话：本会话在做 %s 的任务卡 %s。需要另开一张卡的事，写进本卡交接的「下一步」"
+                        "或留一条待办，由项目会话或用户来开。" % me)
     if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
         raise TaskError("没有项目 %s" % project)
     meta, _ = read_task(board, task)
@@ -833,20 +859,25 @@ def task_start(root, project, task, run=subprocess.run, model=None, live=None):
     workdir, worktree = _prepare_worktree(proj, task, meta, run)
     prompt = task_prompt(project, task, meta.get("kind"), workdir, board, "自己的会话名「%s·%s」" % (project, task))
     cmd = [CLAUDE, "--remote-control", "%s·%s" % (project, task)] + (["--model", model] if model else []) + [prompt]
-    shell = "unset ANTHROPIC_API_KEY; exec " + " ".join(_q(x) for x in cmd)
+    shell = "unset ANTHROPIC_API_KEY; export %s=%s; exec %s" % (TASK_ENV, _q("%s/%s" % (project, task)), " ".join(_q(x) for x in cmd))
     p = run(["tmux", "new-session", "-d", "-s", name, "-c", workdir, shell], capture_output=True, text=True, timeout=20)
     if p.returncode != 0:
         raise TaskError("tmux 启动失败：%s" % (p.stderr or p.stdout).strip()[-300:])
     return {"session": name, "dir": workdir, "worktree": worktree, "name": "%s·%s" % (project, task)}
 
 
-def task_begin(root, project, task, session_id=None, live=None, run=subprocess.run):
+def task_begin(root, project, task, session_id=None, live=None, run=subprocess.run, env=None):
     """The conversation the user opened in the project's folder in the App (they said 「做 <task>」) takes this card:
-    the same checks and worktree as task_start, and the same steps it would have been started with.
+    the same checks and worktree as task_start, and the same steps it would have been started with. A session
+    that still holds another card is refused (one card per session); taking its own card again is fine.
     live: rows of `claude agents --json` (None: read them; when they cannot be read only tmux sessions count).
-    -> {"workdir", "worktree", "steps"}; raises TaskError when the card must not start now."""
+    env: the caller's environment (default os.environ). -> {"workdir", "worktree", "steps"}; raises TaskError
+    when the card must not start now."""
     proj = os.path.join(root, project)
     board = os.path.join(proj, "board")
+    held = calling_task(root, env, session_id)
+    if held and held != (project, task):
+        raise TaskError("本会话已经在做任务卡 %s，一个会话只做一张卡。要做 %s，请用户另开一个对话说「做 %s」。" % (held[1], task, task))
     if not (P.valid_name(project) and os.path.isfile(os.path.join(board, "project.json"))):
         raise TaskError("没有项目 %s" % project)
     meta, _ = read_task(board, task)
