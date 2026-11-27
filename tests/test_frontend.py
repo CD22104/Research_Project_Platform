@@ -692,6 +692,25 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   sess.innerHTML = sessionRows([{id: 'aaaaaaaa-1', name: 'done', live: false, context: 200000, last_active: 100},
                                 {id: 'bbbbbbbb-2', name: 'open', live: true, status: 'idle', context: 200000, last_active: 100}], 200, false);
   out.sessions = [...sess.querySelectorAll('tr')].slice(1).map(tr => [tr.className, tr.textContent.includes('建议换新')]);
+  const keepSt = S.status, t0 = 1795600000;   // a session waiting for a permission answer on some server
+  const fakeSt = {now: t0 + 7200, servers: [{name: 'gpu-x', status: 'ok', waiting: [{session: 'abcdef12-3456', since: new Date(t0 * 1000).toISOString(),
+    pid: 1, project: 'demo', task: 'f1-metric', tmux: 'task-demo-f1-metric', what: 'Bash：<b>安装</b>依赖'}]},
+    {name: 'gpu-y', status: 'error', waiting: [{session: 'fedcba98-7654', since: new Date((t0 + 3600) * 1000).toISOString(), pid: 2, cwd: '/home/u/desk'}]}]};
+  S.status = fakeSt;
+  const ov = document.createElement('div'); ov.innerHTML = pageOverview();
+  out.wait_rows = [...ov.querySelectorAll('#waiting li')].map(li => li.textContent.replace(/\s+/g, ' ').trim());
+  out.wait_head = ov.querySelector('#waiting h2').textContent.replace(/\s+/g, ' ').trim();
+  out.wait_first = ov.firstElementChild.nextElementSibling.id;   // right under the page title
+  out.wait_link = ov.querySelector('#waiting a').getAttribute('href');
+  out.wait_bold = ov.querySelectorAll('#waiting li b').length;     // only "已等 …": the recorded text is escaped
+  out.wait_titles = [titleFor({page: 'overview'}), titleFor({page: 'todo'})];
+  const sw = document.createElement('div');
+  sw.innerHTML = sessionRows([{id: 'abcdef12-3456', name: 'w', live: true, status: 'idle', context: 1, last_active: 100}], 200, false);
+  out.wait_session = sw.textContent.includes('等批准');
+  S.status = {now: 0, servers: [{name: 'gpu-x', status: 'ok', waiting: []}]};
+  ov.innerHTML = pageOverview();
+  out.wait_none = [ov.querySelector('#waiting'), titleFor({page: 'overview'}).startsWith('(')];
+  S.status = keepSt;
   const pre =document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
 })();
 <\\/script>
@@ -735,6 +754,17 @@ class Interactions(unittest.TestCase):
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
         self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])
+        self.assertEqual(out["wait_head"], "2 个会话在等你批准 在 Claude App 里打开这个会话，批准或拒绝")
+        self.assertEqual(out["wait_rows"], [
+            "已等 2 小时 · gpu-x · 演示 · 加 F1 指标并重算旧结果 · 要「Bash：<b>安装</b>依赖」 会话 abcdef12 · tmux task-demo-f1-metric",
+            "已等 60 分钟 · gpu-y · desk 会话 fedcba98 · 这台现在连不上，这是上次看到的状态"])   # oldest first
+        self.assertEqual(out["wait_first"], "waiting")
+        self.assertEqual(out["wait_link"], "#/p/demo/tasks/f1-metric")
+        self.assertEqual(out["wait_bold"], 2)
+        self.assertTrue(out["wait_titles"][0].startswith("(2 等批准) 今天 · "), out["wait_titles"])
+        self.assertTrue(out["wait_titles"][1].startswith("(2 等批准) 待办 · "), out["wait_titles"])
+        self.assertTrue(out["wait_session"])
+        self.assertEqual(out["wait_none"], [None, False])
         self.assertEqual(out["samples_indent"], [True, ["展开（共 57 行）"]])     # indented JSON; the 50-feature record folds
         self.assertEqual(out["samples_unfold"], 57)
         self.assertEqual(out["samples_raw"], '{"id": 3, "text": "loss 曲线在第 120 步出现尖峰后恢复", "label": 1}')   # back to the line as stored

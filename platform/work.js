@@ -289,8 +289,10 @@ function tabDecisions(d, r) {
 const SESSION_BIG = 150000, SESSION_IDLE = 3 * 86400;
 function sessionRows(list, now, showProject) {
   if (!list.length) return '<div class="empty">没有会话。</div>';
+  const waits = new Set(waitingList(S.status).map(w => w.session));
   const rows = list.map(s => {
     const flags = [], big = s.live && s.context > SESSION_BIG;   // an ended session needs no advice: it is greyed instead
+    if (s.live && waits.has(s.id)) flags.push('<span class="pill t-bad" title="停在权限提问上，在 App 里打开它批准或拒绝">等批准</span>');
     if (big) flags.push('<span class="pill t-todo" title="每次调用都要把整段对话读一遍；换一个新会话，从文件里接上">上下文大，建议换新</span>');
     if (!s.live && s.last_active && now - s.last_active > SESSION_IDLE) flags.push('<span class="pill t-off">闲置超过 3 天</span>');
     if (s.project && !s.task) flags.push('<span class="pill t-other" title="没有挂在任何任务卡上">临时</span>');

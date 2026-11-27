@@ -43,9 +43,14 @@ session_watch = sessions.SessionWatch(PROJECTS_ROOT, claude_bin=CFG["claude_bin"
                                       interval=int(_sc.get("interval_seconds", 60)))
 SESSIONS_ON = _sc.get("enabled", True)
 
-# 在远端执行的只读脚本：GPU 列表 / GPU 上的进程 / 这些进程的用户
+# 在远端执行的只读脚本：等批准的会话（board waiting 写的本机状态文件，加上我的进程号，用来认出已经不在的会话）/
+# GPU 列表 / GPU 上的进程 / 这些进程的用户
 REMOTE = r"""
 echo @@@BEGIN
+echo @@@WAIT
+for f in "$HOME"/.local/state/research-board/waiting/*.json; do [ -f "$f" ] && head -c 4096 "$f" | tr -d '\n' && echo; done
+echo "@@@PIDS $(ps -o pid= -u "$(id -un)" | tr -s ' \n' '  ')"
+echo @@@ENDWAIT
 nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits || exit 3
 echo @@@
 nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits
@@ -91,6 +96,31 @@ def ssh(host, via_jump):
     return p.stdout, None
 
 
+WAIT_FIELDS = ("session", "since", "host", "pid", "cwd", "project", "task", "tmux", "what", "message")
+
+
+def parse_waiting(out):
+    """Split the waiting part off a poll's output -> (records of sessions whose Claude process is still among
+    my processes on that server, oldest first; the rest of the output). The records are what
+    `board waiting --hook` wrote there (skill boardtool.py); only their known fields are kept."""
+    head, sep, tail = out.partition("@@@WAIT\n")
+    body, sep2, rest = tail.partition("@@@ENDWAIT")
+    if not (sep and sep2):
+        return [], out
+    pids, recs = set(), []
+    for line in body.split("\n"):
+        if line.startswith("@@@PIDS"):
+            pids = {int(x) for x in line.split()[1:] if x.isdigit()}
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("session"), str) and type(r.get("pid")) is int:
+            recs.append({k: r[k][:300] if isinstance(r.get(k), str) else r.get(k) for k in WAIT_FIELDS})
+    return sorted((r for r in recs if r["pid"] in pids), key=lambda r: str(r.get("since"))), head + rest
+
+
 def parse(out):
     out = out.split("@@@BEGIN", 1)[-1]  # 丢掉登录横幅等杂项输出
     parts = (out.split("@@@") + ["", ""])[:3]
@@ -134,7 +164,8 @@ def poll(server):
         with lock:
             cur = state[name]
             if out is not None:
-                state[name] = {"name": name, "host": host, "status": "ok", "gpus": parse(out),
+                waiting, rest = parse_waiting(out)
+                state[name] = {"name": name, "host": host, "status": "ok", "gpus": parse(rest), "waiting": waiting,
                                "via": "jump" if via_jump else "direct", "updated": time.time()}
             else:
                 cur = dict(cur, status="error", error=err, failed_at=time.time())

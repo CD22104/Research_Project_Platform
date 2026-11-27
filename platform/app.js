@@ -229,7 +229,11 @@ function setMain(html) {
     po_ = keep; pn_ = from;
   });
 }
-function titleFor(r) {
+function titleFor(r) {   // with sessions waiting for a permission answer, every page's title starts "(n 等批准)"
+  const n = waitingList(S.status).length;
+  return (n ? `(${n} 等批准) ` : '') + pageTitle(r);
+}
+function pageTitle(r) {
   const app = B.APP_NAME;
   if (r.page === 'gpu') return (S.status ? `(${B.freeCount(S.status)} 空) ` : '') + app;
   if (r.page === 'todo') return `待办 · ${app}`;
@@ -281,6 +285,31 @@ function inboxItems(pj, now) {
     html: line(null, `<span class="pill t-${t.kind === 'whenever' ? 'other' : 'todo'}">${KIND[t.kind] || '待办'}</span>`, t.text, '#/todo', '回复')});
   return out.sort((a, b) => a.rank - b.rank);
 }
+// sessions waiting for a permission answer, on every server: what `board waiting --hook` recorded there, collected
+// by the GPU poll (/api/status servers[].waiting, only sessions whose process is still alive). Oldest first.
+function waitingList(st) {
+  const out = [];
+  for (const s of (st && st.servers) || [])
+    for (const w of s.waiting || []) out.push(Object.assign({}, w, {server: s.name, stale: s.status !== 'ok'}));
+  return out.sort((a, b) => String(a.since).localeCompare(String(b.since)));
+}
+function waitingBanner(st, pj) {
+  const list = waitingList(st);
+  if (!list.length) return '';
+  const now = st.now, projOf = n => ((pj && pj.projects) || []).find(p => p.name === n);
+  const rows = list.map(w => {
+    const p = w.project ? projOf(w.project) : null;
+    const t = p && w.task ? (p.tasks_open || []).find(x => x.id === w.task) : null;
+    const since = Date.parse(w.since) / 1000;
+    const where = w.project
+      ? `<a href="${w.task ? plink(w.project, 'tasks', w.task) : plink(w.project)}">${esc(p ? p.title : w.project)}${w.task ? ' · ' + esc(t ? t.title : w.task) : ''}</a>`
+      : `<span>${esc(String(w.cwd || '').split('/').filter(Boolean).pop() || '不在项目里')}</span>`;
+    return `<li><b>已等 ${isNaN(since) ? '?' : B.span(Math.max(0, now - since))}</b> · ${esc(shortHost(w.server))} · ${where}${w.what ? ` · 要「${esc(w.what)}」` : ''}
+      <div class="small">会话 ${esc(String(w.session).slice(0, 8))}${w.tmux ? ' · tmux ' + esc(w.tmux) : ''}${w.stale ? ' · 这台现在连不上，这是上次看到的状态' : ''}</div></li>`;
+  }).join('');
+  return `<div class="card waitbox" id="waiting"><h2>${list.length} 个会话在等你批准 <span class="meta">在 Claude App 里打开这个会话，批准或拒绝</span></h2>
+    <ul class="tlist">${rows}</ul></div>`;
+}
 function stuckItems(pj, now) {
   const out = [];
   for (const p of pj.projects) {
@@ -329,7 +358,7 @@ function pageOverview() {
     : `<h3 class="gh">正在推进</h3>` + (active.length ? cards(active) : '<div class="card"><div class="empty">没有进行中的项目。</div></div>') +
       (paused.length ? `<h3 class="gh">暂停 ${paused.length} 个 <span class="faint">恢复方法见「使用说明」</span></h3>` + cards(paused) : '') +
       (arch.length ? `<details class="box ovarch" id="ov-arch"><summary>已归档 ${arch.length} 个 <span class="faint">结束或放弃的项目，记录都还在</span></summary>${cards(arch)}</details>` : '');
-  return `<h1 class="pt">今天</h1>
+  return `<h1 class="pt">今天</h1>${waitingBanner(S.status, pj)}
     <div class="summary">
       <a class="stat" href="#/todo"><div class="k">等你决定</div><div class="v">${open.length}</div><div class="s">所有项目合计</div></a>
       <div class="stat"><div class="k">卡住了</div><div class="v">${stuck.length}</div><div class="s">运行状态存疑、任务等人</div></div>

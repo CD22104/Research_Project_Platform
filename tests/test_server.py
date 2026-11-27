@@ -84,6 +84,33 @@ class Liveness(unittest.TestCase):
         site = json.loads(js[len("const SITE = "):].rstrip().rstrip(";"))
         self.assertEqual((site["name"], site["servers"], site["short"]), ("实验室</script><b>", ["gpu-h200", "gpu-a100"], {"gpu-h200": "h200", "gpu-a100": "a100"}))
 
+    def test_waiting_part_of_the_poll(self):
+        """T3.7: records of live sessions only, oldest first; the GPU part reads as before; bad lines are skipped."""
+        rec = lambda sid, pid, since: json.dumps({"session": sid, "pid": pid, "since": since, "what": "Read /x", "extra": "dropped"})
+        gpu = ("@@@BEGIN\n0, GPU-a, NVIDIA A100, 100, 80000, 5, 30\n@@@\nGPU-a, 4242, 90\n@@@\n 4242 me 60 python train.py\n")
+        wait = ("@@@WAIT\n%s\n%s\n%s\nnot json\n{\"session\": 5, \"pid\": 3}\n@@@PIDS  77  4242 99 \n@@@ENDWAIT\n"
+                % (rec("new", 99, "2026-11-25T05:00:00Z"), rec("dead", 1234, "2026-11-25T01:00:00Z"), rec("old", 77, "2026-11-25T03:28:06Z")))
+        out = "Last login: somewhere\n" + gpu.replace("@@@BEGIN\n", "@@@BEGIN\n" + wait, 1)
+        waiting, rest = self.S.parse_waiting(out)
+        self.assertEqual([w["session"] for w in waiting], ["old", "new"])
+        self.assertEqual(sorted(waiting[0]), sorted(self.S.WAIT_FIELDS))
+        self.assertEqual(self.S.parse(rest), self.S.parse(gpu))
+        self.assertEqual(self.S.parse(rest)[0]["procs"][0]["pid"], 4242)
+        self.assertEqual(self.S.parse_waiting(gpu), ([], gpu))              # a server polled with the old script
+
+    def test_waiting_part_runs_for_real(self):
+        """The remote script's waiting part, run here with a made-up home: finds what board waiting writes."""
+        home = tempfile.mkdtemp(dir=self.tmp)
+        sys.path.insert(0, os.path.join(REPO, "skill", "research-board", "scripts"))
+        import boardtool
+        wdir = os.path.join(home, boardtool.WAITING_DIR[2:])
+        os.makedirs(wdir)
+        with open(os.path.join(wdir, "abcdef12-3456.json"), "w") as f:
+            json.dump({"session": "abcdef12-3456", "pid": os.getpid(), "since": "2026-11-25T03:28:06Z"}, f)
+        part = self.S.REMOTE.split("nvidia-smi", 1)[0]
+        p = subprocess.run(["bash", "-s"], input=part, capture_output=True, text=True, env=dict(os.environ, HOME=home), timeout=20)
+        self.assertEqual([w["session"] for w in self.S.parse_waiting(p.stdout)[0]], ["abcdef12-3456"])
+
     def test_cases(self):
         L, me = self.S.liveness, "me"
         run = {"server": "gpu-h200", "gpus": [2, 3], "pid": 999999}
