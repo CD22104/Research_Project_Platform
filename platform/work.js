@@ -90,10 +90,17 @@ function withTerms(html, d) {
   }).join('');
 }
 const OP_LABEL = {'想回答': '想回答', '怎么做': '怎么做', '预期': '预期', '结果': '结果', '所以': '所以'};
+// a core attempt (core: true): its runs start only with the user's expectation, or a skip with the user's reason
+function coreLine(a) {
+  const m = a.meta || {}, skip = typeof m.expect_skip === 'string' ? m.expect_skip.trim() : '';
+  if (m.core == null || m.core === 'false') return '';
+  return `<div class="opcore"><span class="pill t-todo" title="会影响方案取舍或结论的实验：开始前要有你写的预期">核心实验</span>` +
+    (skip ? ` <span class="small">预期跳过：${esc(skip)}</span>` : '') + '</div>';
+}
 function onepagerBox(a, opts = {}) {
   const op = a.onepager || {}, keys = Object.keys(OP_LABEL).filter(k => op[k]);
-  if (!keys.length) return opts.missing ? `<div class="opmiss">这次尝试还没有「一页纸」（想回答 / 怎么做 / 预期 / 结果 / 所以）。在项目会话里说「补一页纸」。</div>` : '';
-  return `<div class="onepager">${keys.map(k => `<div class="oprow op-${k}"><span class="opk">${OP_LABEL[k]}</span><div class="opv">` +
+  if (!keys.length) return opts.missing ? `${coreLine(a)}<div class="opmiss">这次尝试还没有「一页纸」（想回答 / 怎么做 / 预期 / 结果 / 所以）。在项目会话里说「补一页纸」。</div>` : '';
+  return `${coreLine(a)}<div class="onepager">${keys.map(k => `<div class="oprow op-${k}"><span class="opk">${OP_LABEL[k]}</span><div class="opv">` +
     `${B.inline(op[k].text)}${op[k].extra ? `<div class="md opx">${B.md(op[k].extra)}</div>` : ''}</div></div>`).join('')}</div>`;
 }
 

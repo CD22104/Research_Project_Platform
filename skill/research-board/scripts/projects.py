@@ -110,6 +110,26 @@ def parse_onepager(text):
     return {k: {"text": v["text"], "extra": "\n".join(v["extra"])} for k, v in out.items()}
 
 
+CORE_OPEN = ("计划中", "进行中")   # a core attempt in these needs the user's expectation before its runs start
+
+
+def core_problems(meta, onepager):
+    """A core attempt (core: true) before its runs: the user's expectation or a recorded skip (boardrun refuses
+    the run otherwise; this tells while the attempt is still being planned); core and expect_skip well written."""
+    out = []
+    core, skip = meta.get("core"), meta.get("expect_skip")
+    if core is not None and core not in ("true", "false"):
+        out.append("core 只能写 true 或 false（现在是「%s」），boardrun 按核心实验对待" % (core if isinstance(core, str) else ", ".join(core)))
+    skipped = isinstance(skip, str) and bool(skip.strip())
+    if "expect_skip" in meta and not skipped:
+        out.append("expect_skip 是空的：写用户说不写预期的原话或理由和日期，或者删掉这一行")
+    expect = ((onepager or {}).get("预期") or {}).get("text", "")
+    if core not in (None, "false") and meta.get("status") in CORE_OPEN and not skipped and (not expect or expect.startswith("用户没写")):
+        out.append("核心实验还没有用户写的预期，boardrun 不会启动它的运行：先问用户，把回答写进一页纸的「预期」；"
+                   "用户明确说不写时，在字段区加 expect_skip: <用户的原话或理由，日期>")
+    return out
+
+
 def onepager_problems(meta, onepager, has_section):
     """What is missing or too long in an attempt's 一页纸 (list of messages)."""
     if not has_section:
@@ -849,6 +869,8 @@ def check_project(d, limit=200):
         if "例子" not in (a.get("sections") or {}) and m.get("status") != "计划中":
             add(a["file"], "没有「例子」小节")
         for msg in onepager_problems(m, a.get("onepager") or {}, "一页纸" in (a.get("sections") or {})):
+            add(a["file"], msg)
+        for msg in core_problems(m, a.get("onepager") or {}):
             add(a["file"], msg)
         title = m.get("title")
         if not (isinstance(title, str) and title.strip()):

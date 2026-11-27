@@ -711,6 +711,9 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   ov.innerHTML = pageOverview();
   out.wait_none = [ov.querySelector('#waiting'), titleFor({page: 'overview'}).startsWith('(')];
   S.status = keepSt;
+  const cl = document.createElement('div');
+  cl.innerHTML = coreLine({meta: {core: 'true', expect_skip: '用户说<b>直接</b>开始'}});
+  out.core_line = [cl.textContent, cl.querySelectorAll('b').length, coreLine({meta: {core: 'false'}}), coreLine({meta: {}})];
   const pre =document.createElement('pre'); pre.id = 'clicks'; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
 })();
 <\\/script>
@@ -765,6 +768,7 @@ class Interactions(unittest.TestCase):
         self.assertTrue(out["wait_titles"][1].startswith("(2 等批准) 待办 · "), out["wait_titles"])
         self.assertTrue(out["wait_session"])
         self.assertEqual(out["wait_none"], [None, False])
+        self.assertEqual(out["core_line"], ["核心实验 预期跳过：用户说<b>直接</b>开始", 0, "", ""])
         self.assertEqual(out["samples_indent"], [True, ["展开（共 57 行）"]])     # indented JSON; the 50-feature record folds
         self.assertEqual(out["samples_unfold"], 57)
         self.assertEqual(out["samples_raw"], '{"id": 3, "text": "loss 曲线在第 120 步出现尖峰后恢复", "label": 1}')   # back to the line as stored

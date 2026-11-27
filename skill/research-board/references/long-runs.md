@@ -11,6 +11,7 @@
   - 项目里安装：`uv add --editable <工具目录>/boardrun`。
   - Python 脚本里 `with boardrun.Run(attempt=..., kind="train", config=cfg) as run:`；不是 Python 的命令用 `python -m boardrun run --attempt <id> -- <命令>`。
   - 代码要先提交：有未提交的代码改动时 boardrun 拒绝启动（`board/`、`NOTES.md`、`REPORT.md`、`CLAUDE.md` 这些记录改了不算）。
+  - 核心实验要先有预期：尝试标了 `core: true`、一页纸的「预期」却是空的或「用户没写」时，boardrun 拒绝启动，照它的提示先问用户（跳过的写法见 `board-format.md` 的「核心实验」）。
 - 非交互 ssh 下 PATH 里可能没有 `uv`、conda 等，脚本里用完整路径。
 
 ## 状态和收尾

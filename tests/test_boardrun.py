@@ -308,11 +308,11 @@ class CoreExpectation(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def attempt(self, front, expect):
+    def attempt(self, front, expect, status="计划中"):
         with open(os.path.join(self.proj, "board", "attempts", CORE + ".md"), "w", encoding="utf-8") as f:
-            f.write("---\nid: %s\ntitle: 核心实验\ntrack: null\ndate: 2026-11-27\nstatus: 计划中\n%s---\n## 一页纸\n"
-                    "- 想回答：预热能不能消掉尖峰？\n- 怎么做：加 500 步预热，和基线比。\n%s- 结果：还没出\n\n## 例子\nx\n"
-                    % (CORE, "".join(x + "\n" for x in front), "- 预期：%s\n" % expect if expect is not None else ""))
+            f.write("---\nid: %s\ntitle: 核心实验\ntrack: null\ndate: 2026-11-27\nstatus: %s\n%s---\n## 一页纸\n"
+                    "- 想回答：预热能不能消掉尖峰？\n- 怎么做：加 500 步预热，和基线比。\n%s- 结果：还没出\n- 所以：还没出\n\n## 例子\nx\n"
+                    % (CORE, status, "".join(x + "\n" for x in front), "- 预期：%s\n" % expect if expect is not None else ""))
 
     def start(self, kind="train", rid="r"):
         r = boardrun.Run(CORE, kind=kind, run_id=rid, project_dir=self.proj, heartbeat_s=0)
@@ -384,6 +384,24 @@ class CoreExpectation(unittest.TestCase):
         self.assertTrue(p.stderr.startswith("boardrun 没有启动：尝试 %s" % CORE), p.stderr)
         self.assertFalse(os.path.exists(marker))
         self.assertFalse(os.path.exists(os.path.join(self.runs, "cli")))
+
+    def test_record_check_tells_before_the_run(self):
+        """T1.10: the console and the check hook say it while the attempt is planned; finished ones are history."""
+        import boardtool
+        path = os.path.join(self.proj, "board", "attempts", CORE + ".md")
+
+        def says(front, expect, status="计划中"):
+            self.attempt(front, expect, status)
+            return [c["what"].split("：")[0].split("（")[0] for c in boardtool.check(self.proj, path)
+                    if c["what"].startswith(("核心实验", "core ", "expect_skip"))]
+        self.assertEqual(says(["core: true"], None), ["核心实验还没有用户写的预期，boardrun 不会启动它的运行"])
+        self.assertEqual(says(["core: true"], "用户没写", "进行中"), ["核心实验还没有用户写的预期，boardrun 不会启动它的运行"])
+        self.assertEqual(says(["core: 是"], None), ["core 只能写 true 或 false", "核心实验还没有用户写的预期，boardrun 不会启动它的运行"])
+        self.assertEqual(says(["core: true", "expect_skip:"], "准确率高 2 点（用户说的）"), ["expect_skip 是空的"])
+        self.assertEqual(says(["core: true", "expect_skip: 用户 11-27 说不写"], "用户没写"), [])
+        self.assertEqual(says(["core: true"], "准确率高 2 点（用户说的）"), [])
+        self.assertEqual(says(["core: true"], None, "失败"), [])             # already run: history, not a gate
+        self.assertEqual(says([], None), [])                                  # not core: no gate
 
     def test_same_reading_as_the_console(self):
         """T1.9: boardrun's own small parser and projects.py agree on 预期, core and expect_skip."""
