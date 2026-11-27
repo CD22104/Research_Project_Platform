@@ -283,5 +283,126 @@ class Boardrun(unittest.TestCase):
         self.assertEqual(rec["code_dir"], os.path.realpath(inner))
 
 
+CORE = "2026-11-27-core"
+VARIANTS = [   # ways the 一页纸 and the front matter get written; boardrun must read them as projects.py does
+    "---\nid: x\ncore: true\n---\n## 一页纸\n- 想回答：q\n- 预期：准确率高 1–3 个点（用户 11-27 说的）\n",
+    "---\nid: x\ncore: true   # 用户 11-27 定的\nexpect_skip:  \n---\n## 一页纸\n- **预期**：用户没写（2026-11-25 凌晨明确说「都做，直接开始」）\n",
+    "---\nid: x\ncore: 是\nexpect_skip: 用户 11-25 说直接开始\n---\n## 一页纸\n* 预期: **κ ≥ 0.8**\n",
+    "---\nid: x\ncore: [true]\n---\n## 一页纸\n```\n## 不是标题\n- 预期：代码块里的不算\n```\n- 预期：\n  写在下一行的不算\n",
+    "---\nid: x\n---\n## 假设\nh\n## 一页纸\n- 预期：第一处\n## 一页纸\n- 预期：第二处\n- 预期：第三行\n",
+    "## 一页纸\n- 预期：没有字段区\n",
+    "---\ncore: true\n## 一页纸\n- 预期：字段区没收尾\n",
+]
+
+
+class CoreExpectation(unittest.TestCase):
+    """Gate 1 (agreed 2026-11-27): a core attempt's run starts only with the user's expectation or a skip."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.proj = make_project(os.path.join(self.tmp, "proj"))
+        self.runs = os.path.join(self.proj, "board", "runs")
+        os.environ.pop("TMUX", None)
+        os.environ.pop("BOARD_PROJECT_DIR", None)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def attempt(self, front, expect):
+        with open(os.path.join(self.proj, "board", "attempts", CORE + ".md"), "w", encoding="utf-8") as f:
+            f.write("---\nid: %s\ntitle: 核心实验\ntrack: null\ndate: 2026-11-27\nstatus: 计划中\n%s---\n## 一页纸\n"
+                    "- 想回答：预热能不能消掉尖峰？\n- 怎么做：加 500 步预热，和基线比。\n%s- 结果：还没出\n\n## 例子\nx\n"
+                    % (CORE, "".join(x + "\n" for x in front), "- 预期：%s\n" % expect if expect is not None else ""))
+
+    def start(self, kind="train", rid="r"):
+        r = boardrun.Run(CORE, kind=kind, run_id=rid, project_dir=self.proj, heartbeat_s=0)
+        r.finish()
+        return r
+
+    def refused(self, rid="refused", kind="train"):
+        with self.assertRaises(boardrun.NoExpectation) as cm:
+            boardrun.Run(CORE, kind=kind, run_id=rid, project_dir=self.proj, heartbeat_s=0)
+        self.assertFalse(os.path.exists(os.path.join(self.runs, rid)))      # nothing written
+        return str(cm.exception)
+
+    def test_no_expectation_is_refused_with_the_steps(self):
+        """T1.1"""
+        for expect in (None, ""):
+            self.attempt(["core: true"], expect)
+            msg = self.refused()
+            self.assertTrue(msg.startswith("boardrun 没有启动：尝试 %s 标了核心实验（core: true），但一页纸的「预期」还没写。" % CORE), msg)
+            for step in ("1. 问用户：「你预计这次结果会怎样、为什么？」", "board/attempts/%s.md" % CORE,
+                         "expect_skip: <用户的原话或理由，日期>", "不要替用户写预期，也不要去掉 core 绕过。"):
+                self.assertIn(step, msg)
+
+    def test_not_written_is_refused(self):
+        """T1.2"""
+        self.attempt(["core: true"], "用户没写（2026-11-25 凌晨明确说「都做，直接开始」）")
+        self.assertIn("一页纸的「预期」写的是「用户没写」。", self.refused())
+
+    def test_an_expectation_lets_it_start(self):
+        """T1.3"""
+        self.attempt(["core: true"], "尖峰消失，准确率高 1–3 个点（用户 11-27 说的）")
+        self.assertEqual(record(self.start().dir)["status"], "完成")
+
+    def test_a_skip_needs_a_reason(self):
+        """T1.4"""
+        self.attempt(["core: true", "expect_skip: "], "用户没写")
+        self.assertIn("「预期」写的是「用户没写」，expect_skip 也是空的。", self.refused())
+        self.attempt(["core: true", "expect_skip: 用户 2026-11-27 说这次是复现，不写预期"], "用户没写（复现）")
+        self.start()
+
+    def test_only_core_attempts_are_checked(self):
+        """T1.5"""
+        for i, front in enumerate(([], ["core: false"], ["core: null"], ["core:"])):
+            self.attempt(front, None)
+            self.start(rid="r%d" % i)
+
+    def test_smoke_runs_and_runs_without_an_attempt(self):
+        """T1.6"""
+        self.attempt(["core: true"], None)
+        self.start(kind="smoke")
+        r = boardrun.Run(None, run_id="none", project_dir=self.proj, heartbeat_s=0)
+        r.finish()
+        r = boardrun.Run("2026-11-27-not-written-yet", run_id="missing", project_dir=self.proj, heartbeat_s=0)
+        r.finish()
+        self.assertIsNone(boardrun.expectation_problem(self.proj, "../../etc/passwd", "train"))
+
+    def test_an_unknown_core_value_counts_as_core(self):
+        """T1.7 (boardrun's half; the record check reports the value)"""
+        self.attempt(["core: 是"], None)
+        self.assertIn("（core: 是）", self.refused())
+
+    def test_command_line(self):
+        """T1.8: exit 4, the message on stderr, the command never runs."""
+        self.attempt(["core: true"], None)
+        marker = os.path.join(self.tmp, "ran")
+        p = subprocess.run([sys.executable, "-m", "boardrun", "run", "--attempt", CORE, "--id", "cli", "--project", self.proj,
+                            "--", sys.executable, "-c", "open(%r, 'w').close()" % marker],
+                           cwd=os.path.join(SCRIPTS, "boardrun"), capture_output=True, text=True)
+        self.assertEqual(p.returncode, 4)
+        self.assertTrue(p.stderr.startswith("boardrun 没有启动：尝试 %s" % CORE), p.stderr)
+        self.assertFalse(os.path.exists(marker))
+        self.assertFalse(os.path.exists(os.path.join(self.runs, "cli")))
+
+    def test_same_reading_as_the_console(self):
+        """T1.9: boardrun's own small parser and projects.py agree on 预期, core and expect_skip."""
+        texts = list(VARIANTS)
+        fixtures = os.path.join(HERE, "fixtures", "projects")
+        for dirpath, _, files in os.walk(fixtures):
+            for f in files if "attempts" in dirpath else []:
+                if f.endswith(".md"):
+                    with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                        texts.append(fh.read())
+        self.assertGreater(len(texts), 12)
+        for text in texts:
+            meta, body = projects.parse_front_matter(text)
+            want = (projects.parse_onepager(projects.split_sections(body).get("一页纸")).get("预期") or {}).get("text", "")
+            got_meta, got = boardrun.attempt_expectation(text)
+            self.assertEqual(got, want, text)
+            self.assertEqual((got_meta.get("core"), got_meta.get("expect_skip"), "expect_skip" in got_meta),
+                             (meta.get("core"), meta.get("expect_skip"), "expect_skip" in meta), text)
+
+
 if __name__ == "__main__":
     unittest.main()

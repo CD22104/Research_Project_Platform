@@ -15,6 +15,8 @@ Commands that are not Python:  python -m boardrun run --attempt <id> --kind eval
 While it runs, the run touches board/runs/<id>/heartbeat every minute, so the console can tell a
 live run from a dead one even when it cannot see the process. A run refuses to start from code with
 uncommitted changes (or no commit at all) unless allow_dirty=True: every run is tied to a commit.
+A run of a core attempt (core: true in the attempt's front matter) refuses to start until the attempt's
+一页纸 has the user's expectation (预期), or expect_skip says why the user skipped it (NoExpectation).
 
 The record format is the skill research-board's references/board-format.md (run.json). Standard library only.
 """
@@ -33,7 +35,8 @@ import threading
 import time
 import warnings
 
-__all__ = ["Run", "find_project", "new_id", "DirtyCode", "RUNNING", "DONE", "FAILED", "INTERRUPTED"]
+__all__ = ["Run", "find_project", "new_id", "DirtyCode", "NoExpectation", "expectation_problem",
+           "RUNNING", "DONE", "FAILED", "INTERRUPTED"]
 
 RUNNING, DONE, FAILED, INTERRUPTED = "运行中", "完成", "失败", "被中断"
 MAX_SAMPLES = 200                         # samples.jsonl rows kept per run (the console shows the first 20)
@@ -47,6 +50,103 @@ HEARTBEAT_S = 60                          # seconds between heartbeat touches
 
 class DirtyCode(RuntimeError):
     """The code has uncommitted changes (or no commit): the run would not be reproducible."""
+
+
+class NoExpectation(RuntimeError):
+    """A core attempt has neither the user's expectation in its 一页纸 nor an expect_skip with a reason."""
+
+
+# ------------------------------------------------------------ core experiments: the user's expectation first
+# The parts of the record format this check reads (references/board-format.md); boardrun stays independent of
+# the skill's projects.py, and tests/test_boardrun.py keeps the two readings the same.
+_COMMENT = re.compile(r"\s+#.*$")
+_OP_LINE = re.compile(r"^\s*[-*]?\s*\**\s*(想回答|怎么做|预期|结果|所以)\s*\**\s*[:：]\s*\**\s*(.*)$")
+NOT_WRITTEN = "用户没写"
+EXPECT_MSG = """boardrun 没有启动：尝试 {id} 标了核心实验（core: {core}），但一页纸的「预期」{how}。
+核心实验开始前要先请用户写下预期：
+1. 问用户：「你预计这次结果会怎样、为什么？」用户说猜不到时，给几个结果的选项让用户选；选不出来说明实验还没讲清楚，先讲清楚。
+2. 把用户的回答写进 board/attempts/{id}.md 一页纸的「预期」，注明是用户说的。
+3. 用户明确说这次不写预期时，在这个文件的字段区加一行 expect_skip: <用户的原话或理由，日期>，再启动。
+不要替用户写预期，也不要去掉 core 绕过。"""
+
+
+def _value(raw):
+    v = raw.strip()
+    if v in ("", "null"):
+        return None
+    if v.startswith("[") and v.endswith("]"):
+        return [x.strip() for x in v[1:-1].split(",") if x.strip()]
+    return v
+
+
+def _front_matter(text):
+    """({key: value}, body) of a record file; ({}, text) without a complete '---' block."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    for end in range(1, len(lines)):
+        if lines[end].strip() == "---":
+            break
+    else:
+        return {}, text
+    meta = {}
+    for line in lines[1:end]:
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        key, sep, val = _COMMENT.sub("", s).partition(":")
+        if sep and key.strip():
+            meta[key.strip()] = _value(val)
+    return meta, "\n".join(lines[end + 1:])
+
+
+def _section(body, title):
+    """Text under '## title' (code fences respected; the last one when it appears twice), or None."""
+    out, buf, fenced = None, None, False
+    for line in body.split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        if not fenced and line.startswith("## "):
+            if buf is not None:
+                out = "\n".join(buf).strip()
+            buf = [] if line[3:].strip() == title else None
+        elif buf is not None:
+            buf.append(line)
+    return "\n".join(buf).strip() if buf is not None else out
+
+
+def attempt_expectation(text):
+    """(front matter, first line of the 一页纸's 预期 or "") of an attempt file's text."""
+    meta, body = _front_matter(text)
+    expect = ""
+    for line in (_section(body, "一页纸") or "").split("\n"):
+        m = _OP_LINE.match(line)
+        if m and m.group(1) == "预期":
+            expect = m.group(2).strip().rstrip("*").strip()
+    return meta, expect
+
+
+def expectation_problem(project, attempt, kind):
+    """Why a run of this attempt must not start yet (the message for the session), or None.
+    Checked: attempts whose core is anything but false or empty (an unknown value counts as core). Not checked:
+    smoke runs, runs without an attempt, attempts whose file is not there (the record check reports those)."""
+    if attempt is None or kind == "smoke" or not ID_RE.match(attempt):
+        return None
+    try:
+        text = (pathlib.Path(project) / "board" / "attempts" / (attempt + ".md")).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    meta, expect = attempt_expectation(text)
+    core = meta.get("core")
+    if core is None or core == "false":
+        return None
+    skip = meta.get("expect_skip")
+    if (isinstance(skip, str) and skip.strip()) or (expect and not expect.startswith(NOT_WRITTEN)):
+        return None
+    how = "写的是「%s」" % NOT_WRITTEN if expect else "还没写"
+    if "expect_skip" in meta:
+        how += "，expect_skip 也是空的"
+    return EXPECT_MSG.format(id=attempt, core=core if isinstance(core, str) else ", ".join(core), how=how)
 
 
 def _now():
@@ -159,6 +259,9 @@ class Run:
         if not allow_dirty and (commit is None or commit.endswith("-dirty")):
             raise DirtyCode("%s: %s. Commit first so the run is tied to a commit, or pass allow_dirty=True "
                             "(--allow-dirty) for debugging." % (code, "no commit yet" if commit is None else "uncommitted changes"))
+        why = expectation_problem(self.project, attempt, kind)
+        if why:
+            raise NoExpectation(why)
         self.dir = self.project / "board" / "runs" / self.id
         self.dir.mkdir(parents=True, exist_ok=False)  # a resumed run gets a new id; never overwrite a record
         self.record = {"id": self.id, "kind": kind, "attempt": attempt, "status": RUNNING,

@@ -3,7 +3,8 @@
 
 Records a command that is not Python (or not changed to use boardrun) as a run: exit code 0 is 完成,
 any other code 失败, Ctrl-C / SIGTERM 被中断. The command sees BOARDRUN_ID and BOARDRUN_OUTPUT
-(its results/<id>/ directory). Exits with the command's exit code.
+(its results/<id>/ directory). Exits with the command's exit code; without running it, 3 when the code has
+uncommitted changes, 4 when the attempt is a core experiment without the user's expectation.
 """
 import argparse
 import json
@@ -12,7 +13,7 @@ import signal
 import subprocess
 import sys
 
-from . import DONE, FAILED, INTERRUPTED, DirtyCode, Run
+from . import DONE, FAILED, INTERRUPTED, DirtyCode, NoExpectation, Run
 
 
 def main(argv=None):
@@ -42,6 +43,9 @@ def main(argv=None):
     except DirtyCode as e:
         print("boardrun: %s" % e, file=sys.stderr)
         return 3
+    except NoExpectation as e:
+        print(e, file=sys.stderr)
+        return 4
     env = dict(os.environ, BOARDRUN_ID=run.id, BOARDRUN_OUTPUT=str(run.output_dir()))
     try:
         child = subprocess.Popen(cmd, env=env)
