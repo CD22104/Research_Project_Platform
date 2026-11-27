@@ -98,6 +98,23 @@ class Liveness(unittest.TestCase):
         self.assertEqual(self.S.parse(rest)[0]["procs"][0]["pid"], 4242)
         self.assertEqual(self.S.parse_waiting(gpu), ([], gpu))              # a server polled with the old script
 
+    def test_a_gpu_driver_failure_does_not_hide_the_waiting(self):
+        """A reachable server whose nvidia-smi fails still reports its waiting sessions; the GPU part is an error."""
+        out = ("@@@BEGIN\n@@@WAIT\n%s\n@@@PIDS 77\n@@@ENDWAIT\n@@@GPUERROR NVIDIA-SMI has failed because it couldn't communicate\n"
+               % json.dumps({"session": "abcdef12-3456", "pid": 77, "since": "2026-11-25T03:28:06Z"}))
+        waiting, rest = self.S.parse_waiting(out)
+        self.assertEqual([w["session"] for w in waiting], ["abcdef12-3456"])
+        self.assertEqual(self.S.gpu_error(rest), "nvidia-smi 出错：NVIDIA-SMI has failed because it couldn't communicate")
+        self.assertIsNone(self.S.gpu_error("@@@BEGIN\n0, GPU-a, A100, 1, 2, 3, 4\n@@@\n@@@\n"))
+        fake = tempfile.mkdtemp(dir=self.tmp)        # the remote script itself, with an nvidia-smi that fails
+        with open(os.path.join(fake, "nvidia-smi"), "w") as f:
+            f.write("#!/bin/sh\necho 'NVIDIA-SMI has failed because it could not talk to the driver'\nexit 9\n")
+        os.chmod(os.path.join(fake, "nvidia-smi"), 0o755)
+        p = subprocess.run(["bash", "-s"], input=self.S.REMOTE, capture_output=True, text=True, timeout=20,
+                           env=dict(os.environ, PATH=fake + ":" + os.environ["PATH"], HOME=fake))
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(self.S.gpu_error(self.S.parse_waiting(p.stdout)[1]), "nvidia-smi 出错：NVIDIA-SMI has failed because it could not talk to the driver")
+
     def test_waiting_part_runs_for_real(self):
         """The remote script's waiting part, run here with a made-up home: finds what board waiting writes."""
         home = tempfile.mkdtemp(dir=self.tmp)

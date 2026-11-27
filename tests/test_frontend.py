@@ -695,6 +695,7 @@ const ths = () => [...document.querySelector('#main table.runs').querySelectorAl
   const keepSt = S.status, t0 = 1795600000;   // a session waiting for a permission answer on some server
   const fakeSt = {now: t0 + 7200, servers: [{name: 'gpu-x', status: 'ok', waiting: [{session: 'abcdef12-3456', since: new Date(t0 * 1000).toISOString(),
     pid: 1, project: 'demo', task: 'f1-metric', tmux: 'task-demo-f1-metric', what: 'Bash：<b>安装</b>依赖'}]},
+    {name: 'gpu-z', status: 'error', error: 'nvidia-smi 出错：x', waiting: [{session: 'aaaabbbb-1', since: new Date((t0 + 5400) * 1000).toISOString(), pid: 3, cwd: '/w'}]},
     {name: 'gpu-y', status: 'error', waiting: [{session: 'fedcba98-7654', since: new Date((t0 + 3600) * 1000).toISOString(), pid: 2, cwd: '/home/u/desk'}]}]};
   S.status = fakeSt;
   const ov = document.createElement('div'); ov.innerHTML = pageOverview();
@@ -757,15 +758,16 @@ class Interactions(unittest.TestCase):
         self.assertTrue(out["selected"].startswith("focal-gamma1"), out["selected"])
         self.assertEqual(out["sidebar_on"], "GPU")
         self.assertEqual(out["sessions"], [["ended", False], ["ctxbig", True]])
-        self.assertEqual(out["wait_head"], "2 个会话在等你批准 在 Claude App 里打开这个会话，批准或拒绝")
+        self.assertEqual(out["wait_head"], "3 个会话在等你批准 在 Claude App 里打开这个会话，批准或拒绝")
         self.assertEqual(out["wait_rows"], [
             "已等 2 小时 · gpu-x · 演示 · 加 F1 指标并重算旧结果 · 要「Bash：<b>安装</b>依赖」 会话 abcdef12 · tmux task-demo-f1-metric",
-            "已等 60 分钟 · gpu-y · desk 会话 fedcba98 · 这台现在连不上，这是上次看到的状态"])   # oldest first
+            "已等 60 分钟 · gpu-y · desk 会话 fedcba98 · 这台现在连不上，这是上次看到的状态",
+            "已等 30 分钟 · gpu-z · w 会话 aaaabbbb"])   # oldest first; a broken GPU driver is not "unreachable"
         self.assertEqual(out["wait_first"], "waiting")
         self.assertEqual(out["wait_link"], "#/p/demo/tasks/f1-metric")
-        self.assertEqual(out["wait_bold"], 2)
-        self.assertTrue(out["wait_titles"][0].startswith("(2 等批准) 今天 · "), out["wait_titles"])
-        self.assertTrue(out["wait_titles"][1].startswith("(2 等批准) 待办 · "), out["wait_titles"])
+        self.assertEqual(out["wait_bold"], 3)
+        self.assertTrue(out["wait_titles"][0].startswith("(3 等批准) 今天 · "), out["wait_titles"])
+        self.assertTrue(out["wait_titles"][1].startswith("(3 等批准) 待办 · "), out["wait_titles"])
         self.assertTrue(out["wait_session"])
         self.assertEqual(out["wait_none"], [None, False])
         self.assertEqual(out["core_line"], ["核心实验 预期跳过：用户说<b>直接</b>开始", 0, "", ""])

@@ -51,7 +51,9 @@ echo @@@WAIT
 for f in "$HOME"/.local/state/research-board/waiting/*.json; do [ -f "$f" ] && head -c 4096 "$f" | tr -d '\n' && echo; done
 echo "@@@PIDS $(ps -o pid= -u "$(id -un)" | tr -s ' \n' '  ')"
 echo @@@ENDWAIT
-nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits || exit 3
+G=$(nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits) \
+  || { echo "@@@GPUERROR $(nvidia-smi -L 2>&1 | head -1)"; exit 0; }
+printf '%s\n' "$G"
 echo @@@
 nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits
 echo @@@
@@ -121,6 +123,14 @@ def parse_waiting(out):
     return sorted((r for r in recs if r["pid"] in pids), key=lambda r: str(r.get("since"))), head + rest
 
 
+def gpu_error(rest):
+    """The error line when nvidia-smi failed on a reachable server (the waiting part still came back), else None."""
+    for line in rest.split("\n"):
+        if line.startswith("@@@GPUERROR"):
+            return "nvidia-smi 出错：" + (line[len("@@@GPUERROR"):].strip() or "没有输出")
+    return None
+
+
 def parse(out):
     out = out.split("@@@BEGIN", 1)[-1]  # 丢掉登录横幅等杂项输出
     parts = (out.split("@@@") + ["", ""])[:3]
@@ -163,8 +173,10 @@ def poll(server):
             err = err or e
         with lock:
             cur = state[name]
-            if out is not None:
-                waiting, rest = parse_waiting(out)
+            waiting, rest = parse_waiting(out) if out is not None else (None, "")
+            if out is not None and gpu_error(rest):  # reachable, nvidia-smi failed: keep the last GPU data, show waiting
+                state[name] = dict(cur, status="error", error=gpu_error(rest), failed_at=time.time(), waiting=waiting)
+            elif out is not None:
                 state[name] = {"name": name, "host": host, "status": "ok", "gpus": parse(rest), "waiting": waiting,
                                "via": "jump" if via_jump else "direct", "updated": time.time()}
             else:

@@ -290,7 +290,7 @@ function inboxItems(pj, now) {
 function waitingList(st) {
   const out = [];
   for (const s of (st && st.servers) || [])
-    for (const w of s.waiting || []) out.push(Object.assign({}, w, {server: s.name, stale: s.status !== 'ok'}));
+    for (const w of s.waiting || []) out.push(Object.assign({}, w, {server: s.name, stale: s.status !== 'ok' && !(s.error || '').startsWith('nvidia-smi')}));
   return out.sort((a, b) => String(a.since).localeCompare(String(b.since)));
 }
 function waitingBanner(st, pj) {
