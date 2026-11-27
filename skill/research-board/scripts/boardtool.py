@@ -11,6 +11,9 @@
                                     Remote Control; for the dispatcher, or when the user asks for it)
   board task-stop PROJECT TASK      stop it
   board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
+  board waiting [--json]            sessions on this machine waiting for a permission answer
+  board waiting [--clear] --hook    Notification hook (permission_prompt): record this session as waiting;
+                                    with --clear (after each tool call, prompt, turn, session end): drop the record
 
 The record format is ../references/board-format.md. Only `reconcile` writes into project boards, and only two
 things: the status of a run that is recorded as 运行中 but whose process is gone, and the status of
@@ -25,6 +28,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -419,6 +423,10 @@ def _hook_input():
 def hook_brief(root):
     """SessionStart: print the facts pack when the session starts inside a project (nothing otherwise)."""
     data = _hook_input()
+    try:
+        list_waiting()  # a new session start is a good moment to drop the records of sessions that are gone
+    except OSError:
+        pass
     proj = find_project(data.get("cwd") or os.getcwd(), root)
     if proj:
         print(brief(proj, session_id=data.get("session_id")))
@@ -443,6 +451,208 @@ def hook_check(root):
     print("记录检查：%s 有 %d 个问题，请照格式（%s）改掉：\n%s"
           % (rel, len(probs), FORMAT, "\n".join("- " + (row(c) + "：" if row(c) else "") + c["what"] for c in probs[:20])), file=sys.stderr)
     return 2
+
+
+# ------------------------------------------------------------------ sessions waiting for a permission answer
+# The Notification hook (permission_prompt) writes one file per waiting session on this machine; hooks that
+# fire once the session moves on (a tool finished, the user wrote, the turn or the session ended) remove it.
+# The console's poll of each server lists these files. Local state only: nothing goes into project boards.
+WAITING_DIR = "~/.local/state/research-board/waiting"   # the same fixed path in scripts/board and platform/server.py
+WHAT_MAX = 120                                          # characters of "what it asks to do"
+SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{7,99}$")
+ACTIVE_CARD = ("进行中", "等运行", "等你", "可以继续")  # a card in one of these is still held by its session
+
+
+def waiting_dir():
+    return os.path.expanduser(WAITING_DIR)
+
+
+def last_tool_call(transcript, max_bytes=512 * 1024):
+    """(name, input) of the last tool call in a session transcript (JSON lines), or (None, None)."""
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - max_bytes))
+            lines = f.read().decode("utf-8", "replace").split("\n")
+    except (OSError, TypeError, ValueError):
+        return None, None
+    for line in reversed(lines):
+        if '"tool_use"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        msg = row.get("message") if isinstance(row, dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        uses = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"] if isinstance(content, list) else []
+        if uses:
+            inp = uses[-1].get("input")
+            return str(uses[-1].get("name") or "?"), inp if isinstance(inp, dict) else {}
+    return None, None
+
+
+def waiting_what(name, inp):
+    """What the session asks to do, short and safe to show: Bash only by its own description (never the
+    command), file tools by path, web tools by host, anything else by the tool's name."""
+    if not name:
+        return None
+    inp = inp if isinstance(inp, dict) else {}
+    path = next((inp[k] for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str)), None)
+    if name == "Bash":
+        d = inp.get("description")
+        text = "Bash：" + d if isinstance(d, str) and d.strip() else "Bash"
+    elif path:
+        text = "%s %s" % (name, path)
+    elif isinstance(inp.get("url"), str):
+        text = "%s %s" % (name, urllib.parse.urlsplit(inp["url"]).hostname or "?")
+    else:
+        text = name
+    text = " ".join(text.split())
+    return text if len(text) <= WHAT_MAX else text[:WHAT_MAX - 1] + "…"
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, OverflowError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _claude_pid():
+    """The Claude Code process this hook runs for: $CLAUDE_PID when set and alive, else the nearest ancestor
+    whose executable lives under a claude directory, else the parent process."""
+    v = os.environ.get("CLAUDE_PID", "")
+    if v.isdigit() and pid_alive(int(v)):
+        return int(v)
+    pid = os.getppid()
+    for _ in range(8):
+        try:
+            if "claude" in os.path.realpath("/proc/%d/exe" % pid).lower():
+                return pid
+            with open("/proc/%d/stat" % pid) as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if pid <= 1:
+            break
+    return os.getppid()
+
+
+def _tmux_name():
+    """Name of the tmux session this process runs in, or None."""
+    if not os.environ.get("TMUX"):
+        return None
+    pane = os.environ.get("TMUX_PANE")
+    try:
+        p = subprocess.run(["tmux", "display-message", "-p"] + (["-t", pane] if pane else []) + ["#S"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = p.stdout.strip()
+    return name if p.returncode == 0 and TMUX_RE.match(name) else None
+
+
+def session_cards(project_dir, refs):
+    """[(task id, status)] of the project's task cards whose sessions name any of refs (session ids or names)."""
+    refs = {r for r in refs if r}
+    d = os.path.join(project_dir, "board", "tasks")
+    out = []
+    for fn in sorted(os.listdir(d)) if refs and os.path.isdir(d) else []:
+        if not fn.endswith(".md") or fn.startswith("."):
+            continue
+        try:
+            meta, _ = P.parse_front_matter(P.read_text(os.path.join(d, fn), 16 * 1024)[0])
+        except OSError:
+            continue
+        if refs & {str(x) for x in P._list(meta.get("sessions"))}:
+            out.append((meta["id"] if isinstance(meta.get("id"), str) else fn[:-3], meta.get("status")))
+    return out
+
+
+def waiting_record(data, root=None, now=None):
+    """The state of a session that waits for a permission answer, from the Notification hook input; None
+    for any other notification, or without a usable session id."""
+    kind = data.get("notification_type")
+    msg = data.get("message") if isinstance(data.get("message"), str) else ""
+    if kind != "permission_prompt" and not (kind is None and "permission" in msg.lower()):
+        return None
+    sid = data.get("session_id")
+    if not (isinstance(sid, str) and SID_RE.match(sid)):
+        return None
+    cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else os.getcwd()
+    proj = find_project(cwd, root) if os.path.isdir(cwd) else None
+    tmux = _tmux_name()
+    task = None
+    if proj:
+        m = re.match(r"^task-%s-(.+)$" % re.escape(os.path.basename(proj)), tmux or "")
+        if m and os.path.isfile(os.path.join(proj, "board", "tasks", m.group(1) + ".md")):
+            task = m.group(1)
+        else:
+            cards = session_cards(proj, [sid])
+            task = next((t for t, s in cards if s in ACTIVE_CARD), cards[-1][0] if cards else None)
+    name, inp = last_tool_call(data.get("transcript_path"))
+    return {"session": sid, "since": utc(time.time() if now is None else now), "host": socket.gethostname().split(".")[0],
+            "pid": _claude_pid(), "cwd": cwd, "project": os.path.basename(proj) if proj else None, "task": task,
+            "tmux": tmux, "what": waiting_what(name, inp), "message": " ".join(msg.split())[:200] or None}
+
+
+def list_waiting(sweep=True):
+    """The sessions waiting on this machine, longest first. Files of sessions whose process is gone are
+    removed (sweep) and never listed."""
+    d = waiting_dir()
+    out = []
+    for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not fn.endswith(".json"):
+            continue
+        path = os.path.join(d, fn)
+        try:
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            rec = None
+        if not (isinstance(rec, dict) and isinstance(rec.get("pid"), int) and pid_alive(rec["pid"])):
+            if sweep:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            continue
+        out.append(rec)
+    return sorted(out, key=lambda r: str(r.get("since")))
+
+
+def hook_waiting(root, clear=False, now=None):
+    """Notification (permission_prompt): record this session as waiting. With clear (after a tool call, a
+    prompt, the end of a turn or of the session): remove its record. Silent, always 0."""
+    data = _hook_input()
+    sid = data.get("session_id")
+    if not (isinstance(sid, str) and SID_RE.match(sid)):
+        return 0
+    path = os.path.join(waiting_dir(), sid + ".json")
+    if clear:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return 0
+    rec = waiting_record(data, root, now)
+    if rec is None:
+        return 0
+    os.makedirs(waiting_dir(), mode=0o700, exist_ok=True)
+    try:  # a second prompt while the first is still unanswered: keep when the waiting began
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+        if isinstance(old, dict) and old.get("pid") == rec["pid"] and isinstance(old.get("since"), str):
+            rec["since"] = old["since"]
+    except (OSError, ValueError):
+        pass
+    write_atomic(path, json.dumps(rec, ensure_ascii=False))
+    list_waiting()  # sweep the files of sessions that are gone
+    return 0
 
 
 # ------------------------------------------------------------------ task sessions and the dispatcher
@@ -755,7 +965,32 @@ def main(argv=None):
     tp.add_argument("task")
     dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理")
     dp.add_argument("--dry-run", action="store_true")
+    w = sub.add_parser("waiting", help="sessions on this machine waiting for a permission answer")
+    w.add_argument("--hook", action="store_true", help="Notification hook input on stdin: record this session; never fail")
+    w.add_argument("--clear", action="store_true", help="with --hook: drop this session's record")
+    w.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "waiting":
+        if a.hook:
+            try:
+                root = None
+                if not a.clear:
+                    try:
+                        root = load_config()["root"]
+                    except Exception:  # without the configuration the record just names no project
+                        pass
+                return hook_waiting(root, clear=a.clear)
+            except Exception:  # a hook must never get in the way of a session
+                return 0
+        if a.clear:
+            ap.error("--clear goes with --hook")
+        rows = list_waiting()
+        if a.json:
+            print(json.dumps(rows, ensure_ascii=False))
+        for r in [] if a.json else rows:
+            print("%s 起在等 · %s · %s · %s" % (r.get("since"), "/".join(x for x in (r.get("project"), r.get("task")) if x) or r.get("cwd"),
+                                             r.get("what") or r.get("message") or "?", r.get("session", "")[:8]))
+        return 0
     if a.cmd in ("task-begin", "task-start", "task-stop", "dispatch"):
         cfg = load_config()
         try:

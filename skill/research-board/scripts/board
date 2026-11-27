@@ -1,3 +1,9 @@
 #!/bin/sh
 # board: tools around the project boards (see boardtool.py). Linked from ~/bin/board.
+# `board waiting --clear --hook` runs after every tool call: when no session on this machine waits for a
+# permission answer (the usual case), stop here without starting python. Same directory as WAITING_DIR.
+if [ "$1" = waiting ] && [ "$2" = --clear ] && [ -z "$(ls -A "$HOME/.local/state/research-board/waiting" 2>/dev/null)" ]; then
+  cat > /dev/null
+  exit 0
+fi
 exec /usr/bin/env python3 -B "$(dirname "$(readlink -f "$0")")/boardtool.py" "$@"   # -B: no __pycache__ in an installed copy
