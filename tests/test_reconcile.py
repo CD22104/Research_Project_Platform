@@ -30,6 +30,105 @@ class RunState(unittest.TestCase):
         self.assertEqual(P.run_state(running, None, None, NOW), "状态未知")
 
 
+class FailedRuns(unittest.TestCase):
+    """Gate 4 (2026-11-27): a failed or interrupted run whose attempt was not updated since gets a to-do."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = os.path.join(self.tmp, "root")
+        self.board = os.path.join(self.root, "proj", "board")
+        os.makedirs(os.path.join(self.board, "attempts"))
+        with open(os.path.join(self.board, "project.json"), "w") as f:
+            json.dump({"title": "p"}, f)
+        self.attempt("a1", "给监控哪些信息", ["f1"], NOW - 4 * 3600)
+        self.attempt("a2", "两阶段能否省钱", ["g1"], NOW - 100)               # updated after its run failed
+        self.attempt("a3", "旧实验", ["h1"], NOW - 9 * 3600)
+        self.mkrun("f1", "失败", NOW - 3600, error="CUDA out of memory\n  at step 120")
+        self.mkrun("f2", "被中断", NOW - 2400, attempt="a1")                   # names the attempt itself
+        self.mkrun("f3", "失败", NOW - 600, attempt="a1")                     # ended 10 minutes ago: still in grace
+        self.mkrun("ok", "完成", NOW - 300, attempt="a1")
+        self.mkrun("g1", "失败", NOW - 7200)
+        self.mkrun("h1", "失败", NOW - 6 * 3600)                              # before the rule was switched on
+        self.state = os.path.join(self.tmp, "state", "reconcile.json")
+        os.makedirs(os.path.dirname(self.state))
+        with open(self.state, "w") as f:
+            json.dump({"dead": {}, "failed_since": NOW - 5 * 3600}, f)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def attempt(self, aid, title, runs, mtime):
+        path = os.path.join(self.board, "attempts", aid + ".md")
+        with open(path, "w") as f:
+            f.write("---\nid: %s\ntitle: %s\ntrack: null\nstatus: 进行中\nruns: [%s]\n---\n## 一页纸\n- 想回答：q\n" % (aid, title, ", ".join(runs)))
+        os.utime(path, (mtime, mtime))
+
+    def mkrun(self, rid, status, ended, **kw):
+        d = os.path.join(self.board, "runs", rid)
+        os.makedirs(d)
+        with open(os.path.join(d, "run.json"), "w") as f:
+            json.dump(dict(kw, id=rid, status=status, started=T.utc(ended - 600), ended=T.utc(ended)), f, ensure_ascii=False)
+
+    def run_(self, now=NOW, dry_run=False):
+        return T.reconcile(self.root, now, lambda recs: [None] * len(recs), self.state, dry_run=dry_run)
+
+    def rows(self):
+        path = os.path.join(self.board, "todos.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_one_to_do_per_attempt_for_its_latest_failure(self):
+        changes = self.run_()
+        rows = self.rows()
+        self.assertEqual([r["id"] for r in rows], ["run-failed-f2"])
+        r = rows[0]
+        self.assertEqual(r["text"], "实验「给监控哪些信息」的运行 f2 被中断了，实验记录还没记下这次结果")
+        self.assertEqual((r["kind"], r["by"], r["link"], r["done"], r["options"], r["recommend"]),
+                         ("whenever", "board reconcile", "roadmap/a:a1", None, ["记进尝试", "不用记"], "记进尝试"))
+        self.assertIn("同一个实验还有 1 次失败或中断的运行也没记：f1。", r["context"])
+        self.assertEqual(changes, [{"project": "proj", "file": "todos.jsonl", "what": "待办 run-failed-f2：" + r["text"]}])
+        self.assertEqual(P.read_todos(os.path.join(self.board, "todos.jsonl"))["bad"], 0)    # the console reads it
+        self.assertEqual(self.run_(), [])                                                    # idempotent
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_the_error_is_quoted_short(self):
+        os.remove(os.path.join(self.board, "runs", "f2", "run.json"))
+        self.run_()
+        self.assertIn("状态「失败」：CUDA out of memory at step 120。", self.rows()[0]["context"])
+
+    def test_updating_the_attempt_closes_it(self):
+        self.run_()
+        path = os.path.join(self.board, "attempts", "a1.md")
+        os.utime(path, (NOW + 60, NOW + 60))
+        changes = self.run_(now=NOW + 120)
+        last = self.rows()[-1]
+        self.assertEqual((last["id"], last["done"], last["result"]), ("run-failed-f2", T.utc(NOW + 120), "实验记录在运行结束后更新了"))
+        self.assertEqual(last["text"], self.rows()[0]["text"])                              # a closing row keeps its text
+        self.assertEqual([c["what"] for c in changes], ["待办 run-failed-f2 标为完成：实验记录在运行结束后更新了"])
+        self.assertEqual(self.run_(now=NOW + 180), [])
+
+    def test_a_no_holds_until_the_next_failure(self):
+        self.run_()
+        with open(os.path.join(self.board, "todos.jsonl"), "a") as f:      # the session answered "不用记"
+            f.write(json.dumps(dict(self.rows()[0], done=T.utc(NOW + 60), result="按回复不用记", by="board reconcile")) + "\n")
+        self.assertEqual(self.run_(now=NOW + 3 * 3600), [])                # f1, f2 and f3 all ended before it was asked
+        self.mkrun("f4", "失败", NOW + 3600, attempt="a1")
+        self.assertEqual([c["what"].split("：")[0] for c in self.run_(now=NOW + 3 * 3600)], ["待办 run-failed-f4"])
+
+    def test_the_first_pass_only_sets_the_start(self):
+        os.remove(self.state)
+        self.assertEqual(self.run_(), [])
+        with open(self.state) as f:
+            self.assertEqual(json.load(f)["failed_since"], NOW)
+        self.assertEqual(self.run_(now=NOW + 60), [])                      # older failures stay untouched
+
+    def test_dry_run_writes_nothing(self):
+        self.assertEqual(len(self.run_(dry_run=True)), 1)
+        self.assertEqual(self.rows(), [])
+
+
 class Reconcile(unittest.TestCase):
     """Agreed case 4: two passes before writing, idempotent, waiting tasks move on."""
 

@@ -15,9 +15,9 @@
   board waiting [--clear] --hook    Notification hook (permission_prompt): record this session as waiting;
                                     with --clear (after each tool call, prompt, turn, session end): drop the record
 
-The record format is ../references/board-format.md. Only `reconcile` writes into project boards, and only two
-things: the status of a run that is recorded as 运行中 but whose process is gone, and the status of
-a task card that waits for runs that have all ended.
+The record format is ../references/board-format.md. Only `reconcile` writes into project boards, and only three
+things: the status of a run that is recorded as 运行中 but whose process is gone, the status of a task card that
+waits for runs that have all ended, and to-dos (ids run-failed-*) for failed runs whose attempt was not updated.
 """
 import argparse
 import datetime
@@ -162,6 +162,99 @@ def make_probe(servers, run_cmd=None, here=None):
     return probe
 
 
+# ------------------------------------------------------------------ failed runs must be recorded too
+FAIL_GRACE = 30 * 60        # seconds a failed or interrupted run's attempt has to be updated before a to-do is written
+FAILED_RUN = ("失败", "被中断")
+FAIL_TODO = "run-failed-"   # id prefix of these to-dos; reconcile writes and closes them
+
+
+def iso_ts(s):
+    """'2026-11-25T05:47:31Z' -> seconds since the epoch, or None."""
+    try:
+        return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _attempts(board):
+    """{attempt id: (front matter, mtime)} of board/attempts/*.md (only the front matter is read)."""
+    out = {}
+    d = os.path.join(board, "attempts")
+    for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not fn.endswith(".md") or fn.startswith("."):
+            continue
+        path = os.path.join(d, fn)
+        try:
+            meta, _ = P.parse_front_matter(P.read_text(path, 16 * 1024)[0])
+            out[meta["id"] if isinstance(meta.get("id"), str) else fn[:-3]] = (meta, os.stat(path).st_mtime)
+        except OSError:
+            continue
+    return out
+
+
+def unrecorded_failures(board, runs, since, now):
+    """({attempt id: [(ended, run id, record)], oldest first}, attempts): runs that 失败 or were 被中断, ended after
+    since and at least FAIL_GRACE before now, whose attempt (its runs list names the run, or the run names the
+    attempt) has not been changed since the run ended."""
+    atts = _attempts(board)
+    named = {}
+    for aid, (meta, _) in atts.items():
+        for rid in P._list(meta.get("runs")):
+            named.setdefault(str(rid), set()).add(aid)
+    out = {}
+    for rid, _, rec, _ in runs:
+        t = iso_ts(rec.get("ended"))
+        if rec.get("status") not in FAILED_RUN or t is None or t < since or now - t < FAIL_GRACE:
+            continue
+        for aid in sorted(named.get(rid, set()) | ({rec["attempt"]} if isinstance(rec.get("attempt"), str) else set())):
+            if aid in atts and atts[aid][1] <= t:
+                out.setdefault(aid, []).append((t, rid, rec))
+    for items in out.values():
+        items.sort(key=lambda x: (x[0], x[1]))
+    return out, atts
+
+
+def failure_todos(board, runs, since, now):
+    """Rows to append to board/todos.jsonl -> [(row, what)]: one to-do per attempt with unrecorded failures (for its
+    latest such run; one open at a time; not again for failures older than an earlier to-do of the attempt, so a
+    "不用记" holds), and a closing row for each open one that no longer applies (the attempt was updated)."""
+    todos = P.read_todos(os.path.join(board, "todos.jsonl"))["items"] if os.path.isfile(os.path.join(board, "todos.jsonl")) else []
+    ids = {str(t.get("id")) for t in todos}
+    mine = [t for t in todos if str(t.get("id")).startswith(FAIL_TODO) and t.get("by") == "board reconcile"]
+    aid_of = lambda t: str(t.get("link") or "").partition("roadmap/a:")[2]
+    fails, atts = unrecorded_failures(board, runs, since, now)
+    rec_of = {rid: rec for rid, _, rec, _ in runs}
+    rows, still_open = [], set()
+    for t in mine:
+        if t.get("done"):
+            continue
+        aid, rid = aid_of(t), str(t["id"])[len(FAIL_TODO):]
+        if any(r == rid for _, r, _ in fails.get(aid, [])):
+            still_open.add(aid)
+            continue
+        st = (rec_of.get(rid) or {}).get("status")
+        result = ("运行 %s 现在是「%s」，不用再记" % (rid, st) if st not in FAILED_RUN
+                  else "实验记录在运行结束后更新了" if aid in atts else "这个实验的记录不在了")
+        rows.append((dict(t, done=utc(now), result=result), "待办 %s 标为完成：%s" % (t["id"], result)))
+    for aid, items in sorted(fails.items()):
+        asked = max([iso_ts(t.get("created")) or 0 for t in mine if aid_of(t) == aid] or [0])
+        ended, rid, rec = items[-1]
+        if aid in still_open or ended <= asked or FAIL_TODO + rid in ids:
+            continue
+        title = atts[aid][0].get("title") or aid
+        err = " ".join(str(rec.get("error") or "").split())[:150]
+        more = [r for _, r, _ in items[:-1]]
+        row = {"id": FAIL_TODO + rid, "kind": "whenever", "created": utc(now), "done": None, "by": "board reconcile",
+               "text": "实验「%s」的运行 %s %s，实验记录还没记下这次结果" % (title, rid, "失败了" if rec.get("status") == "失败" else "被中断了"),
+               "link": "roadmap/a:" + aid,
+               "context": "运行 %s 在 %s 结束，状态「%s」%s。%s失败也要记：选「记进尝试」，项目会话会把经过和原因写进实验的「结果」。"
+                          % (rid, utc(ended), rec.get("status"), "：" + err if err else "",
+                             "同一个实验还有 %d 次失败或中断的运行也没记：%s。" % (len(more), "、".join(more)) if more else ""),
+               "options": ["记进尝试", "不用记"], "recommend": "记进尝试"}
+        rows.append((row, "待办 %s：%s" % (row["id"], row["text"])))
+    return rows
+
+
 # ------------------------------------------------------------------ reconcile
 def reconcile(root, now, probe, state_path=None, dry_run=False):
     """One pass over every project under root. Returns the changes made (or, with dry_run, that would be):
@@ -170,16 +263,22 @@ def reconcile(root, now, probe, state_path=None, dry_run=False):
     - A run recorded as 运行中 that run_state() calls 已中断 on PASSES consecutive passes is marked 被中断.
       A dry run reports what looks dead right now.
     - A task in 等运行 whose runs (run.json "task", or the task's "runs" list) have all ended becomes 可以继续.
+    - A run that 失败 or was 被中断 and whose attempt was not updated since gets a to-do (failure_todos), which is
+      closed once the attempt is updated. Only runs that ended after the first pass that saw this rule
+      (failed_since in the state) count; without state_path, all of them.
     probe(list of run records) -> list of probe results (see make_probe); only runs without a fresh
     heartbeat are probed. Counts between passes live in state_path (JSON); without it every pass starts at zero.
     """
-    seen = {}
+    seen, since = {}, 0
     if state_path:
         try:
             with open(state_path, encoding="utf-8") as f:
-                seen = json.load(f).get("dead") or {}
+                old = json.load(f)
         except (OSError, ValueError):
-            seen = {}
+            old = {}
+        old = old if isinstance(old, dict) else {}
+        seen = old.get("dead") or {}
+        since = old["failed_since"] if isinstance(old.get("failed_since"), (int, float)) else now
     boards = [(name, board, read_runs(board)) for name, board in projects_under(root)]
     ask = [(name, rid, path, rec, hb) for name, board, runs in boards for rid, path, rec, hb in runs
            if rec.get("status") == "运行中" and not (hb is not None and now - hb <= P.HEARTBEAT_STALE)]
@@ -225,9 +324,18 @@ def reconcile(root, now, probe, state_path=None, dry_run=False):
                             "what": "等运行 → 可以继续（%d 次运行都结束了）" % len(mine)})
             if not dry_run:
                 write_atomic(path, set_front_matter(text, {"status": "可以继续", "updated": utc(now)}))
+        rows = failure_todos(board, runs, since, now)
+        for row, what in rows:
+            changes.append({"project": name, "file": "todos.jsonl", "what": what})
+        if rows and not dry_run:
+            try:
+                with open(os.path.join(board, "todos.jsonl"), "a", encoding="utf-8") as f:
+                    f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r, _ in rows))
+            except OSError:
+                pass  # the next pass tries again: nothing was recorded as written
     if state_path and not dry_run:
         os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        write_atomic(state_path, json.dumps({"dead": dead_now, "at": utc(now)}, ensure_ascii=False))
+        write_atomic(state_path, json.dumps({"dead": dead_now, "at": utc(now), "failed_since": since}, ensure_ascii=False))
     return changes
 
 
