@@ -136,6 +136,29 @@ class Requests(Base):
         self.assertIn("CUDA_VISIBLE_DEVICES=3,4 ~/.venvs/vllm-serve/bin/vllm serve '%s'" % spaced, cmd)
         self.assertIn("--port 8772 --max-model-len 4096", cmd)
 
+    def test_templates_are_checked_when_the_configuration_is_read(self):
+        import rbconfig
+        path = os.path.join(self.tmp, "config.json")
+
+        def load(command):
+            with open(path, "w") as f:
+                json.dump({"projects_root": self.root, "servers": [], "services": {"v": {
+                    "command": command, "health": "http://127.0.0.1:{port}/v1/models", "ports": [8771, 8779]}}}, f)
+            return rbconfig.load(path)
+        good = "vllm serve {model} --port {port} --limit-mm-per-prompt '{{\"image\": 0}}'"
+        self.assertEqual(load(good)["services"]["v"]["command"], good)
+        with self.assertRaisesRegex(rbconfig.ConfigError, "模板「v」填不进去.*命令里本来就有的花括号要写成"):
+            load("vllm serve {model} --limit-mm-per-prompt '{\"image\": 0}'")
+        with self.assertRaisesRegex(rbconfig.ConfigError, "模板「v」填不进去"):
+            load("vllm serve {modle}")
+        broken = dict(self.cfg, services={"vllm": dict(self.cfg["services"]["vllm"], command="serve {modle}")})
+        self.cfg = broken                                    # even so, one bad template only fails its own request
+        self.request()
+        self.run_()
+        st = self.status(closed=True)
+        self.assertEqual(st["state"], "失败")
+        self.assertIn("模板「vllm」填不进去", st["reason"])
+
     def test_gpu_limit(self):
         """T5.2"""
         row = lambda did, status, limit, date="2026-11-24": {"meta": {"id": did, "status": status, "gpu_limit": limit, "date": date}}

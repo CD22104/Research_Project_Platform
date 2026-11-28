@@ -65,6 +65,13 @@ def load(path=None):
     if bad:
         raise ConfigError('配置文件 %s 的 services 写得不对（%s）：应该是 {"模板名": {"command": "...", "health": "http://...{port}...", '
                           '"ports": [起, 止]}}' % (path, "、".join(map(str, bad))))
+    for n, t in services.items():   # fill each template once now, so a typo stops here and not in the middle of a night
+        try:
+            t["command"].format(gpus="0", model="/m", served_name="s", port=8000, max_model_len=1)
+            t["health"].format(port=8000)
+        except (KeyError, IndexError, ValueError) as e:
+            raise ConfigError("配置文件 %s 的 services 模板「%s」填不进去（%s）：只能用 {gpus} {model} {served_name} {port} "
+                              "{max_model_len}，命令里本来就有的花括号要写成 {{ 和 }}" % (path, n, e)) from None
     console = dict(CONSOLE_DEFAULTS, **(raw.get("console") or {}))
     console["socket"] = _path(console.get("socket"))
     return {"path": path, "projects_root": root, "shared_dir": shared,

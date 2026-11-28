@@ -417,10 +417,14 @@ def apply(acts, cfg, now, run=subprocess.run, here=None):
         elif a["do"] == "start":
             tpl = cfg["services"][req["template"]]
             log = "%s/%s-%s.log" % (LOG_DIR, a["project"], name)
-            body = command(tpl, req, a["gpus"], a["port"]).strip().rstrip(";")   # all of it to the log, however many commands
-            script = "mkdir -p %s && tmux new-session -d -s %s %s" % (
-                LOG_DIR, shlex.quote(a["tmux"]), shlex.quote("{ %s; } >> %s 2>&1" % (body, log)))
-            ok, out = _on(a["server"], script, cfg, run, here)
+            try:
+                body = command(tpl, req, a["gpus"], a["port"]).strip().rstrip(";")   # all of it to the log, however many commands
+            except (KeyError, IndexError, ValueError) as e:                         # rbconfig checks this; never stop the pass
+                ok, out = False, "模板「%s」填不进去：%s" % (req["template"], e)
+            else:
+                script = "mkdir -p %s && tmux new-session -d -s %s %s" % (
+                    LOG_DIR, shlex.quote(a["tmux"]), shlex.quote("{ %s; } >> %s 2>&1" % (body, log)))
+                ok, out = _on(a["server"], script, cfg, run, here)
             st = {"state": STARTING if ok else FAILED, "server": a["server"], "gpus": a["gpus"], "port": a["port"],
                   "url": tpl["health"].format(port=a["port"]).rsplit("/models", 1)[0] if "/models" in tpl["health"] else
                   "http://127.0.0.1:%d" % a["port"], "tmux": a["tmux"], "task": req["task"], "template": req["template"],
