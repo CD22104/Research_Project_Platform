@@ -27,10 +27,9 @@
   - 用 monitor-bench 只读预演过：一个 13MB 的会话记录 0.07 秒扫完；有个会话改过 6 个 board/ 文件，而 NOTES.md 已经 56 小时没更新，钩子装上后它会被拦一次。
   - 测试注意：`task_begin`、`task_start` 会写指纹，测试要把 `T.STATE_HOME` 换成临时目录；子进程的测试给 `HOME=<临时目录>`。
 
-### 第二批还差的上线步骤（清单已发研究服务台）
-1. 用户运行分发脚本（skill 985bef61…）；研究服务台核对。
-2. 研究服务台在 6 台的 Stop 里加 `board stop-check --hook`。**必须在第 1 步之后**：旧 skill 没有这个子命令，argparse 会退出码 2，而 Stop 钩子退出 2 会被当成「拦下」，导致每一轮都被拦一次。
-3. 关卡 4 跟着 skill 生效（cron 用的是装好的副本），第一次 reconcile 记下起点。
+### 第二批已上线（2026-11-28）
+研究服务台核对过 6 台：skill 都是 985bef61…（来自 8ebeba5），Stop 里有 `board stop-check --hook`，清除 waiting 的那项保留。它的 install-settings.sh 加了版本检查：哪台 skill 不是指定版本，就不装这条钩子。原因是旧 skill 没有这个子命令，会以退出码 2 退出，而 Stop 钩子退出 2 会被当成「拦下」。我在 a100 上也核对过：版本对；reconcile.json 有 `failed_since`（2026-11-28 起算）；在项目外空跑 stop-check，安静退出 0。
+另外：用户重新打开了 jev-authz（用 trsi、dpolicy 微调 elephant-1、mammoth-1，顺带检验这两个 skill）。它的项目会话 jev-authz-4c 如果有 harness 或 board 的需求，会经研究服务台转来。
 
 ### 第三批（还没做，先给用户看方案）
 - **关卡 5 夜间调度脚本**：先和 monitor-bench 项目会话对一下现有约定（`results/gpu_requests/`、接力顺序、预算账本 `results/cost_ledger.jsonl`）。倾向：起停服务和占卡上限做成 skill 里通用的一段，像 defer 一样不管什么结局都收尾；已采纳的决定加一个机器能读的卡数字段。
