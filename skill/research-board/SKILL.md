@@ -28,6 +28,7 @@ description: 在有 board/ 的项目里工作、新建/结束/暂停项目、启
 | 写任务卡、开工、并行、合并、换新会话 | `references/task-sessions.md` |
 | 下载模型、数据集或容器镜像 | `references/shared-resources.md` |
 | 给用户讲项目、写简报、画图、请用户写预期 | `references/brief-and-map.md` |
+| 改写、搬家或翻译规则和这些文档；查某条规矩由什么保证 | `references/rules.md` |
 
 这些文件在本 skill 目录下（装在 `~/.claude/skills/research-board/` 时就是那里）。
 

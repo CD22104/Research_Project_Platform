@@ -46,7 +46,7 @@ class Skill(unittest.TestCase):
         self.assertEqual(meta.get("name"), "research-board")
         self.assertIn(TRIGGER, meta.get("description") or "")
         refs = sorted(f for f in os.listdir(os.path.join(SKILL, "references")) if f.endswith(".md"))
-        self.assertEqual(len(refs), 7)
+        self.assertEqual(len(refs), 8)   # rules.md joined on 2026-11-28
         for f in refs:                                              # every reference is reachable from SKILL.md, and only those
             self.assertIn("`references/%s`" % f, body)
         for name in set(__import__("re").findall(r"`references/([^`]+)`", body)):
