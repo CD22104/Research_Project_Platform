@@ -31,9 +31,22 @@
 研究服务台核对过 6 台：skill 都是 985bef61…（来自 8ebeba5），Stop 里有 `board stop-check --hook`，清除 waiting 的那项保留。它的 install-settings.sh 加了版本检查：哪台 skill 不是指定版本，就不装这条钩子。原因是旧 skill 没有这个子命令，会以退出码 2 退出，而 Stop 钩子退出 2 会被当成「拦下」。我在 a100 上也核对过：版本对；reconcile.json 有 `failed_since`（2026-11-28 起算）；在项目外空跑 stop-check，安静退出 0。
 另外：用户重新打开了 jev-authz（用 trsi、dpolicy 微调 elephant-1、mammoth-1，顺带检验这两个 skill）。它的项目会话 jev-authz-4c 如果有 harness 或 board 的需求，会经研究服务台转来。
 
+### 关卡 6 做完（2026-11-28，用户说「都可以做」；提交 7a1233a，skill d9c4b9a6…，还没分发，打算和关卡 5 一起发）
+- `references/rules.md`：27 条硬规矩（R01–R27），每条写来源（全局规则原句）、文档（文件和原句）、代码（函数）和测试。`tests/test_rules.py` 逐条核对：文件在、函数在（测试函数要有 `def`）、原句在（比较时去掉空白、反引号和 `*`）、编号连续、每条至少有文档或代码、有代码就要有测试。全局规则的原句只在本机有 `~/.claude/CLAUDE.md` 时核对。原句里不要用嵌套的「」，也不要写个人路径（导出扫描会拦）。
+- SKILL.md 的表里加了 rules.md；`test_skill` 里参考文档的数量从 7 改成 8。
+
+### 关卡 5 查到的事实（monitor-bench，2026-11-28，只读）
+- 申请：`results/gpu_requests/<名字>.json` = {model（共享盘模型路径）、served_name、port（8771、8772…）、max_model_len、requested_by（任务卡）、gpus（卡数，可选）、note}。
+- 就绪：调度把 GPU 号写进 `<名字>.ready`。用完：申请方写 `<名字>.done`，调度 kill tmux，把三个文件移进 `closed/`。
+- 起服务的命令（从项目会话的记录里取）：`tmux new-session -d -s monitor-bench-vllm-<名字> "CUDA_VISIBLE_DEVICES=<卡> ~/.venvs/vllm-serve/bin/vllm serve <模型> --served-model-name <名> --host 127.0.0.1 --port <端口> --dtype bfloat16 --max-model-len <长> --gpu-memory-utilization 0.85 --reasoning-parser qwen3 --limit-mm-per-prompt '{"image": 0, "video": 0}'"`。
+- 为什么要调度：任务会话自己起停服务会被权限检查拦。
+- 申请方卡在权限提问上时，调度先不起它的服务，免得空占卡。
+- 预算：项目代码里有硬闸门（`monitor_bench/llm.py` 的 `Ledger.check` 抛 `BudgetExceeded`），账本在 `results/cost_ledger.jsonl`。调度另外累加花费，提醒各会话（那晚合计上限 $50）。
+- 接力：按 swechat-normal → l1-batch3 → l1-batch4 的顺序开卡（卡上有 `after`）。
+- 已采纳的决定 `overnight-gpu-limits`：h200 可以全占、h100 可以全占、a100 最多 4 张。目前只有正文这样写，没有程序能读的字段。
+
 ### 第三批（还没做，先给用户看方案）
 - **关卡 5 夜间调度脚本**：先和 monitor-bench 项目会话对一下现有约定（`results/gpu_requests/`、接力顺序、预算账本 `results/cost_ledger.jsonl`）。倾向：起停服务和占卡上限做成 skill 里通用的一段，像 defer 一样不管什么结局都收尾；已采纳的决定加一个机器能读的卡数字段。
-- **关卡 6 规矩清单**：skill 里加 `references/rules.md`，每条写编号、原文、由什么保证；测试逐条核对文件、函数和原句都在。
 
 ## 拆成 skill 和 platform（2026-11-26，用户选了方案 1，代码部分做完，等切换）
 - 提交 5c05927…00a8a81，测试 155 个左右全过（偶发的图解探测失败照旧）。设计见下面「方案」一节；实际做法和方案一致，几处细化：
