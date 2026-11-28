@@ -10,7 +10,10 @@
   board task-start PROJECT TASK     start the session of one task card in the background (tmux task-<project>-<task>,
                                     Remote Control; for the dispatcher, or when the user asks for it)
   board task-stop PROJECT TASK      stop it
-  board dispatch [--dry-run]        start a session for replies marked 直接处理 (cron, every 5 min)
+  board dispatch [--dry-run]        start a session for replies marked 直接处理, and the cards marked start: auto whose
+                                    after-cards are all done (cron, every 5 min)
+  board serve [--dry-run]           start and always stop the services task sessions asked for in board/services/
+                                    (cron, every 5 min; services.py)
   board stop-check --hook           Stop hook: keep a session going once when it is leaving a task card without its
                                     handoff, or board/ edits without NOTES.md (stop_check)
   board waiting [--json]            sessions on this machine waiting for a permission answer
@@ -37,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import projects as P  # noqa: E402
 import rbconfig  # noqa: E402
+import services as SV  # noqa: E402
 
 BOARD = os.path.join(HERE, "board")                                                   # this skill's board command
 FORMAT = os.path.join(os.path.dirname(HERE), "references", "board-format.md")         # the record format, beside it
@@ -1083,6 +1087,27 @@ def dispatch(root, state_path, now, run=subprocess.run, dry_run=False, live=None
     return started
 
 
+def relay(root, run=subprocess.run, live=None):
+    """Cards marked start: auto (the project session wrote it after asking the user) that are 待开始 and whose
+    after-cards are all 完成 are started in the background (task_start, so the limit of task sessions holds; one
+    whose session already runs is left alone). -> [{"project", "task", "session" or "error"}]"""
+    cards = _task_cards(root)
+    ready = [(proj, task) for (proj, task), meta in sorted(cards.items())
+             if meta.get("start") == "auto" and meta.get("status") == "待开始"
+             and all((cards.get((proj, str(a))) or {}).get("status") == "完成" for a in P._list(meta.get("after")))]
+    out = []
+    for proj, task in ready:
+        if task_session_name(proj, task) in tmux_sessions(run):
+            continue
+        if live is None:
+            live = live_sessions() or []
+        try:
+            out.append({"project": proj, "task": task, "session": task_start(root, proj, task, run=run, live=live, env={})["session"]})
+        except TaskError as e:
+            out.append({"project": proj, "task": task, "error": str(e)})
+    return out
+
+
 # ------------------------------------------------------------------ end-of-turn check (Stop hook)
 # Stop fires at the end of every turn, not only when a session is done, so the check looks at what the turn
 # left behind: a task card moved on with the handoff of an earlier session, or work done with an untouched card;
@@ -1308,8 +1333,10 @@ def main(argv=None):
     tp = sub.add_parser("task-stop", help="stop the session of one task card")
     tp.add_argument("project")
     tp.add_argument("task")
-    dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理")
+    dp = sub.add_parser("dispatch", help="start a session for replies marked 直接处理; start cards marked start: auto")
     dp.add_argument("--dry-run", action="store_true")
+    sv = sub.add_parser("serve", help="start and stop the services task sessions asked for (board/services/)")
+    sv.add_argument("--dry-run", action="store_true")
     sc = sub.add_parser("stop-check", help="Stop hook: keep a session going once when its handoff is missing")
     sc.add_argument("--hook", action="store_true", required=True, help="read the Stop hook input on stdin; never fail")
     w = sub.add_parser("waiting", help="sessions on this machine waiting for a permission answer")
@@ -1317,6 +1344,11 @@ def main(argv=None):
     w.add_argument("--clear", action="store_true", help="with --hook: drop this session's record")
     w.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "serve":
+        rc = rbconfig.load()
+        for c in SV.serve(rc["projects_root"], rc, time.time(), dry_run=a.dry_run):
+            print("%s %s%s %s: %s" % (utc(time.time()), "(dry run) " if a.dry_run else "", c["project"], c["file"], c["what"]))
+        return 0
     if a.cmd == "stop-check":
         try:
             return hook_stop(load_config()["root"])
@@ -1362,6 +1394,8 @@ def main(argv=None):
                 for x in dispatch(cfg["root"], os.path.join(cfg["state_dir"], "dispatch.json"), time.time(), dry_run=a.dry_run):
                     print("%s %s%s: %s%s" % (utc(time.time()), "(dry run) " if a.dry_run else "", x["project"], "、".join(x["replies"]),
                                              " 失败：" + x["error"] if x.get("error") else ""))
+                for x in [] if a.dry_run else relay(cfg["root"]):
+                    print("%s %s: 接力开卡 %s：%s" % (utc(time.time()), x["project"], x["task"], x.get("session") or "没开成，" + x["error"]))
         except TaskError as e:
             print("board: %s" % e, file=sys.stderr)
             return 1

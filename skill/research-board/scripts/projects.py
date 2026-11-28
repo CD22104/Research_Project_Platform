@@ -978,6 +978,8 @@ def check_project(d, limit=200):
             add(t["file"], "没有「要做什么」一节")
         if m.get("status") in ("完成", "等你", "可以继续") and not secs.get("交接", "").strip():
             add(t["file"], "状态是「%s」，但「交接」是空的（做了什么 / 证据在哪 / 没做完的 / 下一步 / 要你决定的）" % m.get("status"))
+        if m.get("start") is not None and m.get("start") != "auto":
+            add(t["file"], "start 只能写 auto（after 里的卡都完成后，派活程序自动开这张卡；要先问过用户）")
 
     dec_ids = _ids(d.get("decisions") or [])
     states = decision_states(d.get("decisions") or [], d.get("answers") or {})
@@ -991,6 +993,9 @@ def check_project(d, limit=200):
             add(r["file"], "文件名要和 id 一致：decisions/%s.md" % m["id"])
         if m.get("status") not in DECISION_STATUS:
             add(r["file"], "status「%s」不认识（%s）" % (m.get("status"), " / ".join(DECISION_STATUS)))
+        for item in _list(m.get("gpu_limit")):
+            if not re.match(r"^\S+ (\d+|all)$", str(item).strip()):
+                add(r["file"], "gpu_limit 里「%s」看不懂：每项写「服务器 卡数」或「服务器 all」，例如 [gpu-a100 4, gpu-h100 all]" % item)
         if not secs.get("决定", "").strip():
             add(r["file"], "没有「决定」一节（一句话写定了什么）")
         if m.get("about"):

@@ -32,7 +32,8 @@ def _path(p):
 def load(path=None):
     """The validated configuration with defaults filled in and paths expanded:
     {"projects_root", "shared_dir", "tools_dir", "state_dir", "servers": [{"name", "host"}], "home_server",
-     "claude_bin", "secrets_dir", "max_task_sessions", "console": {...}, "sessions": {...}, "path"}."""
+     "claude_bin", "secrets_dir", "max_task_sessions", "console": {...}, "sessions": {...}, "path",
+     "services": {template name: {"command", "health", "ports": [first, last]}} (board serve)}."""
     path = os.path.expanduser(path) if path else config_path()
     hint = "照仓库里的 config.example.json 写一份（或者用环境变量 %s 指到它）" % ENV
     try:
@@ -57,6 +58,13 @@ def load(path=None):
     home = raw.get("home_server") or (names[0] if names else None)
     if home is not None and home not in names:
         raise ConfigError("配置文件 %s 的 home_server「%s」不在 servers 里" % (path, home))
+    services = raw.get("services") or {}
+    bad = [n for n, t in services.items() if not (isinstance(t, dict) and isinstance(t.get("command"), str) and t["command"]
+                                                  and isinstance(t.get("health"), str) and _port_range(t.get("ports")))] \
+        if isinstance(services, dict) else ["services"]
+    if bad:
+        raise ConfigError('配置文件 %s 的 services 写得不对（%s）：应该是 {"模板名": {"command": "...", "health": "http://...{port}...", '
+                          '"ports": [起, 止]}}' % (path, "、".join(map(str, bad))))
     console = dict(CONSOLE_DEFAULTS, **(raw.get("console") or {}))
     console["socket"] = _path(console.get("socket"))
     return {"path": path, "projects_root": root, "shared_dir": shared,
@@ -66,7 +74,13 @@ def load(path=None):
             "claude_bin": _path(raw.get("claude_bin")) or os.path.expanduser("~/.local/bin/claude"),
             "secrets_dir": _path(raw.get("secrets_dir")) or os.path.expanduser("~/.config/secrets"),
             "max_task_sessions": int(raw.get("max_task_sessions") or 4),
-            "console": console, "sessions": dict(SESSIONS_DEFAULTS, **(raw.get("sessions") or {}))}
+            "console": console, "sessions": dict(SESSIONS_DEFAULTS, **(raw.get("sessions") or {})),
+            "services": {n: {"command": t["command"], "health": t["health"], "ports": list(t["ports"])} for n, t in services.items()}}
+
+
+def _port_range(x):
+    return (isinstance(x, list) and len(x) == 2 and all(isinstance(v, int) and not isinstance(v, bool) for v in x)
+            and 1024 <= x[0] <= x[1] <= 65535)
 
 
 def short_names(names):

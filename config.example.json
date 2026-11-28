@@ -19,5 +19,12 @@
     "projects_interval_seconds": 60,
     "jump_host": null
   },
-  "sessions": {"enabled": true, "transcripts": null, "interval_seconds": 60}
+  "sessions": {"enabled": true, "transcripts": null, "interval_seconds": 60},
+  "services": {
+    "vllm": {
+      "command": "CUDA_VISIBLE_DEVICES={gpus} ~/.venvs/vllm-serve/bin/vllm serve {model} --served-model-name {served_name} --host 127.0.0.1 --port {port} --dtype bfloat16 --max-model-len {max_model_len} --gpu-memory-utilization 0.85",
+      "health": "http://127.0.0.1:{port}/v1/models",
+      "ports": [8700, 8799]
+    }
+  }
 }

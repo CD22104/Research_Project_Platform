@@ -283,6 +283,39 @@ class Nesting(Base):
         self.assertIn("board: 任务会话不能再开任务会话：本会话在做 proj 的任务卡 write。", p.stderr)
 
 
+class Relay(Base):
+    """T5.10: cards marked start: auto start once all their after-cards are done, within the limit."""
+
+    def auto(self, tid, after, status="待开始"):
+        with open(os.path.join(self.board, "tasks", tid + ".md"), "w") as f:
+            f.write("---\nid: %s\ntitle: %s\nkind: 写作\nstatus: %s\nstart: auto\nafter: [%s]\n---\n## 要做什么\nx\n" % (tid, tid, status, after))
+
+    def test_starts_when_all_after_cards_are_done(self):
+        self.auto("next", "done, write")
+        tm = FakeTmux()
+        self.assertEqual(T.relay(self.root, run=tm, live=[]), [])                          # write is still 待开始
+        self.card("write", "写作", "完成")
+        self.assertEqual(T.relay(self.root, run=tm, live=[]), [{"project": "proj", "task": "next", "session": "task-proj-next"}])
+        self.assertEqual(T.relay(self.root, run=tm, live=[]), [])                          # its session runs: not again
+        self.assertEqual([x["name"] for x in tm.started], ["task-proj-next"])
+
+    def test_only_cards_marked_auto_and_waiting(self):
+        self.card("write", "写作", "完成")
+        self.card("plain", "写作", "待开始")                                              # no start: auto
+        self.auto("going", "write", status="进行中")
+        tm = FakeTmux()
+        self.assertEqual(T.relay(self.root, run=tm, live=[]), [])
+        self.assertEqual(tm.started, [])
+
+    def test_the_limit_holds(self):
+        self.card("write", "写作", "完成")
+        self.auto("next", "write")
+        full = FakeTmux(["task-a-1", "task-b-2", "task-c-3", "reply-d"])
+        [x] = T.relay(self.root, run=full, live=[])
+        self.assertIn("已经有 4 个任务会话在运行（上限 4）", x["error"])
+        self.assertEqual(len(full.started), 0)
+
+
 class Dispatch(Base):
     def answer(self, rid, mode=None, at="2026-11-24T01:00:00Z"):
         with open(os.path.join(self.board, "answers.jsonl"), "a") as f:

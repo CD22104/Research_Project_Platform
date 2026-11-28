@@ -41,7 +41,7 @@ description: 在有 board/ 的项目里工作、新建/结束/暂停项目、启
 - `board check [目录] [--file 文件]`：记录检查，有问题时退出码 2。
 - `board task-begin <任务 id> --session <本会话 id>`：在项目文件夹里开的这个对话接手一张任务卡。
 - `board task-start <项目> <任务 id>`、`board task-stop <项目> <任务 id>`：后台开、停任务会话（自动派活或用户明确要后台开时用）。
-- `board reconcile`、`board dispatch`：收尾（关掉进程已不在的运行）和派活（处理勾了「直接处理」的回复），由控制台所在机器上的定时任务每 5 分钟运行。
+- `board reconcile`、`board dispatch`、`board serve`：收尾（关掉进程已不在的运行、给没记下的失败写待办）、派活（处理勾了「直接处理」的回复，接力开 `start: auto` 的卡）、服务（按 `services/` 的申请起停服务，一定收尾），由控制台所在机器上的定时任务每 5 分钟运行。
 
 boardrun 是 Python 记录模块，源码在 `scripts/boardrun/`，项目里按工具目录的副本安装（见 `long-runs.md`）。
 

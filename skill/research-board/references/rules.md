@@ -50,7 +50,9 @@
 
 ### R09 已批准的卡数范围内可以直接用
 - 来源：全局规则「已采纳的决定里批准过的卡数范围内可以直接用，超出先问」
-- 文档：`references/long-runs.md`「用户已经批准的范围」「之内可以直接用，超出就写待办问用户」
+- 文档：`references/long-runs.md`「用户已经批准的范围」「之内可以直接用，超出就写待办问用户」；`references/board-format.md`「没有这样的决定就不起，写待办问用户」
+- 代码：`scripts/services.py` 的 `gpu_limit`、`plan`
+- 测试：`tests/test_services.py` 的 `test_gpu_limit`、`test_queue_when_at_the_limit_or_no_free_card`、`test_no_limit_refuses_and_asks_once`
 
 ### R10 给别人留卡
 - 来源：全局规则「独占的卡同时不超过该服务器总卡数的一半」
@@ -96,6 +98,8 @@
 ### R18 不守着
 - 来源：全局规则「不守着：会话不定时唤醒自己去查进度」
 - 文档：`references/task-sessions.md`「不守着：不定时唤醒自己去查进度」；`references/long-runs.md`「不要定时唤醒自己去查进度」
+- 代码：`scripts/services.py` 的 `serve`（起停服务）；`scripts/boardtool.py` 的 `relay`（接力开卡），都由定时任务跑
+- 测试：`tests/test_services.py` 的 `test_start_on_the_first_free_card_within_the_limit`；`tests/test_tasks.py` 的 `test_starts_when_all_after_cards_are_done`
 - 另外：各台的权限设置禁用了定时唤醒类工具，由研究服务台维护（不在本仓库）。
 
 ### R19 同一件事失败 3 次就停下
@@ -137,3 +141,8 @@
 - 来源：全局规则「不要把 token 的值打印出来，也不要写进对话、日志、代码、项目规则、进度记录或提交信息」
 - 代码：`scripts/boardtool.py` 的 `waiting_what`（等批准的记录不存 Bash 命令本身）
 - 测试：`tests/test_waiting.py` 的 `test_permission_prompt_is_recorded_without_the_command`
+
+### R28 服务一定收尾，起服务的命令只来自用户批准的模板
+- 文档：`references/board-format.md`「任何一种都关服务、释放卡、写明原因」「申请里不能写命令」
+- 代码：`scripts/services.py` 的 `refusal`、`command`、`apply`
+- 测试：`tests/test_services.py` 的 `test_refusals`、`test_values_are_quoted_into_the_template`、`test_done`、`test_process_gone`、`test_only_its_own_sessions`
