@@ -35,18 +35,28 @@
 - `references/rules.md`：27 条硬规矩（R01–R27），每条写来源（全局规则原句）、文档（文件和原句）、代码（函数）和测试。`tests/test_rules.py` 逐条核对：文件在、函数在（测试函数要有 `def`）、原句在（比较时去掉空白、反引号和 `*`）、编号连续、每条至少有文档或代码、有代码就要有测试。全局规则的原句只在本机有 `~/.claude/CLAUDE.md` 时核对。原句里不要用嵌套的「」，也不要写个人路径（导出扫描会拦）。
 - SKILL.md 的表里加了 rules.md；`test_skill` 里参考文档的数量从 7 改成 8。
 
-### 关卡 5 查到的事实（monitor-bench，2026-11-28，只读）
-- 申请：`results/gpu_requests/<名字>.json` = {model（共享盘模型路径）、served_name、port（8771、8772…）、max_model_len、requested_by（任务卡）、gpus（卡数，可选）、note}。
-- 就绪：调度把 GPU 号写进 `<名字>.ready`。用完：申请方写 `<名字>.done`，调度 kill tmux，把三个文件移进 `closed/`。
-- 起服务的命令（从项目会话的记录里取）：`tmux new-session -d -s monitor-bench-vllm-<名字> "CUDA_VISIBLE_DEVICES=<卡> ~/.venvs/vllm-serve/bin/vllm serve <模型> --served-model-name <名> --host 127.0.0.1 --port <端口> --dtype bfloat16 --max-model-len <长> --gpu-memory-utilization 0.85 --reasoning-parser qwen3 --limit-mm-per-prompt '{"image": 0, "video": 0}'"`。
-- 为什么要调度：任务会话自己起停服务会被权限检查拦。
-- 申请方卡在权限提问上时，调度先不起它的服务，免得空占卡。
-- 预算：项目代码里有硬闸门（`monitor_bench/llm.py` 的 `Ledger.check` 抛 `BudgetExceeded`），账本在 `results/cost_ledger.jsonl`。调度另外累加花费，提醒各会话（那晚合计上限 $50）。
-- 接力：按 swechat-normal → l1-batch3 → l1-batch4 的顺序开卡（卡上有 `after`）。
-- 已采纳的决定 `overnight-gpu-limits`：h200 可以全占、h100 可以全占、a100 最多 4 张。目前只有正文这样写，没有程序能读的字段。
+### 关卡 5 做完（2026-11-28，用户选了「修正后的 A」：起停服务、一定收尾、接力开卡，不做预算；提交 3925509、624f79a，skill c31a4b79…，测试 224 个全过）
+- `scripts/services.py`（`board serve`，cron 在 a100 每 5 分钟跑）：
+  - 申请写在 `board/services/<名字>.json`，只能有 template、model、served_name、max_model_len、gpus、server、task、hours、note 这几项，不能写命令。`.status.json` 由程序写；`.done` 由申请方写；收尾后三个文件一起移进 `closed/`。
+  - 命令来自个人配置 `services` 里的模板，填进去的值都加 shell 引号。rbconfig 读配置时把每个模板试填一遍；命令里本来就有的花括号要写成 `{{ }}`。
+  - 占卡只在最新一条已采纳的决定写的 `gpu_limit` 以内，项目正在跑的运行也算在内。没有这样的决定就不起，写待办 `svc-no-gpu-limit`。
+  - 申请方的会话在等权限批准时状态记「暂缓」；没有空卡或到了上限时记「排队」，并写明原因。
+  - 一定收尾：`.done`、申请删了、卡变成完成/放弃/暂停、超过 hours、进程没了（另写待办）、启动 15 分钟还不健康，任一情况都关掉。
+  - 只关自己起的 `svc-*` tmux。每台服务器每轮只 ssh 一次；没人申请时一次都不连。用文件锁防止两轮重叠。
+  - 「空卡」指显存占用小于 1GB；a100 现在 8 张卡都有人用，所以起不来，会如实排队。
+  - 在 a100 用无害模板真跑过一次：引号和日志都对。这次发现一个问题：模板里有多条命令时，以前只有最后一条进日志，现在用 `{ …; }` 把整条包起来。
+  - monitor-bench 那晚用的命令改写成模板 `vllm-qwen3` 后试填，结果和原命令逐字相同。
+- 接力：`relay` 挂在 `board dispatch` 里。卡写了 `start: auto`、状态是待开始、`after` 里的卡都完成了，就用 task_start 开，仍受上限约束；它的 tmux 已经在跑就跳过。
+- 记录检查加两条：`start` 不是 auto；`gpu_limit` 有看不懂的项。规矩清单加了 R28，R09、R18 补上了代码和测试。
+- 测试和示例里不要写真实的服务器名、真实的任务或记录 id（导出扫描会拦）：用 gpu-a100、eval-batch2、small-9b 这类名字。
+- 上线清单已发研究服务台：①分发 skill c31a4b79 和加了 `services.vllm-qwen3` 的配置；②a100 crontab 加 `board serve`；③转告 monitor-bench：起草带 `gpu_limit` 的新候选决定（`replaces: overnight-gpu-limits`，用户在控制台采纳），申请改用 `board/services/`，从状态文件读 url，接力的卡写 `start: auto`。`~/.venvs/vllm-serve` 是各台本地的环境，请研究服务台查哪几台有。
+- 推送：624f79a 以前的几个提交推送失败（GitHub 认证不过），要用户运行 `bash ~/desk/tools/push-with-github-token.sh ~/gpu-board`。
 
-### 第三批（还没做，先给用户看方案）
-- **关卡 5 夜间调度脚本**：先和 monitor-bench 项目会话对一下现有约定（`results/gpu_requests/`、接力顺序、预算账本 `results/cost_ledger.jsonl`）。倾向：起停服务和占卡上限做成 skill 里通用的一段，像 defer 一样不管什么结局都收尾；已采纳的决定加一个机器能读的卡数字段。
+### 可靠性关卡全部做完。以后可以做的
+- 控制台显示服务状态（目前只能在 GPU 页看到 vLLM 进程）。
+- 关卡 4 改成要求尝试正文提到运行编号（现在只看文件修改时间）。
+- 预算提醒（等有第二个项目要用时再做）。
+- 修心跳测试偶尔失败的问题（见「踩过的坑」）。
 
 ## 拆成 skill 和 platform（2026-11-26，用户选了方案 1，代码部分做完，等切换）
 - 提交 5c05927…00a8a81，测试 155 个左右全过（偶发的图解探测失败照旧）。设计见下面「方案」一节；实际做法和方案一致，几处细化：
